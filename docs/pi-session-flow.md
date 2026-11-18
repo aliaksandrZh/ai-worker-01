@@ -125,6 +125,59 @@ curl -s "localhost:3000/sessions/smwmfmffwed3c/events?since=0&type=agent_settled
   running one. `GET /sessions/:id` is a `get_state` passthrough (model, streaming flag,
   messageCount, sessionFile…).
 
+### 3b. Signals: know when a run is done or blocked without parsing records
+
+After `POST /rpc` prompt (`disposition: "started"`) the run's end comes as `agent_settled` and a
+human blocker comes as a parked `extension_ui_request`. Three routes wrap those signals; all three
+drive the same state machine inside `PiRpcSession` (`api/rpc-session.mjs`):
+
+1. **Pull — `GET /sessions/:id/status`** — derive everything from one call:
+
+   ```bash
+   curl -s localhost:3000/sessions/smwmj60v16ff2/status
+   # → {"connected":true,"phase":"idle","hasRun":true,"lastSettled":{"ts":1795031107917,"aborted":false},"pendingUi":[]}
+   ```
+
+   - `phase` — `blocked` (pending dialogs, highest priority) > `running` (`agent_start` seen, not
+     yet settled) > `idle`. A fresh session is `idle` with `hasRun:false` / `lastSettled:null`.
+   - `lastSettled.aborted` — `true` when the run was aborted rather than finished.
+
+2. **Await — `GET /sessions/:id/wait?timeoutMs=<ms>`** — one HTTP call that returns when the
+   session's state changes, the whole point for "how long do I have to wait?":
+
+   ```bash
+   curl -s "localhost:3000/sessions/smwmj60v16ff2/wait?timeoutMs=55000"
+   # → {"result":"settled","aborted":false}   work finished
+   #   {"result":"blocked","pending":[...]}    a dialog wants a human — answer it via POST /sessions/:id/ui/<requestId>
+   #   {"result":"disconnected"}               container/terminal lost — kill or recreate the session
+   #   {"result":"timeout"}                    still working after timeoutMs — just GET /wait again
+   ```
+
+   Loop it until `settled`/`blocked`/`disconnected`:
+
+   ```bash
+   while :; do R=$(curl -s "localhost:3000/sessions/$S/wait?timeoutMs=55000"); echo "$R"; case "$R" in *'"timeout"') ;; *) break;; esac; done
+   ```
+
+   Insta-resolutions (before any waiting): already `blocked`, already `disconnected`, or idle right
+   after a settled run (`hasRun && !running`). A never-run session waits out the whole `timeoutMs`
+   (it can only become settled once a run starts).
+
+3. **Push — `POST /sessions/:id/notify` {"url":"http://you:port/hook"}** — every signal is also
+   POSTed to your url as `{"id":"<session>", ...signal}` (settled: `+aborted`; blocked: `+pending`;
+   `disconnected`). `DELETE /sessions/:id/notify` unregisters. For testing by hand run
+   `node api/webhook-listener.mjs` (console-logging receiver, port 3900).
+
+Caveats:
+
+- Check `disposition` first: `"queued"`/`"handled"` prompts start no run, so `/wait` would resolve
+  from the foreign run instead of yours. Only wait after `"started"`.
+- A blocker that is answered before any consumer looks at `/wait` or `/status` is never observed
+  (no event replay); register `/notify` before prompting when push timing matters.
+- The webhook is fire-and-forget: delivery failures only `console.warn` in the api, and
+  subscriptions live in memory — lost when the api restarts.
+- host-bridge dialogs (`editor`/title `host-bridge`) are auto-answered and never count as blockers.
+
 ### 4. Commands that must run on the host — the host-bridge — OPTIONAL
 
 pi in the container can't reach host-only resources; the `host-bridge` extension closes

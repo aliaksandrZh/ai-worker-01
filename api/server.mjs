@@ -32,6 +32,15 @@ const komodo = KomodoClient(process.env.KOMODO_URL || "http://localhost:9120", {
   },
 });
 
+// sessionId -> webhook url (one per session); POST /sessions/:id/notify registers.
+const notifyUrl = new Map();
+const notifySession = (id, sig) => {
+  const url = notifyUrl.get(id);
+  if (!url) return;
+  fetch(url, { method: "post", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, ...sig }) })
+    .catch((e) => console.warn(`[notify ${id}] ${url}: ${e?.message ?? e}`));
+};
+
 // id -> PiRpcSession; sessions created in previous api lifetimes are listed from
 // ListDeployments and reconnected on demand (POST /sessions/:id/connect).
 const sessions = new Map();
@@ -115,6 +124,7 @@ const createSession = async (id) => {
     terminal: name,
     logsDir: LOGS_DIR,
     hostBridge: HOST_BRIDGE,
+    onSignal: (sig) => notifySession(id, sig),
   });
   await session.connect();
   sessions.set(id, session);
@@ -208,6 +218,7 @@ createServer(async (req, res) => {
             terminal: deploymentName(id),
             logsDir: LOGS_DIR,
             hostBridge: HOST_BRIDGE,
+            onSignal: (sig) => notifySession(id, sig),
           });
           await session.connect();
           sessions.set(id, session);
@@ -232,6 +243,22 @@ createServer(async (req, res) => {
         if (typeof cmd?.type !== "string") return send(res, 400, { error: "body must be {type, ...}" });
         return send(res, 200, await session.rpc(cmd));
       }
+      if (req.method === "GET" && sub === "/status") return send(res, 200, session.status());
+      if (req.method === "GET" && sub === "/wait") {
+        const t = Number(url.searchParams.get("timeoutMs")) || undefined;
+        return send(res, 200, await session.wait({ timeoutMs: t }));
+      }
+      if (req.method === "POST" && sub === "/notify") {
+        const { url: hook } = await readBody(req);
+        if (typeof hook !== "string" || !/^https?:\/\//.test(hook))
+          return send(res, 400, { error: 'body must be {"url": "http(s)://..."}' });
+        notifyUrl.set(id, hook);
+        return send(res, 200, { registered: hook, note: "fire-and-forget; lost on api restart" });
+      }
+      if (req.method === "DELETE" && sub === "/notify") {
+        notifyUrl.delete(id);
+        return send(res, 200, { registered: false });
+      }
       if (req.method === "GET" && sub === "/events") {
         const since = Number(url.searchParams.get("since") ?? 0);
         return send(res, 200, session.events(since, url.searchParams.get("type")));
@@ -249,7 +276,7 @@ createServer(async (req, res) => {
     }
 
     send(res, 404, {
-      error: "routes: GET /status, POST /start, POST /stop, POST /sessions, GET /sessions, GET|DELETE /sessions/:id, POST /sessions/:id/connect, POST /sessions/:id/rpc, GET /sessions/:id/events?since=&type=, GET /sessions/:id/ui, POST /sessions/:id/ui/:requestId",
+      error: "routes: GET /status, POST /start, POST /stop, POST /sessions, GET /sessions, GET|DELETE /sessions/:id, POST /sessions/:id/connect, POST /sessions/:id/rpc, GET /sessions/:id/events?since=&type=, GET /sessions/:id/ui, POST /sessions/:id/ui/:requestId, GET /sessions/:id/status, GET /sessions/:id/wait?timeoutMs=, POST|DELETE /sessions/:id/notify",
     });
   } catch (err) {
     // komodo_client rejects with { status, result } — surface komodo's own error text when present
