@@ -51,6 +51,7 @@ export class PiRpcSession {
     this.runInProgress = false;
     this.hasRun = false;
     this.lastSettled = null;
+    this.waiters = new Set(); // waiter objects { resolve, timer } waiting for settled/blocked
     this.stateInfo = null;
     this._connected = false;
     this._handshake = null; // { resolve, reject, timer } while connecting
@@ -172,6 +173,7 @@ export class PiRpcSession {
         this._runHostBridge(rec); // auto-answered — never parked for humans
       } else {
         this.pendingUi.set(rec.id, { method: rec.method, payload: rec, receivedAt: Date.now() });
+        this._resolveWaiters({ result: "blocked", pending: this.listPendingUi() });
       }
       return;
     }
@@ -182,6 +184,7 @@ export class PiRpcSession {
     } else if (rec.type === "agent_settled") {
       this.runInProgress = false;
       this.lastSettled = { ts: Date.now(), aborted: rec.aborted === true };
+      this._resolveWaiters({ result: "settled", aborted: rec.aborted === true });
     }
     this._pushEvent(rec);
   }
@@ -196,6 +199,34 @@ export class PiRpcSession {
     };
   }
 
+  wait({ timeoutMs = 600000 } = {}) {
+    return new Promise((resolve) => {
+      if (!this._connected) return resolve({ result: "disconnected" });
+      if (this.pendingUi.size > 0)
+        return resolve({ result: "blocked", pending: this.listPendingUi() });
+      if (this.hasRun && !this.runInProgress)
+        return resolve({ result: "settled", aborted: this.lastSettled?.aborted ?? false });
+      const waiter = {
+        resolve,
+        // shortcut: a dialog answered before the consumer polls again is never observed — orchestrators needing blocking history should read /events?type=agent_settled instead.
+        timer: setTimeout(() => {
+          this.waiters.delete(waiter);
+          resolve({ result: "timeout" });
+        }, timeoutMs),
+      };
+      this.waiters.add(waiter);
+    });
+  }
+
+  _resolveWaiters(result) {
+    const ws = [...this.waiters];
+    this.waiters.clear();
+    for (const w of ws) {
+      clearTimeout(w.timer);
+      w.resolve(result);
+    }
+  }
+
   _pushEvent(rec) {
     this.eventBuf.push({ seq: this.eventSeq++, ts: Date.now(), record: rec });
     while (this.eventBuf.length > EVENT_BUF_CAP) this.eventBuf.shift();
@@ -203,6 +234,7 @@ export class PiRpcSession {
 
   _onClose() {
     this._connected = false;
+    this._resolveWaiters({ result: "disconnected" });
     const err = new Error("terminal connection closed");
     const handshake = this._handshake;
     this._handshake = null;
