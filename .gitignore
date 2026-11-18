@@ -7,3 +7,4 @@ pi/pi-agent-state/**
 api/node_modules/
 api/.env
 .playwright-mcp/
+api/logs/
