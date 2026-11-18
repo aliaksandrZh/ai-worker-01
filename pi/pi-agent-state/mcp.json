@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mock": {
+      "command": "node",
+      "args": ["/mcp/mock-server.mjs"],
+      "exposure": "direct",
+      "description": "Mock MCP server for wiring checks"
+    }
+  }
+}
