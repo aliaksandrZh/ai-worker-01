@@ -95,11 +95,18 @@ try {
   const after = await call("GET", "/sessions");
   assert(!after.json.sessions.some((s) => s.id === id), "session deployment is gone");
 
-  // 7. logging: raw capture
+  // 7. logging: raw capture — each log line is {ts, dir, line}; parse it back out
   step = 7;
   const logPath = join(API_DIR, "logs", `pi-session-${id}.log`);
   assert(existsSync(logPath), `log file exists: ${logPath}`);
-  assert(readFileSync(logPath, "utf8").includes('"type":"response"'), "log contains protocol records");
+  const protocolRecords = readFileSync(logPath, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((l) => l.dir === "in")
+    .map((l) => JSON.parse(l.line))
+    .filter((r) => r?.type === "response");
+  assert(protocolRecords.length >= 1, `log contains ${protocolRecords.length} protocol response record(s)`);
 
   console.log(`\nSMOKE PASS (session ${id})`);
 } catch (err) {
