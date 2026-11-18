@@ -4,6 +4,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs"
   },
+  "engines": {
+    "node": ">=22.9"
+  },
   "dependencies": {
     "komodo_client": "^2.3.2"
   }
