@@ -12,3 +12,9 @@ tasks:
     cmds:
       - npm install --no-fund --no-audit
       - npm start
+
+  hook:
+    desc: Run console webhook receiver for /sessions/:id/notify (port 3900)
+    dir: api
+    cmds:
+      - node webhook-listener.mjs
