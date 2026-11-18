@@ -49,3 +49,21 @@ test("echoed commands are dropped from the event buffer, real events kept", () =
   assert.equal(kept.length, 1);
   assert.equal(kept[0].record.type, "agent_start");
 });
+
+test("_onClose with a pending handshake rejects it instead of crashing", () => {
+  const s = mkSession();
+  let rejected;
+  s._handshake = { timer: null, resolve() {}, reject: (e) => (rejected = e) };
+  s._onClose();
+  assert.ok(rejected instanceof Error);
+  assert.equal(s._handshake, null);
+});
+
+test("host-bridge dialogs are auto-handled and never parked as pending", () => {
+  const s = mkSession();
+  s._onRecord({ type: "extension_ui_request", id: "u1", method: "editor", title: "host-bridge", prefill: "nonsense-json" });
+  assert.equal(s.pendingUi.size, 0);
+  s._onRecord({ type: "extension_ui_request", id: "u2", method: "confirm", title: "Allow?" });
+  assert.equal(s.pendingUi.size, 1);
+  assert.equal(s.pendingUi.get("u2").method, "confirm");
+});

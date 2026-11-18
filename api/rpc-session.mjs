@@ -165,8 +165,11 @@ export class PiRpcSession {
     }
     if (rec.type === "extension_ui_request") {
       this._pushEvent(rec);
-      this.pendingUi.set(rec.id, { method: rec.method, payload: rec, receivedAt: Date.now() });
-      if (rec.method === "editor" && rec.title === "host-bridge") this._runHostBridge(rec);
+      if (rec.method === "editor" && rec.title === "host-bridge") {
+        this._runHostBridge(rec); // auto-answered — never parked for humans
+      } else {
+        this.pendingUi.set(rec.id, { method: rec.method, payload: rec, receivedAt: Date.now() });
+      }
       return;
     }
     if (!KNOWN_RECORD_TYPES.has(rec.type)) return; // PTY echo of our own command
@@ -181,10 +184,11 @@ export class PiRpcSession {
   _onClose() {
     this._connected = false;
     const err = new Error("terminal connection closed");
-    if (this._handshake) {
-      clearTimeout(this._handshake.timer);
-      this._handshake = null;
-      this._handshake.reject?.(err);
+    const handshake = this._handshake;
+    this._handshake = null;
+    if (handshake) {
+      clearTimeout(handshake.timer);
+      handshake.reject(err);
     }
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);

@@ -180,7 +180,14 @@ createServer(async (req, res) => {
           connected: sessions.get(d.name.slice(PREFIX.length))?.connected ?? false,
         }));
       const stored = [...walkJsonl(join(STATE_DIR, "sessions"))]
-        .map((p) => ({ path: p.slice(REPO_DIR.length + 1), mtime: statSync(p).mtimeMs }))
+        .map((p) => {
+          try {
+            return { path: p.slice(REPO_DIR.length + 1), mtime: statSync(p).mtimeMs };
+          } catch {
+            return null; // file disappeared while listing
+          }
+        })
+        .filter(Boolean)
         .sort((a, b) => b.mtime - a.mtime)
         .slice(0, 50);
       return send(res, 200, { sessions: remote, stored });
@@ -215,8 +222,11 @@ createServer(async (req, res) => {
       }
       if (!session) return send(res, 404, { error: "unknown session (POST /sessions to create, POST /sessions/:id/connect to reattach)" });
 
-      if (req.method === "GET" && sub === "")
-        return send(res, 200, await session.rpc({ type: "get_state" }).then((r) => r.data));
+      if (req.method === "GET" && sub === "") {
+        const r = await session.rpc({ type: "get_state" });
+        if (!r.success) return send(res, 502, { error: r.error ?? "get_state failed" });
+        return send(res, 200, r.data);
+      }
       if (req.method === "POST" && sub === "/rpc") {
         const cmd = await readBody(req);
         if (typeof cmd?.type !== "string") return send(res, 400, { error: "body must be {type, ...}" });
