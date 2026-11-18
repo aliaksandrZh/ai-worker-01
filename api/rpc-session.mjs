@@ -20,6 +20,18 @@ export function _splitLines(chunk, rest) {
 const EVENT_BUF_CAP = 2000;
 const DEFAULT_RPC_TIMEOUT_MS = 120000;
 
+// Session events pi emits on stdout (docs/json.md). Records with any other type are
+// PTY echoes of our own sent commands — parse fine (echo), carry no data, get dropped.
+const KNOWN_RECORD_TYPES = new Set([
+  "agent_start", "agent_end", "agent_settled", "turn_start", "turn_end",
+  "message_start", "message_update", "message_end",
+  "tool_execution_start", "tool_execution_update", "tool_execution_end",
+  "queue_update", "entry_appended", "session_info_changed", "thinking_level_changed",
+  "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end",
+  "summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished",
+  "bash_execution_update", "extension_error",
+]);
+
 export class PiRpcSession {
   constructor({ komodo, server, container, terminal, logsDir, hostBridge = {} }) {
     this.komodo = komodo;
@@ -58,7 +70,14 @@ export class PiRpcSession {
 
   _rawSend(payload) {
     this._log("out", JSON.stringify(payload));
-    this.ws.send(JSON.stringify(payload) + "\n");
+    // Terminal wire protocol (komodo bin/cli/src/command/terminal.rs): Forward = payload bytes + 0x01 tag
+    this.ws.send(new Uint8Array([...new TextEncoder().encode(JSON.stringify(payload) + "\n"), 0x01]));
+  }
+
+  // Periphery starts forwarding stdin only after this single Begin (0x00) byte.
+  _sendBegin() {
+    this._log("out", "<BEGIN>");
+    this.ws.send(new Uint8Array([0x00]));
   }
 
   // Attach to the terminal, wait for login + first get_state answer.
@@ -85,6 +104,7 @@ export class PiRpcSession {
         },
         on_login: () => {
           this._connected = true;
+          this._sendBegin();
           this.rpc({ type: "get_state" }, { timeoutMs: initTimeoutMs })
             .then((r) => {
               this.stateInfo = r.success ? r.data : null;
@@ -104,19 +124,34 @@ export class PiRpcSession {
   }
 
   _onData(data) {
-    // TextDecoder(stream) handles UTF-8 multibyte chars split across frames.
-    const chunk = this.decoder.decode(typeof data === "string" ? data : new Uint8Array(data), { stream: true });
-    const { lines, rest } = _splitLines(chunk, this.buf);
-    this.buf = rest;
-    for (const line of lines) {
-      this._log("in", line);
-      let rec;
-      try {
-        rec = JSON.parse(line);
-      } catch {
-        continue; // echo/garbage/PTY noise — dropped after logging
+    try {
+      if (typeof data === "string") {
+        // Core rejects the terminal (auth/config/already-exists) with a text frame before
+        // any binary forwarding starts — fail the connect fast instead of timing out.
+        if (data.startsWith("ERROR:") && this._handshake) {
+          this.ws?.close();
+          this._handshake.reject(new Error(data));
+          this._handshake = null;
+        }
+        if (data.includes("pty exited")) this._onClose();
+        return;
       }
-      this._onRecord(rec);
+      // TextDecoder(stream) handles UTF-8 multibyte chars split across frames.
+      const chunk = this.decoder.decode(new Uint8Array(data), { stream: true });
+      const { lines, rest } = _splitLines(chunk, this.buf);
+      this.buf = rest;
+      for (const line of lines) {
+        this._log("in", line);
+        let rec;
+        try {
+          rec = JSON.parse(line);
+        } catch {
+          continue; // echo/garbage/PTY noise — dropped after logging
+        }
+        this._onRecord(rec);
+      }
+    } catch (err) {
+      this._log("error", `frame handling: ${err?.message ?? err}`);
     }
   }
 
@@ -129,10 +164,16 @@ export class PiRpcSession {
       return;
     }
     if (rec.type === "extension_ui_request") {
+      this._pushEvent(rec);
       this.pendingUi.set(rec.id, { method: rec.method, payload: rec, receivedAt: Date.now() });
       if (rec.method === "editor" && rec.title === "host-bridge") this._runHostBridge(rec);
       return;
     }
+    if (!KNOWN_RECORD_TYPES.has(rec.type)) return; // PTY echo of our own command
+    this._pushEvent(rec);
+  }
+
+  _pushEvent(rec) {
     this.eventBuf.push({ seq: this.eventSeq++, ts: Date.now(), record: rec });
     while (this.eventBuf.length > EVENT_BUF_CAP) this.eventBuf.shift();
   }
