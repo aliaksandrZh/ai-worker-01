@@ -98,7 +98,15 @@ const createSession = async (id) => {
       ].join("\n"),
     },
   });
-  await komodo.execute("StartDeployment", { deployment: name });
+  // shortcut: "Deploy" (create + start) not "StartDeployment" (docker start only — fails on a fresh deployment with No such container).
+  const update = await komodo.execute_and_poll("Deploy", { deployment: name });
+  if (update.status === "Err" || update.success !== true) {
+    const failedLogs = (update.logs ?? [])
+      .filter((l) => l.success === false && (l.stderr || l.stdout))
+      .map((l) => `${l.command ?? l.stage}: ${(l.stderr ?? l.stdout).trim()}`)
+      .join("; ");
+    throw new Error(`Deploy ${name} failed: ${JSON.stringify(update.success ?? update.status)} ${failedLogs}`);
+  }
   await waitRunning(name);
   const session = new PiRpcSession({
     komodo,
@@ -117,12 +125,23 @@ const stopSession = async (id) => {
   const name = deploymentName(id);
   sessions.get(id)?.close();
   sessions.delete(id);
+  let containerState = null;
   try {
-    await komodo.execute("StopDeployment", { deployment: name });
+    containerState = (await komodo.read("GetDeploymentContainer", { deployment: name })).state;
   } catch {
-    /* already stopped */
+    /* deployment may already be gone */
   }
-  await komodo.write("DeleteDeployment", { id: name });
+  if (containerState === "running") {
+    // shortcut: Stop on a not_deployed deployment produces a failed docker-stop update that
+    // keeps the resource busy and blocks the delete; skip Stop unless the container runs.
+    await komodo.execute_and_poll("StopDeployment", { deployment: name }).catch(() => null);
+  }
+  try {
+    await komodo.write("DeleteDeployment", { id: name });
+  } catch (err) {
+    const msg = err?.result?.error ?? err?.message ?? String(err);
+    if (!/not found/i.test(msg)) throw err;
+  }
 };
 
 createServer(async (req, res) => {
@@ -190,14 +209,14 @@ createServer(async (req, res) => {
         }
         return send(res, 200, { connected: true });
       }
-      if (!session) return send(res, 404, { error: "unknown session (POST /sessions to create, POST /sessions/:id/connect to reattach)" });
-
-      if (req.method === "GET" && sub === "")
-        return send(res, 200, await session.rpc({ type: "get_state" }).then((r) => r.data));
       if (req.method === "DELETE" && sub === "") {
         await stopSession(id);
         return send(res, 200, { stopped: true });
       }
+      if (!session) return send(res, 404, { error: "unknown session (POST /sessions to create, POST /sessions/:id/connect to reattach)" });
+
+      if (req.method === "GET" && sub === "")
+        return send(res, 200, await session.rpc({ type: "get_state" }).then((r) => r.data));
       if (req.method === "POST" && sub === "/rpc") {
         const cmd = await readBody(req);
         if (typeof cmd?.type !== "string") return send(res, 400, { error: "body must be {type, ...}" });
