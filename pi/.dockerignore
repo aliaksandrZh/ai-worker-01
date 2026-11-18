@@ -1,0 +1,3 @@
+# Keep runtime state and pi's workspace out of the build context
+pi-worker-workspace/
+pi-agent-state/

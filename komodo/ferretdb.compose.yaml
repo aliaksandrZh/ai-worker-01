@@ -44,6 +44,8 @@ services:
     image: ghcr.io/moghtech/komodo-core:${COMPOSE_KOMODO_IMAGE_TAG:-2}
     init: true
     restart: unless-stopped
+    labels:
+      komodo.skip: # Prevent Komodo from stopping with StopAllContainers
     depends_on:
       - ferretdb
     ports:
@@ -54,6 +56,8 @@ services:
     volumes:
       ## Attach the Core / Periphery communication keys
       - keys:/config/keys
+      ## Pi resource sync file — Resource Paths are relative to /syncs/{sync_name}, sync named "pi"
+      - /Users/aliaksandrzhebit/Programming/azh/03/pi/pi.sync.toml:/syncs/pi/pi.sync.toml
       ## Store dated backups of the database - https://komo.do/docs/setup/backup
       - ${COMPOSE_KOMODO_BACKUPS_PATH}:/backups
       ## Store sync files on server
@@ -86,6 +90,8 @@ services:
       ## or docker will get confused. See https://github.com/moghtech/komodo/discussions/180.
       ## Default: /etc/komodo.
       - ${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}:${PERIPHERY_ROOT_DIRECTORY:-/etc/komodo}
+      ## Pi build context + stack compose, visible to Periphery at /etc/komodo/pi
+      - /Users/aliaksandrzhebit/Programming/azh/03/pi:/etc/komodo/pi
       ## Optionally mount a custom periphery.config.toml
       # - /path/to/periphery.config.toml:/config/config.toml
       ## Optionally mount custom root CA certificate to trust
