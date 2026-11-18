@@ -1,0 +1,35 @@
+# Pi Coding Agent worker.
+# Ollama runs on the host; this image only contains Pi and the basic tools
+# required to inspect and modify a mounted workspace.
+
+FROM node:24-bookworm-slim
+
+ARG PI_VERSION=1.5.2
+ARG PI_UID=10001
+ARG PI_GID=10001
+
+ENV HOME=/home/pi
+WORKDIR /workspace
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        git \
+        ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid "${PI_GID}" pi \
+    && useradd --uid "${PI_UID}" --gid pi --create-home --shell /bin/bash pi \
+    && mkdir -p /workspace /home/pi/.pi/agent \
+    && chown -R pi:pi /workspace /home/pi
+
+RUN npm install --global --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+    && npm cache clean --force
+
+USER pi
+
+# Pi sessions and configuration live under /home/pi/.pi/agent.
+# Mount this directory as a named volume to preserve sessions between runs.
+# Mount the project/worktree at /workspace.
+ENTRYPOINT ["pi"]
+CMD ["--mode", "rpc"]

@@ -1,0 +1,7 @@
+version: 3
+
+tasks:
+  komodo:
+    desc: Run komodo (docker compose)
+    cmds:
+      - docker compose --file komodo/ferretdb.compose.yaml --env-file komodo/compose.env up
