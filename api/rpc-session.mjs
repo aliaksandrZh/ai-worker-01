@@ -48,6 +48,9 @@ export class PiRpcSession {
     this.eventBuf = []; // [{seq, ts, record}] — seq is monotonic, survives buffer shifts
     this.eventSeq = 0;
     this.rpcSeq = 0;
+    this.runInProgress = false;
+    this.hasRun = false;
+    this.lastSettled = null;
     this.stateInfo = null;
     this._connected = false;
     this._handshake = null; // { resolve, reject, timer } while connecting
@@ -173,7 +176,24 @@ export class PiRpcSession {
       return;
     }
     if (!KNOWN_RECORD_TYPES.has(rec.type)) return; // PTY echo of our own command
+    if (rec.type === "agent_start") {
+      this.runInProgress = true;
+      this.hasRun = true;
+    } else if (rec.type === "agent_settled") {
+      this.runInProgress = false;
+      this.lastSettled = { ts: Date.now(), aborted: rec.aborted === true };
+    }
     this._pushEvent(rec);
+  }
+
+  status() {
+    return {
+      connected: this._connected,
+      phase: this.pendingUi.size > 0 ? "blocked" : this.runInProgress ? "running" : "idle",
+      hasRun: this.hasRun,
+      lastSettled: this.lastSettled,
+      pendingUi: this.listPendingUi(),
+    };
   }
 
   _pushEvent(rec) {

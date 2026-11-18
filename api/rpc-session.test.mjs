@@ -59,6 +59,53 @@ test("_onClose with a pending handshake rejects it instead of crashing", () => {
   assert.equal(s._handshake, null);
 });
 
+test("status derives idle for a fresh session", () => {
+  const s = mkSession();
+  assert.deepEqual(s.status(), {
+    connected: false,
+    phase: "idle",
+    hasRun: false,
+    lastSettled: null,
+    pendingUi: [],
+  });
+});
+
+test("agent_start then agent_settled records the settle and clears the run", () => {
+  const s = mkSession();
+  s._onRecord({ type: "agent_start" });
+  assert.equal(s.status().phase, "running");
+  s._onRecord({ type: "agent_settled", aborted: false });
+  const st = s.status();
+  assert.equal(st.phase, "idle");
+  assert.equal(st.hasRun, true);
+  assert.equal(st.lastSettled.aborted, false);
+  assert.equal(typeof st.lastSettled.ts, "number");
+});
+
+test("settled then a new run goes back to running", () => {
+  const s = mkSession();
+  s._onRecord({ type: "agent_settled", aborted: false });
+  s._onRecord({ type: "agent_start" });
+  const st = s.status();
+  assert.equal(st.phase, "running");
+  assert.notEqual(st.lastSettled, null);
+});
+
+test("aborted settle carries aborted", () => {
+  const s = mkSession();
+  s._onRecord({ type: "agent_settled", aborted: true });
+  assert.equal(s.status().lastSettled.aborted, true);
+});
+
+test("pending dialogs make the phase blocked (highest priority)", () => {
+  const s = mkSession();
+  s._onRecord({ type: "agent_start" });
+  s._onRecord({ type: "extension_ui_request", id: "u1", method: "confirm", title: "Allow?" });
+  const st = s.status();
+  assert.equal(st.phase, "blocked");
+  assert.equal(st.pendingUi.length, 1);
+});
+
 test("host-bridge dialogs are auto-handled and never parked as pending", () => {
   const s = mkSession();
   s._onRecord({ type: "extension_ui_request", id: "u1", method: "editor", title: "host-bridge", prefill: "nonsense-json" });
