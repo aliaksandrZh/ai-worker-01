@@ -56,11 +56,35 @@ docker ps --filter name=pi-worker                                  # status: Up
 docker inspect pi-worker --format '{{.Config.OpenStdin}}'          # true
 ```
 
-Drive the RPC stream of the worker process itself (one client at a time):
+Drive the RPC stream of the worker process itself (manual debugging, one
+client at a time):
 
 ```bash
 docker attach pi-worker
 ```
+
+## Programmatic access (api/)
+
+The `api/` HTTP server operates sessions through Komodo — one
+`pi-session-<id>` Deployment per session, driven over Komodo attach-mode
+terminal websockets. Endpoints (see `docs/superpowers/specs/2026-11-18-pi-rpc-api-design.md`):
+
+```bash
+cd ../api && npm start
+BASE=http://localhost:3000
+curl -s -XPOST $BASE/sessions -d '{"name":"demo"}'   # spawns a session container
+curl -s $BASE/sessions
+# POST  /sessions/:id/rpc      {"type":"prompt","message":"..."}   (any RPC command)
+# GET   /sessions/:id/events?since=0&type=tool_execution_start
+# GET   /sessions/:id/ui   +  POST /sessions/:id/ui/:requestId   (dialogs pi raised)
+# POST  /sessions/:id/connect     (reattach after an api restart)
+curl -s -XDELETE $BASE/sessions/:id                   # stop + delete container
+node rpc-smoke.mjs                                     # end-to-end check
+```
+
+`pi/pi-agent-state/extensions/host-bridge.ts` runs inside every session
+container and exposes `host_shell` (a tool that executes commands on the
+host through the api) plus the `/host-check` command.
 
 Sessions and files survive redeploys: state in `pi-agent-state/`, work
 products in `pi-worker-workspace/`, both visible on the host.
