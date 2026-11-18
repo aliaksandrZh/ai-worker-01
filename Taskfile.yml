@@ -5,3 +5,10 @@ tasks:
     desc: Run komodo (docker compose)
     cmds:
       - docker compose --file komodo/ferretdb.compose.yaml --env-file komodo/compose.env up
+
+  api:
+    desc: Run pi-worker start/stop api (needs api/.env, see api/.env.example)
+    dir: api
+    cmds:
+      - npm install --no-fund --no-audit
+      - npm start
