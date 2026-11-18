@@ -3,6 +3,7 @@
 # Start first, in another shell:
 #   cd api && npm start
 # Then run:  bash curl-check-mcp.sh   # creates one session, prompts one echo call, deletes it
+#   KEEP=1 bash curl-check-mcp.sh    # keep the session running to observe it by hand (delete after)
 # PASS = events contain a mcp__mock__echo call whose result text equals the prompt's input text.
 set -e
 BASE=${BASE:-localhost:3000}
@@ -50,4 +51,11 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 })' "$CHECK_TEXT"
 
 echo "== cleanup =="
+if [ -n "${KEEP:-}" ]; then
+  echo "KEEP=1 — session $ID left running. Observe it, then delete:"
+  echo "  curl -s 'localhost:3000/sessions/$ID/events?type=tool_execution_start,tool_execution_end'"
+  echo "  docker top pi-session-$ID | grep mock-server        # the spawned server child process"
+  echo "  curl -s -XDELETE localhost:3000/sessions/$ID        # when done"
+  exit 0
+fi
 curl -s -XDELETE "$BASE/sessions/$ID"; echo
