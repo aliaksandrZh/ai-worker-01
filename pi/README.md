@@ -14,7 +14,7 @@
 | `Dockerfile.pi-worker` | the image recipe (pi v1.5.2 via npm, node:24-bookworm-slim, non-root `pi` user, `ENTRYPOINT pi` + `CMD --mode rpc`) |
 | `pi.sync.toml` | Komodo Resource Sync file — declares everything: builder, build, deployment |
 | `.dockerignore` | keeps the two runtime folders out of the image build context |
-| `pi-agent-state/` | bind mount target for `/home/pi/.pi/agent` (sessions, config) — runtime data, ignored by git |
+| `pi-agent-state/` | bind mount target for `/home/pi/.pi/agent` (runtime sessions; `models.json`, `settings.json` tracked in git) |
 | `pi-worker-workspace/` | bind mount target for `/workspace` (the worker's work products) — ignored by git |
 
 ## Before you start

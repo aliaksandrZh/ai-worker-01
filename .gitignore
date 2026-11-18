@@ -1,5 +1,7 @@
 pi/pi-worker-workspace/
-pi/pi-agent-state/
+pi/pi-agent-state/**
+!pi/pi-agent-state/models.json
+!pi/pi-agent-state/settings.json
 api/node_modules/
 api/.env
 .playwright-mcp/
