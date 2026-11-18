@@ -221,3 +221,14 @@ test("host-bridge dialog fires no signal", () => {
   s._onRecord({ type: "extension_ui_request", id: "u1", method: "editor", title: "host-bridge", prefill: JSON.stringify({ command: "echo hi" }) });
   assert.deepEqual(signals, []);
 });
+
+test("disconnected signal re-arms after a reconnect", () => {
+  const signals = [];
+  const s = mkSessionWith({ onSignal: (sig) => signals.push(sig) });
+  s._connected = true;
+  s._onClose();
+  s._rearm(); // on_login re-arms on every (re)attach
+  s._connected = true;
+  s._onClose();
+  assert.deepEqual(signals.map((x) => x.event), ["disconnected", "disconnected"]);
+});

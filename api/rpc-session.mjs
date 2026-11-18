@@ -110,6 +110,7 @@ export class PiRpcSession {
         },
         on_login: () => {
           this._connected = true;
+          this._rearm();
           this._sendBegin();
           this.rpc({ type: "get_state" }, { timeoutMs: initTimeoutMs })
             .then((r) => {
@@ -235,6 +236,10 @@ export class PiRpcSession {
     if (sig.event === "disconnected" && this._disconnectedSignaled) return; // ws close may fire twice
     if (sig.event === "disconnected") this._disconnectedSignaled = true;
     this.onSignal?.(sig);
+  }
+
+  _rearm() {
+    this._disconnectedSignaled = false;
   }
 
   _pushEvent(rec) {
