@@ -13,7 +13,6 @@ const REPO_DIR = join(API_DIR, "..");
 const LOGS_DIR = join(API_DIR, "logs");
 const STATE_DIR = join(REPO_DIR, "pi", "pi-agent-state");
 const WORKSPACE_DIR = join(REPO_DIR, "pi", "pi-worker-workspace");
-const MCP_DIR = join(REPO_DIR, "mcp");
 const PREFIX = "pi-session-";
 
 const PORT = process.env.PORT || 3000;
@@ -105,7 +104,6 @@ const createSession = async (id) => {
       volumes: [
         `${STATE_DIR}:/home/pi/.pi/agent`,
         `${WORKSPACE_DIR}:/workspace`,
-        `${MCP_DIR}:/mcp:ro`,
       ].join("\n"),
     },
   });

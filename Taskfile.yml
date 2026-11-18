@@ -20,19 +20,12 @@ tasks:
       - node webhook-listener.mjs
 
   test:
-    desc: Unit + contract tests (api signals state machine, mcp mock server)
+    desc: Unit + contract tests (api signals state machine)
     cmds:
       - node --test api/rpc-session.test.mjs
-      - node --test mcp/mock-server.test.mjs
 
   check-signals:
     desc: Live walkthrough — create session, prompt, await via /wait, webhook settled line (api + komodo must be running)
     dir: api
     cmds:
       - sh curl-check-signals.sh
-
-  check-mcp:
-    desc: Live check — agent calls mcp__mock__echo in a new session, round-trip asserted (api + komodo must be running)
-    dir: api
-    cmds:
-      - sh curl-check-mcp.sh

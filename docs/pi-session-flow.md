@@ -178,30 +178,6 @@ Caveats:
   subscriptions live in memory — lost when the api restarts.
 - host-bridge dialogs (`editor`/title `host-bridge`) are auto-answered and never count as blockers.
 
-### 3c. MCP tools inside the session — no human in the loop
-
-Servers in the state mount's `pi/pi-agent-state/mcp.json` run inside every session container (stdio
-children of pi); the host folder `mcp/` is mounted read-only at `/mcp`. Sessions created after the
-change pick it up — no image rebuild.
-
-Example tools: `mcp/mock-server.mjs` exposes `mock/echo` — the model calls it as `mcp__mock__echo`:
-
-```bash
-curl -s -XPOST localhost:3000/sessions/<id>/rpc -d '{"type":"prompt","message":"Call mcp__mock__echo with text hello"}'
-curl -s "localhost:3000/sessions/<id>/events?type=tool_execution_start,tool_execution_end"
-# → args {text:"hello"} … result {content:[{type:"text",text:"hello"}], details:{server:"mock"}}
-```
-
-- **Autonomy:** every MCP call passes only through registered extension permission gates
-  (`mcp.json` docs); the shipped `host-bridge` extension raises no gate, so calls are fire-and-forget
-  — the orchestrator sees them as `tool_execution_*` events and has nothing to answer. Scope what a
-  server may do by token/permissions configured in its own config, not by pi dialogs.
-- **Exposure** (`mcp.json` key on the server): `direct` declares small tool sets to the model;
-  `deferred` suits large servers (tool-search loads them on demand); default `codemode` keeps tools
-  script-only. Credentials go in the same entry via `env` (`${VAR}` expansion).
-- If a server is listed but calls fail, check `extension_error` records and `docker logs` of the
-  session container for the server's stderr.
-
 ### 4. Commands that must run on the host — the host-bridge — OPTIONAL
 
 pi in the container can't reach host-only resources; the `host-bridge` extension closes
