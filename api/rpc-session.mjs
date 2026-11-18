@@ -33,7 +33,7 @@ const KNOWN_RECORD_TYPES = new Set([
 ]);
 
 export class PiRpcSession {
-  constructor({ komodo, server, container, terminal, logsDir, hostBridge = {} }) {
+  constructor({ komodo, server, container, terminal, logsDir, hostBridge = {}, onSignal = null }) {
     this.komodo = komodo;
     this.server = server;
     this.container = container;
@@ -52,6 +52,8 @@ export class PiRpcSession {
     this.hasRun = false;
     this.lastSettled = null;
     this.waiters = new Set(); // waiter objects { resolve, timer } waiting for settled/blocked
+    this.onSignal = onSignal;
+    this._disconnectedSignaled = false;
     this.stateInfo = null;
     this._connected = false;
     this._handshake = null; // { resolve, reject, timer } while connecting
@@ -174,6 +176,7 @@ export class PiRpcSession {
       } else {
         this.pendingUi.set(rec.id, { method: rec.method, payload: rec, receivedAt: Date.now() });
         this._resolveWaiters({ result: "blocked", pending: this.listPendingUi() });
+        this._emitSignal({ event: "blocked", pending: this.listPendingUi() });
       }
       return;
     }
@@ -185,6 +188,7 @@ export class PiRpcSession {
       this.runInProgress = false;
       this.lastSettled = { ts: Date.now(), aborted: rec.aborted === true };
       this._resolveWaiters({ result: "settled", aborted: rec.aborted === true });
+      this._emitSignal({ event: "settled", aborted: rec.aborted === true });
     }
     this._pushEvent(rec);
   }
@@ -227,6 +231,12 @@ export class PiRpcSession {
     }
   }
 
+  _emitSignal(sig) {
+    if (sig.event === "disconnected" && this._disconnectedSignaled) return; // ws close may fire twice
+    if (sig.event === "disconnected") this._disconnectedSignaled = true;
+    this.onSignal?.(sig);
+  }
+
   _pushEvent(rec) {
     this.eventBuf.push({ seq: this.eventSeq++, ts: Date.now(), record: rec });
     while (this.eventBuf.length > EVENT_BUF_CAP) this.eventBuf.shift();
@@ -235,6 +245,7 @@ export class PiRpcSession {
   _onClose() {
     this._connected = false;
     this._resolveWaiters({ result: "disconnected" });
+    this._emitSignal({ event: "disconnected" });
     const err = new Error("terminal connection closed");
     const handshake = this._handshake;
     this._handshake = null;

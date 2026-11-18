@@ -40,6 +40,9 @@ test("incomplete trailing line stays in rest", () => {
 const mkSession = () =>
   new PiRpcSession({ komodo: {}, server: "x", container: "c", terminal: "t", logsDir: mkdtempSync(join(tmpdir(), "pirpc-")) });
 
+const mkSessionWith = (opts) =>
+  new PiRpcSession({ komodo: {}, server: "x", container: "c", terminal: "t", logsDir: mkdtempSync(join(tmpdir(), "pirpc-")), ...opts });
+
 // settle(): awaits one macrotask tick, returns whether promise p already resolved
 const settledBy = async (p) => {
   const flag = { done: false };
@@ -194,4 +197,27 @@ test("wait insta-resolves blocked when a dialog is already parked", async () => 
   s._onRecord({ type: "extension_ui_request", id: "u1", method: "confirm", title: "Allow?" });
   const p = s.wait({ timeoutMs: 200 });
   assert.equal((await p).result, "blocked");
+});
+
+test("signals fire for settled, blocked and disconnected", () => {
+  const signals = [];
+  const s = mkSessionWith({ onSignal: (sig) => signals.push(sig) });
+  s._connected = true;
+  s._onRecord({ type: "extension_ui_request", id: "u1", method: "confirm", title: "Allow?" });
+  s._onRecord({ type: "agent_settled", aborted: true });
+  s._onClose();
+  s._onClose(); // second close must not re-emit
+  assert.deepEqual(signals, [
+    { event: "blocked", pending: signals[0].pending },
+    { event: "settled", aborted: true },
+    { event: "disconnected" },
+  ]);
+  assert.deepEqual(signals[0].pending.map((x) => x.method), ["confirm"]);
+});
+
+test("host-bridge dialog fires no signal", () => {
+  const signals = [];
+  const s = mkSessionWith({ onSignal: (sig) => signals.push(sig) });
+  s._onRecord({ type: "extension_ui_request", id: "u1", method: "editor", title: "host-bridge", prefill: JSON.stringify({ command: "echo hi" }) });
+  assert.deepEqual(signals, []);
 });
