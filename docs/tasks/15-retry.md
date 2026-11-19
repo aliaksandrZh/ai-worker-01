@@ -13,5 +13,5 @@
 - [ ] A failure after execution began never auto-retries
 - [ ] `/retry` reuses the same Task (no new Task): same profile version, same `target_head_sha` for reviews, attempt+1, fresh session
 - [ ] `/retry` on a disabled/not-ready pinned version → rejected `agent_profile_not_ready`, Task stays Failed
-- [ ] `/retry` on a succeeded Task or non-latest failure → rejected
+- [ ] `/retry` on a succeeded Task or non-latest failure → rejected `task_not_retryable` (`04 §7`); precondition/admission/occupancy rejections leave the Task `Failed` as well (decision 70)
 - [ ] Acceptance scenario "Retry" (`05` matrix) passes

@@ -8,7 +8,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] `/code` after a successful plan → implement Task on the coder profile; branch `agent/issue-<n>` pushed; summary comment published (correlated before completion)
+- [ ] `/code` after a successful plan → implement Task on the coder profile; branch `agent/issue-<n>` pushed; summary comment published (correlated before completion; transient GitHub/MCP failures retried within the Run with GitHub verification before any re-post — decision 42)
 - [ ] `/code` without a successful plan Artifact → rejected with the recorded reason
 - [ ] Mid-run blocker → question comment + branch checkpoint + Run `Succeeded (needs_human_input)` + Task `Blocked`; continuation run starts from the agent branch
 - [ ] Commits authored as the bot account; force-push impossible; the PAT never lands in remotes or git config

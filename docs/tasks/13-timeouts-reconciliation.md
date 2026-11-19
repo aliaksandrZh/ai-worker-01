@@ -11,6 +11,7 @@
 - [ ] A stub that never becomes ready → Run fails `startup_timeout` after 10 min
 - [ ] A silent-but-alive stub → idle candidate → reconciled (processes checked) → confirmed hang → Failed `idle_timeout`; a busy child process prevents the kill
 - [ ] A wall-clock stub exceeding 4 h → Run `TimedOut`; `/retry` is the only recovery (no automatic retry)
+- [ ] Effective limits honor the pinned profile-version execution-limit defaults (`AgentProfileVersion.startup_timeout`/`max_run_duration`, optionally `idle_timeout`) — a profile may lower them but never bypass the system constraints (`01 §16`, `02 §12`, decisions 30, 54; pinned by ticket 02)
 - [ ] Denied tool operation → `permission_blocked` RunEvent + explicit denial; impossible mandatory operation → Run Failed `required_permission_denied` + notification
 - [ ] Host-Monitor telemetry stored in PostgreSQL with its own credential; the control plane never reads execution-host paths or process tables directly
 - [ ] Orphan candidates detected with the grace/quarantine timing; nothing deleted while the DB is unavailable

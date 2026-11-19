@@ -8,9 +8,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] Bot requested as reviewer on a ready PR → automatic initial review exactly once per Workflow lifetime
+- [ ] Bot requested as reviewer on a ready PR → automatic initial review exactly once per Workflow lifetime; `Workflow.initial_review_created_at` stays set even if the Task is later cancelled (`02 §9`)
 - [ ] Request on a draft PR deferred; on Ready it starts under the three conditions; an explicit `/review` suppresses the duplicate automatic review
-- [ ] Explicit `/review` → new review Task with both SHAs pinned; fresh read-only workspace; review + inline comments submitted via MCP
+- [ ] Explicit `/review` → new review Task with both SHAs pinned; fresh read-only workspace; review + inline comments submitted via MCP (transient MCP failures retried within the Run with GitHub verification before re-posting — decision 42)
 - [ ] The review report/Artifact explicitly records which SHA was reviewed (`target_head_sha`, `04 §5`)
 - [ ] Head-SHA drift before a queued Task starts → `review_head_changed_before_execution` cancel + system comment asking for `/review` again
 - [ ] Review-request removal before execution → `review_request_removed_before_execution` cancel; an executing review is not interrupted

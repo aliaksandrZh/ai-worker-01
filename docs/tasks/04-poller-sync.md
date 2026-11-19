@@ -9,6 +9,7 @@
 **Status:** ready-for-agent
 
 - [ ] Created/updated work items and comments appear in PostgreSQL with matching normalized events
+- [ ] A comment edit updates the stored `body` and emits `issue_comment_updated` / `review_comment_updated` (decision 78, `02 §5`)
 - [ ] Re-polls and overlapping timestamp windows create no duplicates (external IDs/fingerprints)
 - [ ] A failing save leaves the cursor unadvanced (crash mid-batch keeps progress safe)
 - [ ] 304 Not Modified responses skip primary-limit consumption; rate limits stop and resume the cycle

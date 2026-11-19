@@ -18,4 +18,6 @@
 - [ ] Cold-start gate (`01 §13`): until configuration synchronization completes successfully, the Orchestrator accepts no task-producing commands (rejected/deferred); `/status`, `/help`, and health endpoints remain available
 - [ ] Onboarding seeds each new repository's allowlist with the repository owner's account by default (decisions 7, 49)
 - [ ] `profile.yaml` bridge configuration (Runtime Bridge version + heartbeat/event cadence) is pinned into the AgentProfileVersion row (`02 §12`, decision 54)
+- [ ] Profile execution-limit defaults (`startup_timeout`, `max_run_duration`, `idle_timeout`) and `resource_configuration` (CPU/memory) from `profile.yaml` are pinned into the `AgentProfileVersion` row and validated: a profile version may lower these limits but can never exceed the system constraints (`01 §16`, `02 §12`, decisions 30, 54)
+- [ ] Re-processing unchanged configuration (same `config_hash`) creates neither a duplicate `AgentProfileVersion` nor a build dispatch (decision 81)
 - [ ] Acceptance scenario "Repository onboarding" (`05` matrix) passes

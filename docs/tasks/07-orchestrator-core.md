@@ -9,7 +9,7 @@
 **Status:** ready-for-agent
 
 - [ ] A second same-Workflow command while a Task is unfinished → rejected at admission with a recorded reason (not queued)
-- [ ] Cross-Workflow commands queue FIFO and claim in order when capacity frees
+- [ ] Cross-Workflow commands queue FIFO and claim in order when capacity frees (the command row carries status `queued` while waiting — `02 §11`, `03 §7`)
 - [ ] The cap counts Claimed/Starting/Running/Stopping Runs; queued/pending work occupies no slot
 - [ ] Concurrent workers never double-claim a job; expired leases return jobs to `pending`
 - [ ] Claim-time recheck (`04 §2`, `06 §12`): a queued Task revalidates preconditions at claim — WorkItem open, plan present for `/code`, profile version still `ready`, repository not paused, pinned SHA unchanged for reviews — an invalid queued Task is cancelled or rejected with a recorded reason, never executed

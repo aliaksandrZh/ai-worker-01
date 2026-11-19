@@ -9,6 +9,7 @@
 **Status:** ready-for-agent
 
 - [ ] Closing the root Issue → Workflow `closed`; commands rejected; containers removed; storage tree deleted; DB rows retain history with flags
+- [ ] Storage status recorded at cleanup: `Workspace.storage_status`, `AgentSession.file_deleted_at`/`storage_status` — including `missing` for files already absent — plus cleanup/deletion timestamps; DB rows always retained (`02 §13`, `02 §16`, `02 §22`)
 - [ ] Closing the related Issue does not close/clean the PR Workflow (and vice versa) — separate roots
 - [ ] Merged PR → cleanup identical to closure; DB keeps `merged_at`
 - [ ] Reopen → Workflow stays closed, no second Workflow, commands rejected with a recorded reason

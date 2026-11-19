@@ -10,6 +10,7 @@
 
 - [ ] `@bot /plan` on an open Issue → real Pi run in the planner image → plan/gaps/questions comment published via GitHub MCP + plan Artifact row (inline, ≤256 KiB)
 - [ ] requiredPublications correlated before `completed`; unconfirmed publication → Run/Task fail `github_publication_failed`, notification posted, artifacts kept
+- [ ] The planner profile prompt encodes the within-run transient GitHub/MCP retry with GitHub verification before any re-post (no duplicate comments — decision 42)
 - [ ] `/status` during the run shows the current phase from RunEvents with the progress rules (heartbeat never progress)
 - [ ] Task Succeeded → Workflow `waiting_for_human`; a later `/plan` creates a new Task + new per-Run session at a new per-Run directory
 - [ ] Real event mapping persisted (agent_started/tool_*/agent_settled) with text deltas aggregated

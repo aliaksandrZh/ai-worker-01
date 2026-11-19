@@ -4,11 +4,11 @@
 
 **Spec:** `docs/pi-agent-architecture/06-command-reference.md` §6 (/test-cases); `05-v1-decisions.md` decisions 36 (phase gating), 48 (Issue-only); `02-data-model.md` §10 (task type `test_design`), §17 (artifact type `test_cases`).
 
-**Blocked by:** 12, 11, 10
+**Blocked by:** 12, 11, 11b, 10
 
 **Status:** ready-for-agent
 
-- [ ] `/test-cases` on an open Issue → `test_cases` Artifact + summary comment published (correlated before completion)
+- [ ] `/test-cases` on an open Issue → `test_cases` Artifact + summary comment published (correlated before completion; transient GitHub/MCP failures retried within the Run with GitHub verification before any re-post — decision 42)
 - [ ] `/test-cases` targeting a PR → rejected with a clear explanation (notification via Outbox)
 - [ ] The test-designer profile never implements or runs tests (profile instructions)
 - [ ] Task Succeeded → Workflow `waiting_for_human`; storage retained per standard lifecycle
