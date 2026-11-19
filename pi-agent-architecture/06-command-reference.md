@@ -38,7 +38,6 @@ Common rules:
 | Command | Valid target | Agent profile | Creates Task? | Main result |
 |---|---|---|---|---|
 | `/plan` | Issue | `planner` | Yes | Analysis, gaps, questions, and implementation plan |
-| `/proceed` | Issue | `coder` | Yes | Implements the approved plan, commits and pushes a branch, reports result |
 | `/review` | Pull Request | `reviewer` | Yes | Reviews the current PR Head SHA and submits review/comments |
 | `/test-cases` | Issue; PR may be enabled by configuration | `test-designer` | Yes | Produces test scenarios/cases as an artifact and GitHub comment |
 | `/debug` | Issue or Pull Request | `debugger` | Yes | Investigates a problem and reports diagnosis/evidence; no code changes by default |
@@ -190,3 +189,6 @@ Separate from comment commands:
 ## 13. Commands received while another Task is running
 
 V1 has one global execution slot. Commands are still persisted and validated when received. A valid task-producing command is queued and starts when the slot becomes free, provided its Workflow state and preconditions are still valid at execution time. `/stop` is prioritized for the active Task of the targeted WorkItem. If a queued command becomes invalid because the WorkItem was closed or the Workflow changed, it is rejected/cancelled with a recorded reason.
+
+
+TODO: Need a separate command to proceed action. For example we have questions in the planning. Once user answered - we need to mark that the work can be proceded.

@@ -21,8 +21,6 @@ flowchart TD
     K --> C[Specialized Pi Agent Containers]
     C <--> RA
     RA --> DB
-    OP --> OUT[GitHub Outbox / Write Adapter]
-    OUT --> GH
 ```
 
 ### GitHub Integration / Poller
@@ -32,7 +30,6 @@ flowchart TD
 - Persists normalized records/events and per-stream sync cursors in PostgreSQL.
 - Uses stable external IDs or deterministic fingerprints to deduplicate data.
 - Advances a cursor only after the fetched page/batch is durably saved.
-- Does not start agents directly.
 - No public IP or inbound GitHub webhook is required for V1.
 
 ### Orchestrator
@@ -41,9 +38,8 @@ flowchart TD
 - Parses commands and checks target type, permissions, and Workflow state.
 - Creates Workflows, Tasks, Runs, and durable queue jobs.
 - Selects a versioned Agent Profile.
-- Enforces one active execution globally in V1.
+- Enforces one active execution within a single workflow.
 - Owns business-state transitions and decides what happens after completion, failure, timeout, cancellation, a human response, or root closure.
-- Schedules GitHub writes through a transactional Outbox.
 
 ### Agent Runtime API
 
@@ -57,11 +53,13 @@ flowchart TD
 
 ### Komodo
 
-Komodo remains the container management layer. The Runtime API abstracts Komodo from the Orchestrator. The implementation may be rewritten; existing Komodo code is not a required foundation.
+Komodo - the container management layer. The Runtime API abstracts Komodo from the Orchestrator. Komodo + Komodo Api - single docker-compose
 
 ## 3. Agent profiles
 
-Suggested initial profiles:
+Initial profiles: Planner
+
+List of the all agents (v2).
 
 | Profile | Purpose | Default behavior |
 |---|---|---|
@@ -69,7 +67,6 @@ Suggested initial profiles:
 | `coder` | Implement approved work | Write code, run checks, commit and push branch |
 | `reviewer` | Review a PR at a fixed Head SHA | Read-only review; submit findings |
 | `test-designer` | Design test scenarios/cases | Produce test artifacts; do not implement tests by default |
-| `debugger` | Diagnose defects | Diagnostic/read-only by default |
 
 Profile configuration is versioned and can include image, Pi runtime config, system prompt, skills, MCP servers, tool permissions, environment references, capabilities, and resource limits. A Task pins one profile version so configuration changes do not alter an existing task.
 
@@ -82,7 +79,7 @@ Adding a profile should normally be configuration work, not a change to orchestr
 - Pi session files live on persistent Docker-host storage in V1.
 - Each Task has its own persistent workspace volume/host storage. The container can be stopped and restarted while the task data remains.
 - Reviewer workspace is fresh and isolated from coder workspace.
-- Agent profiles may expose selected GitHub MCP tools to the agent, as well as other MCP servers. Deterministic orchestration writes (command acknowledgements, status responses, workflow notifications) should use the GitHub Outbox. Agent-initiated GitHub MCP operations (for example, fetching context or publishing a task result) must be reported in Run events/results so the Orchestrator can persist what happened and reconcile failures.
+- Agent profiles may expose selected GitHub MCP tools and other MCP servers. Agents are responsible for performing GitHub operations explicitly permitted by their profiles. The Agent Runtime records execution events and results, which are persisted by the Orchestrator. The Orchestrator remains responsible for workflow state, task scheduling, container lifecycle, command handling, and system-level notifications.
 - Komodo owns actual deployment/container state; PostgreSQL stores desired and last observed state.
 
 ## 5. WorkItem, Workflow, Task, Session, Run, Container
@@ -111,33 +108,35 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant O as Orchestrator
     participant R as Runtime API
-    participant K as Komodo
+    participant K as Container Manager
     participant A as Planner / Coder
 
     U->>GH: @bot /plan on Issue
     P->>GH: Poll issue comments and state
-    P->>DB: Upsert comment + normalized event
-    O->>DB: Claim event; deduplicate and authorize
-    O->>DB: Create/load Workflow; create Plan Task and Job
+    P->>DB: Upsert comment and normalized event
+    O->>DB: Claim event, deduplicate and authorize
+    O->>DB: Create/load Workflow, Plan Task and Job
     O->>R: Start Task with planner profile
-    R->>K: Provision container + task workspace
+    R->>K: Provision container and task workspace
     K->>A: Start Pi with new session
-    A->>R: Progress / artifacts / completion
+    A->>R: Progress, artifacts and completion
     R->>DB: Persist Run events and result
-    O->>GH: Publish plan and questions via Outbox
-    O->>DB: Mark Task succeeded; Workflow waiting_for_human
-    R->>K: Stop container; retain session files and task volume
+    A->>GH: Publish plan and questions via GitHub MCP
+    O->>DB: Mark Task succeeded, Workflow waiting_for_human
+    R->>K: Stop container, retain session files and task volume
+
     U->>GH: @bot /proceed
     P->>DB: Persist command
-    O->>DB: Validate plan approval; create Implement Task and Job
+    O->>DB: Validate approval, create Implement Task and Job
     O->>R: Start Task with coder profile and plan Artifact
-    R->>K: Provision a fresh task workspace/container
-    K->>A: Start Pi with a new session
-    A->>A: Implement, run checks, commit and push branch
-    A->>GH: Post result summary (through authorized integration/outbox)
+    R->>K: Provision fresh task workspace/container
+    K->>A: Start Pi with new session
+    A->>A: Implement, run checks, commit and push
+    A->>GH: Publish result summary via GitHub MCP
     A->>R: Completion callback
-    O->>DB: Mark Task succeeded; Workflow waiting_for_human
-    R->>K: Stop container; retain task data until root cleanup
+    R->>DB: Persist Run result
+    O->>DB: Mark Task succeeded, Workflow waiting_for_human
+    R->>K: Stop container, retain task data until root cleanup
 ```
 
 ### Issue command rules
@@ -164,7 +163,7 @@ See [Command Reference](06-command-reference.md) for complete preconditions and 
 - Poller persists the `review_requested` event and current PR snapshot.
 - Orchestrator creates one initial review Task for that request/PR state.
 - Reviewer gets a fresh workspace at the PR Head SHA, separate from any coder workspace, and read-only where possible.
-- Reviewer inspects the diff and context, stores a review Artifact, and submits a review plus inline comments through the Outbox.
+- Reviewer inspects the diff and context, stores a review Artifact, and submits a review plus inline comments through Github MCP.
 
 ### Subsequent review
 
@@ -179,7 +178,7 @@ Persist all relevant comments, including Issue comments, PR conversation comment
 
 ## 9. Sequential scheduling
 
-V1 has one global execution slot (`max_concurrent_runs = 1`). The setting can later be increased without changing the core entity model. Commands are persisted; valid task-producing commands wait in the durable queue and are revalidated when claimed. `/stop` is prioritized for the targeted active Task.
+V1 has one execution slot (`max_concurrent_runs = 1`) per Workflow. 
 
 Use transactional claiming/leases in PostgreSQL so that multiple Orchestrator workers cannot claim the same job.
 
