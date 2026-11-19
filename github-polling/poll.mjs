@@ -178,9 +178,13 @@ export const installationToken = async (repo, fetchImpl = fetch) => {
   return minted.items.token;
 };
 
-// credential for one GitHub REST call: explicit token (tests) → app (JWT for mint/install paths, install token for repos) → gh/PAT → anonymous
-const cred = async (path, fetchImpl) => {
+// ---------------- credential ladder ----------------
+// setToken (tests) → GITHUB_USER_TOKEN (separate-user PAT) → GitHub App → gh CLI → GITHUB_TOKEN → anonymous
+
+// credential for one GitHub REST call; tests inject via setToken, ops pick a tier by env
+export const cred = async (path, fetchImpl) => {
   if (_token !== null) return _token;
+  if (process.env.GITHUB_USER_TOKEN) return process.env.GITHUB_USER_TOKEN;
   if (appReady()) {
     const mintPath = path.match(/^\/repos\/[^/]+\/[^/]+\/installation\b|^\/app\//);
     if (mintPath) return appJwt();
@@ -191,10 +195,10 @@ const cred = async (path, fetchImpl) => {
   return token();
 };
 
-export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET", headers: extraHeaders = {}, body: jsonBody } = {}) => {
+export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET", headers: extraHeaders = {}, body: jsonBody, bearer } = {}) => {
   const url = new URL(path, "https://api.github.com");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const t = await cred(path, fetchImpl);
+  const t = bearer ?? (await cred(path, fetchImpl));
   const accept = extraHeaders.accept ?? "application/vnd.github+json";
   const res = await fetchImpl(url, { method, headers: {
     accept,
@@ -385,7 +389,10 @@ export const main = async () => {
   const state = readState(STATE_FILE);
   console.log(
     `github-polling: ${repos.join(", ")} — every ${intervalMs / 1000}s — ${
-      appReady() ? `GitHub App id ${appCfg().id}` : token() ? "authed via gh/GITHUB_TOKEN" : "anonymous (60 req/h)"
+      process.env.GITHUB_USER_TOKEN ? "user token (GITHUB_USER_TOKEN)"
+        : appReady() ? `GitHub App id ${appCfg().id}`
+        : token() ? "authed via gh/GITHUB_TOKEN"
+        : "anonymous (60 req/h)"
     }`,
   );
   while (true) {

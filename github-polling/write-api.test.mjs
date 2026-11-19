@@ -1,7 +1,7 @@
 // Write API tests — route passthrough/validation against a stubbed fetch (App auth layer lives in poll.mjs).
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { setToken, installationToken } from "./poll.mjs";
+import { setToken, installationToken, cred } from "./poll.mjs";
 import { route } from "./write-api.mjs";
 
 const stub = (json, headers = {}, status = 200) => ({
@@ -186,6 +186,42 @@ describe("write-api graphql passthrough (Projects V2)", () => {
     } finally {
       delete process.env.GITHUB_APP_INSTALLATION_ID;
     }
+  });
+});
+
+describe("auth ladder — user token adapter", () => {
+  beforeEach(() => setToken(null));
+  afterEach(() => {
+    delete process.env.GITHUB_USER_TOKEN;
+    delete process.env.GITHUB_APP_ID;
+    delete process.env.GITHUB_APP_KEY_FILE;
+    delete process.env.GITHUB_APP_INSTALLATION_ID;
+    setToken(null);
+  });
+  const keys = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const keyFile2 = join(mkdtempSync(join(tmpdir(), "app-key-")), "key2.pem");
+  writeFileSync(keyFile2, keys.privateKey.export({ type: "pkcs1", format: "pem" }));
+
+  const withApp = () => {
+    process.env.GITHUB_APP_ID = "5828763";
+    process.env.GITHUB_APP_KEY_FILE = keyFile2;
+    process.env.GITHUB_APP_INSTALLATION_ID = "42";
+  };
+  test("GITHUB_USER_TOKEN wins over a fully-configured app", async () => {
+    withApp();
+    process.env.GITHUB_USER_TOKEN = "usertok";
+    let seen;
+    await gh("/repos/own/r/issues", {}, async (u, o) => (seen = o, stub([1])));
+    assert.equal(seen.headers.authorization, "Bearer usertok");
+  });
+  test("app still works when user token unset (no deletion)", async () => {
+    withApp();
+    const calls = [];
+    await gh("/repos/own/r/issues", {}, async (u, o) => (calls.push({ u: String(u) }), calls.length === 1
+      ? stub({ token: "instok", expires_at: new Date(Date.now() + 9 * 60_000).toISOString() })
+      : stub([1])));
+    assert.equal(calls.length, 2);
+    assert.match(calls[0].u, /access_tokens$/);
   });
 });
 
