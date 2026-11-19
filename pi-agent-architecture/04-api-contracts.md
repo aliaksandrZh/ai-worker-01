@@ -82,23 +82,27 @@ The canonical V1 syntax is `@<bot-account> /<command> [arguments]`. The mention 
 | Command | Target | Effect | Creates Task? |
 |---|---|---|---|
 | `/plan` | Issue | Planner produces plan, gaps, and questions; Workflow waits for human | Yes |
-| `/proceed` | Issue | Coder implements approved plan, runs checks, commits/pushes branch, reports result | Yes |
-| `/review` | PR | Reviewer inspects current Head SHA in a fresh workspace and submits findings | Yes |
+| `/proceed` | Issue | (historical; replaced by `/code`) | — |
+| `/code` | Issue | Coder implements the approved plan (the command approves the latest plan), runs checks, commits/pushes branch, reports result; enabled when the coder profile is configured | Yes |
+| `/review` | PR | Reviewer reviews the pinned Head SHA in a fresh workspace and submits findings | Yes |
 | `/test-cases` | Issue in V1 | Test designer produces test scenarios/cases Artifact; does not implement/run tests by default | Yes |
-| `/debug` | Issue or PR | Debugger diagnoses and reports evidence; read-only by default | Yes |
+| `/debug` | Issue or PR | Debugger diagnoses and reports evidence; read-only by default. Parked: no `debugger` profile is planned | Yes |
 | `/status` | Issue or PR | Reports current/last Workflow, Task, Run, queue and result | No |
-| `/stop` | Issue or PR | Gracefully cancels active Task for that WorkItem; retains storage | No |
+| `/stop` | Issue or PR | Gracefully cancels the active Task and all queued Tasks of that Workflow; retains storage | No |
 | `/help` | Issue or PR | Lists available commands for the target type | No |
+| `/retry` | Issue or PR | Repeats the last failed Task as a new Run with a new Pi session | No (new Run on the existing Task) |
 
-Common processing sequence: synchronize comment → deduplicate by GitHub comment ID → parse mention/command → verify GitHub Write permission and optional allowlist → validate target/state → persist AgentCommand → create Task/Job if required → acknowledge or reject via GitHub Outbox.
+Common processing sequence: synchronize comment → deduplicate by GitHub comment ID → parse mention/command (first line only, exact bot login, no quotes/code blocks, exactly one directive) → verify GitHub Write permission and optional allowlist → validate target/state → persist AgentCommand → create Task/Job if required → reject or notify via Outbox.
 
-If a task-producing command arrives while the global execution slot is occupied, it is persisted and queued. Preconditions are checked again when the job is claimed. `/stop` is prioritized for the targeted active Task.
+Admission: if the target Workflow already has an unfinished Task (queued/claimed/starting/running), a further command for that Workflow is rejected with a recorded reason — same-Workflow commands are not queued. If the Workflow is free but execution capacity is occupied, the command is persisted and queued. Preconditions are checked again when the job is claimed; a Task that became invalid is cancelled or its command rejected with a recorded reason. `/stop` is prioritized for the targeted active Task (the final global-vs-per-Workflow slot wording is tracked in 09-open-questions.md Q1).
 
 ## 3. Agent Runtime API
 
 ### Start a Task
 
 `POST /internal/runtime/tasks/{taskId}/start`
+
+(Open contract point: who creates the AgentSession/Workspace records and backing storage before this call, and via which endpoints — see 09-open-questions.md Q2.)
 
 ```json
 {
@@ -129,19 +133,9 @@ Response:
 }
 ```
 
-### Send input to active runtime
+### Send input to active runtime (removed from V1)
 
-`POST /internal/runtime/sessions/{sessionId}/input`
-
-```json
-{
-  "taskId": "task_123",
-  "runId": "run_123",
-  "message": "Please address the additional requirement."
-}
-```
-
-V1 normally creates a new session per Task, so this endpoint is primarily for active runs or runtime-level interaction, not cross-task session reuse.
+`POST /internal/runtime/sessions/{sessionId}/input` has no V1 trigger (free-form replies are not an execution path and mid-run command flow does not exist in V1), so it is deliberately left out of the V1 contract. Session input may return as a future enhancement.
 
 ### Stop
 
@@ -162,6 +156,19 @@ Returns desired/observed runtime status, heartbeat, container reference, and err
 ## 4. Agent callbacks/events
 
 Callbacks are routes on the same Agent Runtime API that manages Pi sessions and Komodo deployments; a separate webhook receiver service is not required. Agent containers send callbacks over the private network. The receiver must persist events before acknowledging them. If Control Plane and execution host are separated, private network reachability between them is required; public GitHub webhooks are not involved.
+
+The sender is the **Runtime Bridge** — a process inside the agent container that launches Pi in `--mode rpc`, reads the JSONL event stream, and posts the callbacks below; on a Pi crash it reports failure with the exit code. Callback URL and credentials are passed to the container at start; Bridge version and cadence are pinned in `AgentProfileVersion`. No Pi extension is needed in V1.
+
+`POST /internal/runtime/runs/{runId}/heartbeat`
+
+```json
+{
+  "eventId": "hb_042",
+  "occurredAt": "2026-11-19T10:01:30Z"
+}
+```
+
+Sent on a fixed cadence (default 30 seconds). Heartbeat proves Bridge liveness; it does not reset progress-based timers.
 
 `POST /internal/runtime/runs/{runId}/events`
 
@@ -228,9 +235,9 @@ Conceptual operations:
 - Create inline review comments and replies in existing review threads.
 - Request reviewer.
 
-The reviewer Task input should include the current PR Head SHA, diff, relevant conversation comments, submitted reviews, and inline review threads. The reviewer must report which SHA it reviewed. Agent profiles may also have GitHub MCP access; the Outbox is used for reliable orchestration-owned writes and retryable notifications.
+Agent profiles perform their GitHub operations through GitHub MCP (reading, commenting, submitting reviews) under their permission allow-list; all agent-owned GitHub writes go directly through the agent. The Outbox is reserved exclusively for orchestration-owned system notifications: final Task failures, command rejections, cancellation confirmations (see 06 §14).
 
-External writes should be queued in an Outbox for retry and idempotency.
+The reviewer Task input should include the pinned PR Head SHA (`target_head_sha`), diff, relevant conversation comments, submitted reviews, and inline review threads. The reviewer must report which SHA it reviewed.
 
 ## 6. Polling API / internal integration
 
@@ -268,8 +275,8 @@ Suggested error categories:
 - Start Task: idempotency key = Task ID + Run attempt.
 - Callback: unique event ID per Run.
 - Command: unique GitHub comment ID; duplicate poll deliveries cannot repeat the action.
-- GitHub write: outbox idempotency key.
+- GitHub write: Outbox idempotency key (system notifications only).
 - Polling: external IDs/fingerprints.
 - Task claim: transaction/lease.
 - V1 global execution concurrency limit = 1.
-- Commands are idempotent by GitHub comment ID; `/status`, `/stop`, and `/help` do not create Tasks.
+- Commands are idempotent by GitHub comment ID; `/status`, `/stop`, `/help`, and `/retry` do not create new Tasks (`/retry` creates a new Run on the last failed Task).

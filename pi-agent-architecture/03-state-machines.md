@@ -12,7 +12,8 @@ stateDiagram-v2
     WaitingForHuman --> Active: task queued or started
     Active --> WaitingForHuman: task succeeded
     Active --> WaitingForHuman: task cancelled by /stop
-    Active --> Failed: unrecoverable workflow-level failure
+    Active --> WaitingForHuman: task finally failed (retries exhausted)
+    Active --> Failed: unrecoverable integrity/state-corruption failure
     Failed --> Active: explicit retry/recovery
     WaitingForHuman --> Closed: root WorkItem closed
     Active --> Closed: root WorkItem closed
@@ -21,7 +22,7 @@ stateDiagram-v2
 
 - `WaitingForHuman`: no Task is currently executing; next action requires a command or external trigger.
 - `Active`: a Task is queued/claimed/starting/running (the global queue may also contain work for other WorkItems).
-- `Failed`: an unrecoverable workflow-level failure requiring explicit recovery.
+- `Failed`: an unrecoverable integrity/state-corruption failure requiring operator intervention (contradictory Workflow data, unclear root WorkItem, broken Task-sequence invariants). Ordinary execution failures, missing images, unavailable runtimes, GitHub errors, and exhausted retries do NOT fail the Workflow.
 - `Closed`: root Issue/PR is closed; no new Tasks are accepted and cleanup is enforced.
 
 `Completed` and `Cancelled` may be retained as administrative terminal states if a future explicit workflow-completion operation is added. V1 does not need a `/complete` command; root closure is represented by `Closed`.
@@ -46,12 +47,12 @@ stateDiagram-v2
     Cancelled --> [*]
 ```
 
-- `Queued`: durable work waiting for the single V1 execution slot.
+- `Queued`: durable work waiting for an execution slot.
 - `Claimed`: worker holds a lease.
-- `Starting`: profile/session/workspace/container are being prepared.
+- `Starting`: profile/session/workspace/container are being prepared. `startup_timeout` (default 10 minutes) fails the Run with `startup_timeout` if preparation never completes.
 - `Running`: agent is executing.
 - `Succeeded`: result and required artifacts are persisted; required external actions (e.g. push/comment/review) completed according to task policy.
-- `Failed`: execution failed; retry may create another Run for the same Task if its session/workspace remain usable.
+- `Failed`: execution failed. Automatic retry is allowed only for transient infrastructure errors before the Run starts executing; after execution began, recovery is manual (`/retry`), which creates a new Run with a new Pi session.
 - `Cancelled`: execution was intentionally stopped.
 
 If a retry cannot safely reuse the Task's session/workspace, create a replacement Task rather than silently attaching a different Task's context.
@@ -77,11 +78,11 @@ stateDiagram-v2
     TimedOut --> [*]
 ```
 
-Run is terminal after `Succeeded`, `Failed`, `Cancelled`, or `TimedOut`. A Run references the AgentSession for its Task and the ContainerInstance used for that attempt.
+Run is terminal after `Succeeded`, `Failed`, `Cancelled`, or `TimedOut`. A Run references its own AgentSession (one new session per attempt) and the ContainerInstance used for that attempt. `TimedOut` comes from the wall-clock `max_run_duration` limit (default 4 hours); idle/heartbeat timeouts only trigger reconciliation and never produce `TimedOut`. A `TimedOut` Run does not trigger an automatic retry (it happens after execution began); the recovery path is `/retry`.
 
 ## 4. AgentSession
 
-A new Pi session is created for every Task. A session is never shared with another Task/profile. Its files remain on persistent host storage until root WorkItem cleanup.
+A new Pi session is created for every Run attempt (a retry creates another session for the same Task). A session is never shared with another Task/profile/Run. Its files remain on persistent host storage until root WorkItem cleanup.
 
 ```mermaid
 stateDiagram-v2
@@ -153,7 +154,7 @@ AgentCommand:
 - `processed`
 - `failed`
 
-`status`, `stop`, and `help` are commands but do not create Tasks. Unauthorized/invalid commands are retained with a rejection reason. Duplicate command delivery is ignored using GitHub comment ID.
+`status`, `stop`, and `help` are commands but do not create Tasks. Unauthorized/invalid commands are retained with a rejection reason. Duplicate command delivery is ignored using GitHub comment ID. These statuses describe command handling only: queue waiting is expressed by `Task`/`OrchestrationJob` states and human waiting by `Workflow.status = waiting_for_human` (no separate `waiting` status).
 
 ## 8. OrchestrationJob and OutboxAction
 
@@ -164,7 +165,7 @@ Job:
 - `failed`
 - `cancelled`
 
-An expired processing lease returns a retryable job to `pending`.
+An expired processing lease returns a retryable job to `pending`. Queue order is FIFO by `available_at` then `priority`; `/stop` cancellation runs outside the queue as an immediate control path.
 
 OutboxAction:
 - `pending`
@@ -178,11 +179,16 @@ External writes use retries and idempotency keys. A GitHub write is not marked c
 ## 9. Heartbeat, stale Run, and recovery
 
 Track separately:
-- Runtime heartbeat: runtime/container/session is reachable.
-- Progress: meaningful task activity.
+- Runtime heartbeat: Runtime Bridge liveness, sent on a fixed cadence (default 30 seconds). Liveness alone is not progress.
+- Progress: meaningful task activity (events, tool activity, session updates, completion).
 - Process/tool activity where available.
 
-A 60-minute heartbeat timeout is an initial configurable threshold. A stale signal initiates reconciliation; it does not immediately destroy the container. Check Komodo/container state, runtime session, active process/command, and Run state before stopping/retrying/failing. Silence in progress messages alone is not proof of a hung agent.
+Three independent limits apply:
+- `idle_timeout` (default 60 minutes): the container is alive (heartbeat continues) but there is no observable activity at all — no events, no progress, no completion, no session update. It initiates reconciliation; it does not immediately destroy the container and does not produce `TimedOut`. Check Komodo/container state, runtime session, active process/command, and Run state before stopping/retrying/failing.
+- `max_run_duration` (default 4 hours): wall-clock execution limit; exceeding it stops the container and ends the Run as `TimedOut`.
+- `startup_timeout` (default 10 minutes): preparation never completed; the Run fails with `startup_timeout`.
+
+A `permission_blocked` event is not progress and resets no timer. Silence in progress messages alone is not proof of a hung agent.
 
 ## 10. Root WorkItem closure
 

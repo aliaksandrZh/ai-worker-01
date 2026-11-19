@@ -16,7 +16,7 @@ erDiagram
     WORK_ITEM ||--o{ WORK_ITEM_LINK : source
     WORK_ITEM ||--o{ WORK_ITEM_LINK : target
     WORKFLOW ||--o{ TASK : contains
-    TASK ||--|| AGENT_SESSION : owns
+    TASK ||--o{ AGENT_SESSION : owns
     TASK ||--o| WORKSPACE : uses
     TASK ||--o{ RUN : attempts
     TASK ||--o{ ARTIFACT : produces
@@ -110,7 +110,7 @@ Fields:
 - `github_comment_id`
 - `kind` (`issue_comment` for Issue/PR conversation comments, `review_comment` for inline PR review comments)
 - `author_login`
-- `body`
+- `body` (always the latest synced version; edits are applied on sync)
 - `created_at_github`
 - `updated_at_github`
 - `in_reply_to_comment_id` (nullable; local reference if known)
@@ -122,6 +122,8 @@ Fields:
 
 Constraints:
 - Unique `(kind, github_comment_id)`.
+- Deleted comments are tombstoned, not removed: `is_deleted`, `deleted_at` are set, and the record is excluded from future Task context (historical Tasks keep their archived context).
+- Command parsing uses the immutable `AgentCommand.source_body_snapshot`, so later comment edits never change a processed command.
 
 ## 6. GitHubReview
 
@@ -162,11 +164,16 @@ Fields:
 Examples:
 - `issue_updated`
 - `issue_comment_created`
+- `comment_updated`
+- `comment_deleted`
 - `pull_request_opened`
 - `review_requested`
+- `review_request_removed`
 - `pull_request_synchronize`
 - `pull_request_closed`
 - `work_item_closed`
+
+A merged Pull Request is treated as a closed WorkItem for lifecycle and cleanup purposes; no separate `pull_request_merged` event is required (`merged_at` is kept for history).
 
 Deduplication should use stable external IDs where available, otherwise a deterministic fingerprint of source, event type, target, and relevant payload fields.
 
@@ -198,6 +205,7 @@ Fields:
 - `closed_at`
 - `updated_at`
 - `failure_reason`
+- `initial_review_created_at` (nullable; set when the automatic initial review Task is created — deduplicates repeated `review_requested` requests within the PR lifetime)
 
 Suggested status values:
 - `active`
@@ -207,7 +215,7 @@ Suggested status values:
 
 A completed Task normally returns the long-lived Workflow to `waiting_for_human`. V1 does not require a separate permanent `completed` Workflow state because more Tasks may be requested later; root closure sets `closed`.
 
-In V1, keep one long-lived Workflow per root WorkItem (create it on the first accepted task-producing command). A completed operation normally returns it to `waiting_for_human` rather than permanently completing the Workflow, so later commands can append Tasks. A root close marks it `closed`. Enforce one Workflow per WorkItem with a unique constraint if historical multiple workflows are not required.
+In V1, keep one long-lived Workflow per root WorkItem (create it on the first accepted task-producing command). A completed operation normally returns it to `waiting_for_human` rather than permanently completing the Workflow, so later commands can append Tasks. A Task that finally fails also returns it to `waiting_for_human`; `failed` is reserved for unrecoverable integrity/state-corruption failures (see state machines). A root close marks it `closed`. V1 enforces one Workflow per WorkItem with a full `UNIQUE(work_item_id)` constraint (no historical workflows; a partial "one active" index is future work).
 
 ## 10. Task
 
@@ -221,6 +229,7 @@ Fields:
 - `agent_profile_version_id`
 - `status`
 - `trigger_command_id` (nullable)
+- `target_head_sha` (nullable; set by review Tasks — the pinned PR Head SHA this Task reviews)
 - Input artifacts are linked through `TaskArtifactInput` (many-to-many), not stored as an unbounded ID array.
 - `created_at`
 - `claimed_at`
@@ -228,7 +237,7 @@ Fields:
 - `completed_at`
 - `cancelled_at`
 - `failure_reason`
-- `retry_policy` (JSON/config reference)
+- `retry_policy` (effective policy pinned at Task creation: defaults from `AgentProfileVersion.retry_policy`, optional Repository override; includes `max_automatic_retries`, backoff parameters, retryable error categories, and the run stages where automatic retry is allowed)
 
 Unique `(workflow_id, sequence)`.
 
@@ -253,25 +262,30 @@ Fields:
 - `work_item_id`
 - `github_comment_id` (FK to synchronized GitHubComment; unique for command processing)
 - `author_login`
-- `command_name` (`plan`, `proceed`, `review`, `test_cases`, `debug`, `status`, `stop`, `help`)
+- `command_name` (`plan`, `code`, `review`, `test_cases`, `debug`, `status`, `stop`, `help`, `retry`)
 - `arguments` (JSONB)
 - `parser_version`
-- `status` (`received`, `waiting`, `authorized`, `queued`, `processed`, `rejected`, `failed`)
+- `status` (`received`, `authorized`, `queued`, `processed`, `rejected`, `failed`)
+- `source_body_snapshot` (immutable comment text used for parsing; protected from later comment edits)
 - `parsed_at`
 - `processed_at`
 - `rejection_reason`
 
 Unique `github_comment_id` for recognized commands, or a unique external comment identifier plus parser version.
 
+One comment produces at most one AgentCommand; only the original (unedited) comment version is parsed. `waiting` was removed: queue waiting is expressed by `Task`/`OrchestrationJob` states and human waiting by `Workflow.status = waiting_for_human`.
+
 ## 11a. Command semantics
 
 The canonical V1 comment format is `@<bot-account> /<command> [arguments]`. The bot mention and slash command must be in the same comment. See `06-command-reference.md` for preconditions and full behavior.
 
 - `plan`: create planner Task; produce plan/gaps/questions Artifact; Workflow waits for human.
-- `proceed`: create coder Task after a successful plan and human approval; commit/push branch and report result.
-- `review`: create reviewer Task for current PR Head SHA; fresh isolated workspace.
+- `code`: create coder Task implementing the latest successful plan Artifact; the command itself is the plan approval; commit/push branch and report result.
+- `proceed` (historical name; replaced by `code`): create coder Task after the plan is approved; commit/push branch and report result.
+- `review`: create reviewer Task for the pinned PR Head SHA (`target_head_sha`); fresh isolated workspace.
 - `test-cases`: create test-designer Task; produce test case Artifact, without implementing/running tests by default.
-- `debug`: create diagnostic Task; read-only by default.
+- `debug`: create diagnostic Task; read-only by default (parked: no profile planned).
+- `retry`: repeat the last failed Task of the Workflow as a new Run with a new Pi session.
 - `status`, `stop`, `help`: control/information commands; do not create agent Tasks.
 
 Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands are persisted with a rejection reason.
@@ -299,9 +313,15 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `environment_configuration` (references/secrets, not plaintext secret values)
 - `resource_configuration`
 - `capabilities`
+- `retry_policy` (profile-level retry defaults)
+- `permission_policy` (tool/MCP allow-list; unattended mode denies everything else)
+- `bridge_configuration` (Runtime Bridge version, heartbeat/event cadence)
+- `startup_timeout`, `max_run_duration` (execution-limit defaults)
+- `state` (`draft`, `building`, `ready`, `build_failed`, `disabled`)
+- `image_digest` / build metadata
 - `created_at`
 
-Unique `(agent_profile_id, version)`.
+Unique `(agent_profile_id, version)`. Creating a version triggers an image build (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1); only `ready` versions may be selected for a Task.
 
 A Task references a profile version, so later profile changes do not retroactively alter task configuration.
 
@@ -319,13 +339,15 @@ Fields:
 
 Unique rule scope should be enforced for a given repository/task type/priority. This makes profile selection configurable without hardcoding profile names in Orchestrator.
 
+V1 ships a seeded global rule set (`repository_id = NULL`); repository-specific rules override it, and the selected `AgentProfileVersion` is pinned on the Task at creation. When no matching rule exists, or the selected profile is not `ready`/enabled, the command is rejected before any Task is created with reason `agent_profile_not_configured`.
+
 ## 13. AgentSession
 
-One Pi session per Task in V1. The session is not shared across Tasks or Agent Profiles. A retry of the same Task may reuse its session if session files remain valid; a new Task always gets a new session. Session record remains after backing file deletion.
+One Pi session per Run attempt. The session is not shared across Tasks, Runs, or Agent Profiles: a retry creates a new Run and a new Pi Session; the previous session is retained until cleanup. A new Task always gets a new session. Session record remains after backing file deletion.
 
 Fields:
 - `id`
-- `task_id` (unique)
+- `task_id` (the Task whose attempt this session executes; a Task has one session per Run)
 - `agent_profile_version_id`
 - `runtime_session_id`
 - `session_file_path` (host-relative/managed path)
@@ -359,7 +381,7 @@ Fields:
 - `error_message`
 - `result_summary`
 
-Unique `(task_id, attempt_number)`.
+Unique `(task_id, attempt_number)`. `attempt_number` is assigned by the Orchestrator when the Run is created; agents never change it.
 
 ## 15. ContainerInstance
 
@@ -378,7 +400,7 @@ Fields:
 - `last_stopped_at`
 - `removed_at`
 
-A container is replaceable and is stopped after Task completion. The stopped deployment may be restarted for a retry or recreated from the same persistent session/workspace storage. Containers, volumes, and session files are removed when their root WorkItem closes.
+A container is replaceable and is stopped after Task completion. The stopped deployment may be recreated for a retry from the same persistent session/workspace storage. V1 uses exactly one configured execution host; `host_id` records where the container was created. Containers, volumes, and session files are removed when their root WorkItem closes.
 
 ## 16. Workspace
 
@@ -399,7 +421,9 @@ Fields:
 - `last_used_at`
 - `deleted_at`
 
-Every Task gets a task-specific Workspace. Volumes persist after the Task container stops and are deleted when the root WorkItem is closed. Reviewer always receives a fresh workspace at the reviewed Head SHA, separate from coder workspaces, read-only where possible.
+Every Task gets a task-specific Workspace. Volumes persist after the Task container stops and are deleted when the root WorkItem is closed. Reviewer always receives a fresh workspace at the pinned reviewed Head SHA, separate from coder workspaces, read-only where possible.
+
+A coder Task works on `agent/issue-<number>` based on the default-branch HEAD captured at first provision (`base_sha`); later coder Tasks in the same Workflow, and retries, continue the existing agent branch.
 
 ## 17. Artifact
 
@@ -415,6 +439,8 @@ Fields:
 
 Artifacts provide explicit handoff between agents. Avoid relying only on one agent's conversation history.
 
+V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's token budget); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future.
+
 ## 18. RunEvent
 
 Fields:
@@ -428,7 +454,7 @@ Fields:
 
 Unique `(run_id, event_id)`.
 
-Events include started, progress, tool activity, heartbeat, artifact produced, completed, failed, cancelled.
+Events include started, progress, tool activity, heartbeat, permission_blocked (not progress; resets no timers), artifact produced, completed, failed, cancelled.
 
 ## 19. OrchestrationJob
 
@@ -448,11 +474,11 @@ Fields:
 - `created_at`
 - `updated_at`
 
-Use transactional claiming/locking and retry/backoff. V1 global concurrency is 1.
+Use transactional claiming/locking and retry/backoff. V1 global concurrency is 1 (the final scope wording — per-Workflow slot vs an additional global cap — is tracked in 09-open-questions.md Q1). Queue order: FIFO by `available_at`, then `priority`; `/stop` is a control action handled immediately outside the queue.
 
 ## 20. OutboxAction
 
-Reliable external write/action queue.
+Reliable external write/action queue. Used only for orchestration-owned system notifications: final Task failures, command rejections, cancellation confirmations. Agent GitHub operations (plan comments, coder summaries, reviews) are performed by agents via GitHub MCP and do not go through the Outbox.
 
 Fields:
 - `id`
