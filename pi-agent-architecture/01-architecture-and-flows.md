@@ -25,12 +25,13 @@ flowchart TD
 
 ### GitHub Integration / Poller
 
-- Polls configured repositories on a configurable interval; 30–60 seconds is a reasonable initial setting, not a fixed requirement.
-- Synchronizes Issues, PRs, issue comments, PR conversation comments, inline review comments, reviews, review request additions/removals, comment edits/deletions, relevant events, and commit metadata.
+- Polls configured repositories over the GitHub REST API; default interval 60 seconds per repository (configurable per deployment).
+- Synchronizes Issues, PRs, issue comments, PR conversation comments, inline review comments, reviews, review request additions/removals, comment edits/deletions, PR details (Head SHA, state, requested reviewers), timeline events (`cross-referenced`, `closed`, `connected`, `disconnected` — used for Issue↔PR links), and commit metadata.
 - Comment edits update the stored body; deleted comments are tombstoned, not removed (see 02).
 - Persists normalized records/events and per-stream sync cursors in PostgreSQL.
 - Uses stable external IDs or deterministic fingerprints to deduplicate data.
 - Advances a cursor only after the fetched page/batch is durably saved.
+- Polling defaults: page size 100 (paging via `Link` headers), 5-minute overlap window for timestamp queries, per-repository/per-stream cursors; review requests (bot as reviewer) pending an initial review are rechecked each cycle; deleted comments are discovered via a periodic full sweep of known IDs (daily). Conditional requests use `ETag`/`If-None-Match` — a `304 Not Modified` does not consume the primary rate limit (5 000 req/h baseline); `403`/`429` responses honor `Retry-After`/`X-RateLimit-Reset`; secondary rate limits use bounded exponential backoff. Authentication: a fine-grained read-only PAT for syncing (write-capable PATs are used by agents, see decision 50 in 05).
 - No public IP or inbound GitHub webhook is required for V1.
 
 ### Orchestrator
@@ -85,7 +86,7 @@ Adding a profile should normally be configuration work, not a change to orchestr
 - Pi session files live on persistent Docker-host storage in V1. Every Run attempt uses a new Pi session; a retry creates a new session.
 - Artifacts are stored inline in PostgreSQL and passed to the next Task through its input; there is no shared artifact volume in V1.
 - Agent containers have no host shell access (no host-bridge capability).
-- Each Task has its own persistent workspace volume/host storage. The container can be stopped and restarted while the task data remains.
+- Each Task has its own persistent workspace directory on the execution host (acompanied by per-Run session and log directories). The container can be stopped and restarted while the task data remains.
 - Reviewer workspace is fresh and isolated from coder workspace.
 - Agent profiles may expose selected GitHub MCP tools and other MCP servers. Agents are responsible for performing GitHub operations explicitly permitted by their profiles. The Agent Runtime records execution events and results, which are persisted by the Orchestrator. The Orchestrator remains responsible for workflow state, task scheduling, container lifecycle, command handling, and system-level notifications.
 - Komodo owns actual deployment/container state; PostgreSQL stores desired and last observed state.
@@ -132,7 +133,7 @@ sequenceDiagram
     R->>DB: Persist Run events and result
     A->>GH: Publish plan and questions via GitHub MCP
     O->>DB: Mark Task succeeded, Workflow waiting_for_human
-    R->>K: Stop container, retain session files and task volume
+    R->>K: Stop container, retain workspace and run storage
 
     U->>GH: @bot /code
     P->>DB: Persist command
@@ -183,7 +184,7 @@ See [Command Reference](06-command-reference.md) for complete preconditions and 
 
 ## 8. Comment handling
 
-Persist all relevant comments, including Issue comments, PR conversation comments, and inline review comments. The context supplied to a Task should include relevant prior discussion and, for PR review, the existing review threads/comments. In V1, a comment starts an agent only if it contains the bot mention and a recognized command. Ordinary replies and mentions without recognized commands remain context, not implicit instructions. A future enhancement may support free-form natural-language replies/continued conversation with the bot; whether that is required in V1 remains an open product decision.
+Persist all relevant comments, including Issue comments, PR conversation comments, and inline review comments. The context supplied to a Task should include relevant prior discussion and, for PR review, the existing review threads/comments. In V1, a comment starts an agent only if it contains the bot mention and a recognized command. Ordinary replies and mentions without recognized commands remain context, not implicit instructions — this is decided for V1. A conversational mode (an explicit `/respond`//`/ask`, or mention-only dispatch) is a possible future extension.
 
 ## 9. Sequential scheduling
 
@@ -195,12 +196,12 @@ Use transactional claiming/leases in PostgreSQL so that multiple Orchestrator wo
 
 - Every Task has its own Pi session and workspace.
 - A container is an execution resource, not the durable identity of the Task.
-- When a Task finishes, stop its container. Retain session files and the task workspace volume on persistent Docker-host storage so the task can be inspected or resumed according to retry policy.
+- When a Task finishes, stop its container. Retain the task workspace directory and the Runs' `pi-session/` and `logs/` directories on persistent host storage (under `/var/lib/pi-agent/workflows/{workflow_id}/`) so the task can be inspected or resumed according to retry policy.
 - Every Run attempt uses a new Pi session (a retry creates a new Run and a new session for the same Task). Workspace reuse follows task-type policy: a retry may reuse the Task workspace if it remains valid, a coder Task continues its existing agent branch, and a reviewer always gets a fresh workspace.
 - Run `stdout`/`stderr` and Bridge diagnostics are written to a per-Run log directory on persistent host storage, created and mounted by the Runtime API; the files are deleted at root cleanup.
 - A Reviewer always receives a fresh workspace at the review SHA.
 - The coder must save changes, commit, push a branch, and report the branch/result in the Issue before marking implementation successful.
-- Automatic PR creation is not assumed in V1. Whether coder creates a PR should be a separate explicit command or repository setting.
+- Automatic PR creation is not done in V1; the preferred future path is an explicit `/create-pr` command (an explicit user action), not implicit profile configuration.
 
 ## 11. Root WorkItem closure and cleanup
 
@@ -208,16 +209,15 @@ When a root Issue or PR closes:
 1. Prevent new commands/tasks for that root item (except read-only status/help if desired).
 2. Cancel active/queued Tasks and stop active Runs.
 3. Stop and remove associated containers/Komodo deployments.
-4. Delete task workspace volumes.
-5. Delete Pi session files and Run log directories.
-6. Mark deletion/cleanup timestamps and storage status in PostgreSQL.
-7. Preserve DB records, comments, events, task/run history, and artifact metadata.
+4. Delete the Workflow storage tree — task workspace directories and per-Run `pi-session/` and `logs/` under `/var/lib/pi-agent/workflows/{workflow_id}/`.
+5. Mark deletion/cleanup timestamps and storage status in PostgreSQL.
+6. Preserve DB records, comments, events, task/run history, and artifact metadata.
 
 Issue and its related PR are separate roots. Closing one does not automatically clean up the other unless an explicit future lifecycle policy is introduced.
 
 ## 12. Polling, heartbeat, and reconciliation
 
-- Polling interval is configurable; 30–60 seconds is a reasonable initial value.
+- Polling interval defaults to 60 seconds per repository (configurable).
 - Maintain independent cursors per repository/data stream.
 - Poller saves normalized data/events before advancing a cursor.
 - Runtime heartbeat confirms liveness; progress indicates meaningful task activity. They are different signals.
@@ -229,6 +229,6 @@ Issue and its related PR are separate roots. Closing one does not automatically 
 
 ## 13. Deployment topology and technology neutrality
 
-The logical components may run in one Compose project initially or in separate Compose projects/hosts later. A control-plane host may run PostgreSQL, Poller, Orchestrator, and Runtime API; an execution host may run Komodo/Periphery and Pi containers. Persistent session/workspace storage belongs to the execution Docker host and is managed as Docker volumes/host storage there; do not assume the control-plane machine can access its local filesystem paths. If hosts are separate, the Runtime API and agent containers need private network reachability for management and callbacks (for example, same LAN or a private VPN). This does not require a public IP or inbound GitHub webhook. V1 uses exactly one configured execution host; host selection, balancing, and failover across hosts are future work. The exact Compose split is a deployment choice, not a domain-model dependency.
+The logical components may run in one Compose project initially or in separate Compose projects/hosts later. A control-plane host may run PostgreSQL, Poller, Orchestrator, and Runtime API; an execution host may run Komodo/Periphery and Pi containers. Persistent session/workspace storage belongs to the execution Docker host and is managed as plain directories there (`/var/lib/pi-agent/workflows/…`); do not assume the control-plane machine can access its local filesystem paths. If hosts are separate, the Runtime API and agent containers need private network reachability for management and callbacks (for example, same LAN or a private VPN). This does not require a public IP or inbound GitHub webhook. V1 uses exactly one configured execution host; host selection, balancing, and failover across hosts are future work. The exact Compose split is a deployment choice, not a domain-model dependency.
 
 No language, framework, ORM, or API technology is selected. The existing proof-of-concept implementations may be replaced.

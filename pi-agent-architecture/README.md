@@ -12,9 +12,8 @@ The current repository is a proof of concept only. Existing code, API shape, run
 - [API contracts](04-api-contracts.md)
 - [V1 scope and decisions](05-v1-decisions.md)
 - [Command reference](06-command-reference.md)
-- [Open product decisions](10-open-product-decisions.md)
 
-`07-review-and-open-points.md` was retired (documentation-review history); its still-open decisions were moved here and into 09.
+`07-review-and-open-points.md` was retired (documentation-review history); its open decisions were resolved and folded into 05 (decisions 26–54). Interim Q&A files (`08`, `09`, `10`) were removed once their questions were answered.
 
 ## Main design principles
 
@@ -26,7 +25,7 @@ The current repository is a proof of concept only. Existing code, API shape, run
 6. Each task gets a new Pi session and task-specific workspace.
 7. Agent profiles are independently configurable, including image, skills, MCP servers, prompts, tools, and runtime settings.
 8. A Workflow holds at most one unfinished Task at any time; a further command for that Workflow is rejected at admission. Parallel Runs of different Workflows are bounded by a global cap `max_concurrent_runs` (default 10, Orchestrator configuration).
-9. Task/session metadata remains in PostgreSQL after cleanup; session files and task workspace volumes are deleted when that root GitHub item is closed.
+9. Task/session metadata remains in PostgreSQL after cleanup; the workflow storage tree (workspace directories, per-Run sessions and logs) is deleted when that root GitHub item is closed.
 10. Issue assignment is not a V1 trigger. Issue commands require a bot mention and recognized slash command; PR's first review is triggered when the bot is requested as reviewer.
 11. A new PR commit does not automatically trigger another review; subsequent reviews are command-driven.
 12. Architecture is language- and framework-neutral.
@@ -43,17 +42,8 @@ The current repository is a proof of concept only. Existing code, API shape, run
 - **Container Instance**: Runtime container managed through Komodo.
 - **Artifact**: Structured or textual output that can be handed from one task to another.
 
-## Open decisions (remaining product/implementation choices)
+## Open decisions
 
-Detailed questions are tracked in [10-open-product-decisions.md](10-open-product-decisions.md):
+None remain — all former product/implementation choices are resolved and folded into `05-v1-decisions.md` (decisions 26–54) and the flow documents.
 
-- Free-form `@bot` replies without a recognized command.
-- A separate command for replying to arbitrary PR threads beyond `/review` context.
-- Whether coder auto-creates a PR (currently not assumed; coder is a later phase).
-- Whether `/test-cases` should support PR targets.
-- Whether the allowlist is enabled by default or only when configured.
-- GitHub App vs PAT for the overall installation/sync model.
-- How Issue↔PR relations are detected.
-- Docker volume naming, backup, and cleanup for session/workspace storage.
-- Polling implementation details (endpoints, rate limits, page sizes, overlap windows, cursors).
-- Agent profile configuration file format and secret injection mechanism.
+Future enhancement candidates (explicitly not in V1): conversational mode via `/respond`//`/ask`, an explicit `/create-pr` command, a `/reply`-style thread-reply command, PR support for `/test-cases`, and a `/agent <command>` alias.

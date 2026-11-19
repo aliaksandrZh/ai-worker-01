@@ -26,7 +26,7 @@ Common rules:
 2. A command is accepted only from a collaborator with GitHub Write permission and, when configured, a user allowed by the repository/installation allowlist.
 3. A command comment is processed once. The GitHub comment ID is the idempotency key.
 4. The bot mention and recognized command must be present in the same comment for V1.
-5. Ordinary comments are synchronized and stored but do not start work by themselves. The Task context includes relevant Issue/PR discussion and existing PR review threads. A bot mention with free-form text but no recognized command is not an execution trigger in V1; support for that behavior remains an open product decision.
+5. Ordinary comments are synchronized and stored but do not start work by themselves. The Task context includes relevant Issue/PR discussion and existing PR review threads. A bot mention with free-form text but no recognized command is not an execution trigger in V1 (decided); a conversational mode may be added later via an explicit `/respond`//`/ask` command.
 6. A command is validated against the WorkItem type and current Workflow/Task state.
 7. Commands that start work create a Task; the Task selects a versioned AgentProfile and receives a new Pi session.
 8. Concurrency: each Workflow holds at most one unfinished Task; a system global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds concurrently running Runs across Workflows. Other eligible work waits in the durable queue, except `/stop`, which is a control command and is processed with priority.
@@ -50,7 +50,7 @@ Rollout: phase 1 ships `planner` only (`/plan`, `/status`, `/stop`, `/help`). `/
 | `/plan` | Issue | `planner` | Yes | Analysis, gaps, questions, and implementation plan |
 | `/code` | Issue | `coder` | Yes | Implements the approved plan: checks, commit/push branch, result summary |
 | `/review` | Pull Request | `reviewer` | Yes | Reviews the pinned PR Head SHA and submits review/comments |
-| `/test-cases` | Issue; PR may be enabled by configuration | `test-designer` | Yes | Produces test scenarios/cases as an artifact and GitHub comment |
+| `/test-cases` | Issue only (PR targets are rejected) | `test-designer` | Yes | Produces test scenarios/cases as an artifact and GitHub comment |
 | `/status` | Issue or Pull Request | None | No | Reports Workflow, current Task/Run, queue position, and last result |
 | `/stop` | Issue or Pull Request | None | No | Requests cancellation of the active Task and queued Tasks for that Workflow |
 | `/help` | Issue or Pull Request | None | No | Lists supported commands and basic usage |
@@ -98,12 +98,12 @@ Behavior:
 Workspace and Git rules (applied when the coder phase is enabled):
 - The first coder Task in a Workflow clones the original repository with base = current HEAD of the default branch; the base SHA is stored in `Workspace.base_sha`.
 - Work happens on `agent/issue-<number>`; later coder Tasks in the same Workflow continue the existing agent branch; a retry continues the Task's branch.
-- Push uses a GitHub App installation token (Contents read/write, repo-scoped, refreshed through the Runtime API for long runs); no PAT in remotes or git config.
-- Commits are authored as the GitHub App bot identity (name + noreply email); no signing by default; force push is forbidden; direct push to the original repository, no fork.
+- Push uses a fine-grained GitHub PAT with Contents write (repository-scoped), mounted read-only at `/run/secrets/<name>` and exposed via a temporary credential helper; the token is never stored in remotes or git config.
+- Commits are authored as the dedicated bot account owning the PAT (name + noreply email); no signing by default; force push is forbidden; direct push to the original repository, no fork.
 
 Mid-run blockers: the agent posts a comment describing the blocker, the user replies with a normal comment and reruns `/code` to continue — a new Task/Run whose context includes the answers.
 
-V1 does not assume that the coder automatically creates a Pull Request. Creating/publishing a PR can be a later explicit command or repository setting; pushing the branch and reporting it are the agreed baseline.
+Automatic PR creation is not done in V1; the preferred future path is an explicit `/create-pr` command (an explicit user action, not implicit profile configuration). Pushing the branch and reporting it are the agreed baseline.
 
 ## 5. `/review`
 
@@ -132,7 +132,7 @@ Each explicit `/review` comment is a distinct review request, even if the Head S
 Purpose: generate test scenarios/cases from the Issue requirements and current repository context.
 
 Preconditions:
-- Target must be an open Issue in V1 (PR support can be enabled later).
+- Target must be an open Issue in V1. A PR target is rejected with a clear explanation; PR support may come later when a diff/Head-SHA-based test-design scenario is defined.
 - No Task for the Workflow may currently be running.
 
 Behavior:
@@ -185,7 +185,7 @@ Behavior:
 1. If a Task is running, send a graceful stop/cancel request to the Agent Runtime; the Runtime asks Pi/processes to stop safely, then stops the container.
 2. Mark Run/Task `cancelled` after runtime confirmation or reconciliation.
 3. Cancel ALL queued Tasks of the same Workflow (together with their Jobs); otherwise queued work would start automatically after the stop, contradicting the intent of `/stop`.
-4. Keep session files and workspace volumes so results can be inspected or a new Task can be created later.
+4. Keep the Workflow storage (session/log files and the workspace directory) so results can be inspected or a new Task can be created later.
 5. Set Workflow to `waiting_for_human` after cancellation.
 6. Publish a system notification about the cancellation(s) via the Outbox (one comment may cover active and queued cancellations).
 7. Never touch other Workflows; do not close the Workflow or the GitHub Issue/PR.
@@ -222,7 +222,7 @@ Automatic retries exist only for transient infrastructure errors before a Run st
 
 ## 10. PR comment and review-thread context
 
-For a PR `/review`, the reviewer receives the current diff plus relevant PR conversation comments, submitted reviews, and inline review threads. Findings are submitted as a GitHub review and inline comments. When practical, the reviewer should reply in the relevant existing thread rather than create a duplicate finding. Free-form bot-mention replies without `/review` are not an execution trigger in V1; enabling direct comment-response behavior without a slash command is still an open decision.
+For a PR `/review`, the reviewer receives the current diff plus relevant PR conversation comments, submitted reviews, and inline review threads. Findings are submitted as a GitHub review and inline comments. When practical, the reviewer should reply in the relevant existing thread rather than create a duplicate finding. Free-form bot-mention replies without `/review` are not an execution trigger in V1 (decided). Reviewer answers existing threads as part of `/review`; arbitrary thread replies without starting the reviewer (a possible future `/reply`) are out of V1.
 
 ## 11. Automatic first PR review
 

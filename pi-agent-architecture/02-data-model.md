@@ -47,7 +47,6 @@ Suggested fields:
 - `name`
 - `full_name`
 - `default_branch`
-- `installation_id` (if GitHub App is used)
 - `is_enabled`
 - `configuration` (JSON)
 - `created_at`, `updated_at`
@@ -93,12 +92,14 @@ Fields:
 - `source_work_item_id`
 - `target_work_item_id`
 - `relation_type` (`created_from`, `closes`, `related_to`, `blocks`, `custom`)
-- `source` (`github_closing_reference`, `branch_metadata`, `agent_action`, `manual`)
+- `source` (`github_closing_reference`, `github_cross_reference`, `agent_action`, `manual`)
 - `created_at`
 
 Constraints:
 - Unique `(source_work_item_id, target_work_item_id, relation_type)`.
 - Prevent self-relations.
+
+Link detection (V1): GitHub timeline events synced by the Poller are the authoritative source — a closed event whose commit carries closing keywords (closes/fixes…, with `commit_id`) creates relation `closes`; a cross-referenced event creates relation `related_to`. Branch naming conventions (`agent/issue-<n>`) are only a hint and never create a link on their own. If GitHub reports no explicit link, none is created; V1 has no separate manual link management (explicit agent/admin-created links are future work).
 
 Closing one root WorkItem does not automatically close the related WorkItem or clean its Workflow in V1.
 
@@ -304,13 +305,13 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `agent_profile_id`
 - `version`
 - `container_image`
-- `source_directory` or immutable build-context reference (each agent has its own directory/build context in the repository)
+- `source_directory` — Git directory `agents/<profile>/` containing `profile.yaml` (Dockerfile, `prompts/`, `skills/`) plus `source_commit_sha`, `config_snapshot`, `config_hash` (immutable snapshot pinned at version creation)
 - `runtime_type` (Pi initially)
 - `system_prompt`
 - `skills_configuration`
 - `mcp_configuration`
 - `tools_configuration`
-- `environment_configuration` (references/secrets, not plaintext secret values)
+- `environment_configuration` — secret references only (e.g. `github_agent_pat`); values live outside Git/PostgreSQL
 - `resource_configuration`
 - `capabilities`
 - `retry_policy` (profile-level retry defaults)
@@ -322,6 +323,8 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `created_at`
 
 Unique `(agent_profile_id, version)`. Creating a version triggers an image build (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1); only `ready` versions may be selected for a Task.
+
+Profile secrets live outside Git and PostgreSQL in host-managed files (for example `/etc/pi-agent/secrets/`, restricted permissions); `profile.yaml` and the stored snapshot hold references only (e.g. `github_agent_pat`). The Runtime mounts a profile's required secrets read-only in-container at `/run/secrets/<name>`; secrets never travel via environment variables or image layers, and each profile receives only the secrets it needs (a read-only sync PAT for the Poller, write-capable PATs for agent MCP/Git operations, both repository-scoped).
 
 A Task references a profile version, so later profile changes do not retroactively alter task configuration.
 
@@ -404,7 +407,7 @@ Fields:
 - `last_stopped_at`
 - `removed_at`
 
-A container is replaceable and is stopped after Task completion. The stopped deployment may be recreated for a retry from the same persistent session/workspace storage. V1 uses exactly one configured execution host; `host_id` records where the container was created. Containers, volumes, and session files are removed when their root WorkItem closes.
+A container is replaceable and is stopped after Task completion. The stopped deployment may be recreated for a retry from the same persistent storage. V1 uses exactly one configured execution host; `host_id` records where the container was created. Containers and the Workflow storage tree (workspaces, sessions, run logs) are removed when their root WorkItem closes.
 
 ## 16. Workspace
 
@@ -413,7 +416,7 @@ Fields:
 - `task_id` (unique; Workspace belongs to one Task)
 - `work_item_id` (denormalized reference for queries)
 - `repository_id`
-- `storage_kind` (`docker_volume`, `host_path`, future object store)
+- `storage_kind` (`host_path` — default in V1, `docker_volume`, future object store)
 - `storage_reference`
 - `repo_path`
 - `branch_name`
@@ -425,7 +428,9 @@ Fields:
 - `last_used_at`
 - `deleted_at`
 
-Every Task gets a task-specific Workspace. Volumes persist after the Task container stops and are deleted when the root WorkItem is closed. Reviewer always receives a fresh workspace at the pinned reviewed Head SHA, separate from coder workspaces, read-only where possible.
+Every Task gets a task-specific Workspace. Storage persists after the Task container stops and is deleted when the root WorkItem is closed. Reviewer always receives a fresh workspace at the pinned reviewed Head SHA, separate from coder workspaces, read-only where possible.
+
+V1 uses plain directories on persistent host storage, not named Docker volumes: `/var/lib/pi-agent/workflows/{workflow_id}/tasks/{task_id}/workspace` for the workspace and `/var/lib/pi-agent/workflows/{workflow_id}/runs/{run_id}/` for `pi-session/` and `logs/` per Run. Names use internal UUIDs; containers receive the directories they need via mounts. Automated backups of these directories are not provided in V1 (only PostgreSQL and profile configuration are backed up; unpushed coder work on the execution host is an accepted risk); cleanup happens at root closure, with no age-based cleanup of open Workflows, and periodic reconciliation removes orphaned directories.
 
 A coder Task works on `agent/issue-<number>` based on the default-branch HEAD captured at first provision (`base_sha`); later coder Tasks in the same Workflow, and retries, continue the existing agent branch. The Workspace DB record is created by the Orchestrator on the Task's first Run and is reused by retries; the Runtime API provisions the physical storage.
 
@@ -505,7 +510,7 @@ Unique `idempotency_key`.
 
 V1 repository configuration should contain:
 - Minimum GitHub permission required (`write`).
-- Optional allowed collaborator logins (an additional restriction; when configured, both Write permission and allowlist membership are required).
+- Allowlist of permitted logins: enabled by default and seeded with the repository owner's account; a non-empty allowlist requires both Write permission and membership; an explicitly emptied allowlist disables list filtering, leaving the Write-permission baseline.
 - Bot identity.
 - Command policy.
 
@@ -517,9 +522,8 @@ When the root WorkItem closes:
 - Workflow is closed/cancelled.
 - No new tasks may be scheduled.
 - Active runs are stopped.
-- Containers and task volumes are removed.
-- Pi session files are deleted.
-- Run log directories are deleted.
+- Containers are removed.
+- The Workflow storage tree (workspace directories, per-Run `pi-session/` and `logs/`) is deleted.
 - DB records are retained and marked with storage cleanup/deletion timestamps/status.
 
 ## 23. Recommended indexes

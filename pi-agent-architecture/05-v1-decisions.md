@@ -5,23 +5,23 @@
 1. Architecture is language/framework/ORM neutral. No implementation language has been selected.
 2. The current repository is a proof of concept. Existing code and APIs may be fully rewritten.
 3. Polling is used; public IP and inbound GitHub webhooks are not required for V1.
-4. Polling interval is configurable; 30–60 seconds is an initial proposal.
+4. Polling uses the GitHub REST API; the default interval is 60 seconds per repository (configurable). Authentication across the whole installation uses fine-grained GitHub PATs.
 5. Issue assignment to the bot is not a V1 prerequisite or trigger. Assigning or unassigning the bot on an Issue does not start or stop work.
 6. Issue commands require a bot mention and a recognized slash command in the same comment. Only the original (unedited) comment version is parsed; the command must be the first non-empty line; bot-authored comments never trigger commands; one command directive per comment.
-7. Any collaborator with GitHub Write permission may command the bot, with an optional configured allowlist as an additional restriction.
+7. Base command requirement: GitHub Write permission. The allowlist is enabled by default and is seeded with the repository owner's account only; a non-empty allowlist additionally requires membership, and an explicitly emptied allowlist falls back to the Write-permission baseline. Configuration lives in repository configuration.
 8. Removing a user from the allowlist or revoking their permission does not interrupt an already-running Task; later commands from that user are rejected.
 9. One Workflow per root WorkItem in V1. An Issue and its related PR are separate WorkItems/Workflows, with an explicit relationship record.
 10. Per-Workflow invariant: a Workflow holds at most one unfinished Task (further same-Workflow commands are rejected at admission). A global cap `max_concurrent_runs` (default 10) in the Orchestrator configuration bounds the total number of concurrently running Runs across Workflows; extra work waits in the durable FIFO queue.
 11. A new Pi session and task-specific workspace are created for each Task; every Run attempt uses a new Pi session.
 12. A Run represents one execution attempt. A retry creates a new Run and a new Pi session; workspace reuse follows task-type policy (a coder Task continues its agent branch; a reviewer always gets a fresh workspace); a new Task never reuses another Task's session.
 13. Agent Profiles are independently configurable and versioned: Docker image, Pi settings, prompt, skills, MCP servers, tools/capabilities, environment references, and resources.
-14. Coder pushes directly to the original repository on `agent/issue-<number>` (GitHub App installation token credentials, bot commit identity, force push forbidden) and reports the result in the Issue before implementation Task completion. The coder phase is enabled later (see decision 36).
+14. Coder pushes directly to the original repository on `agent/issue-<number>` (fine-grained GitHub PAT with write access, dedicated bot-account commit identity, force push forbidden) and reports the result in the Issue before implementation Task completion. The coder phase is enabled later (see decision 36).
 15. Automatic PR creation by coder is not assumed in V1; it remains a separate decision/command/configuration.
 16. Reviewer receives a fresh workspace at a specific PR Head SHA, separate from coder workspace, read-only where possible.
 17. Initial PR review is triggered when the bot is requested as reviewer — exactly one automatic initial review per PR/Workflow lifetime. A review Task pins the PR Head SHA at creation (`target_head_sha`); SHA drift before a queued Task starts cancels it, and removing the review request before execution cancels the not-yet-started Task. Subsequent reviews are manual via `/review`; a new commit alone does not trigger a review.
-18. Containers stop after Task completion; session files and workspace volumes remain on persistent Docker-host storage until retry/continuation or root cleanup.
+18. Containers stop after Task completion; the task workspace directory and per-Run `pi-session/` and `logs/` remain on persistent host storage (under `/var/lib/pi-agent/workflows/{workflow_id}/`) until retry/continuation or root cleanup.
 19. PostgreSQL stores metadata/orchestration state; session and workspace files are stored on persistent Docker-host storage in V1.
-20. Closing a root Issue/PR triggers cleanup of its containers, workspace volumes, and Pi session files; DB history remains with deletion/cleanup flags.
+20. Closing a root Issue/PR triggers cleanup of its containers and the Workflow storage tree (workspace directories, Pi sessions, run logs); DB history remains with deletion/cleanup flags.
 21. Closing an Issue does not implicitly close/clean its related PR Workflow; each root is handled independently.
 22. Reconciliation checks active containers/runtime state. Runtime heartbeat and task progress are separate signals.
 23. The 60-minute idle timeout triggers on the absence of ALL observable activity while the container is alive (heartbeat keeps running as a separate liveness signal). It is configurable and initiates reconciliation; it does not map to `TimedOut`.
@@ -46,6 +46,16 @@
 42. Successful publication of mandatory results to GitHub is a precondition for Task `succeeded` for every agent type (planner — plan/questions; coder — push + result summary; reviewer — review + inline comments; test-designer — scenarios). The agent retries transient GitHub/MCP failures within the Run, verifying GitHub before re-posting to avoid duplicates; otherwise Run/Task fail with `error_code = github_publication_failed` (artifacts are kept), the Orchestrator posts a system notification via the Outbox (it never re-publishes the agent's result), and `/retry` is the recovery path.
 43. Run logs are captured by the Runtime Bridge into a per-Run directory on persistent host storage (`stdout.log`, `stderr.log`, `bridge.log`), created and mounted by the Runtime API; size limit 50 MiB per Run (configurable, with rotation); retained until root cleanup and deleted together with session files; `Run.log_storage_reference` points to them; content is not copied into PostgreSQL.
 44. The Runtime API exposes a single Run-scoped start endpoint (`POST /internal/runtime/runs/{runId}/start`). Orchestrator owns the AgentSession/Workspace DB rows (Session `provisioning` per Run; Workspace created on the first Run and reused by retries); the Runtime API provisions physical resources and returns runtime metadata. No separate create endpoints.
+45. Mention-only dispatch is decided: NO. A bot mention without a recognized slash command never triggers work; the comment stays context. A future conversational mode may arrive via an explicit `/respond`//`/ask` (mention-only dispatch may be considered later).
+46. No `/reply` command in V1: the reviewer answers existing review threads as part of `/review`; arbitrary thread replies without starting the reviewer are future work.
+47. Coder PR creation is not in V1; the preferred future path is an explicit `/create-pr` command (an explicit user action), not implicit profile configuration.
+48. `/test-cases` targets Issues only in V1; a PR target is rejected with a clear explanation. PR support may be added later when a diff/Head-SHA-based test-design scenario is defined.
+49. Allowlist: enabled by default, seeded with the repository owner's account only. A non-empty allowlist requires Write permission AND membership; an explicitly emptied allowlist disables list filtering, leaving the Write-permission baseline. Configuration lives in repository configuration.
+50. The whole integration uses fine-grained GitHub PATs (no GitHub App in V1): a read-only PAT for the Poller/sync and write-capable PATs for agent MCP/Git operations, both repository-scoped. This supersedes the earlier GitHub App installation-token suggestion for coder push; the commit identity is the dedicated bot account owning the write PAT.
+51. Issue↔PR links come from GitHub timeline events synced by the Poller: a closed event whose commit carries closes/fixes semantics → relation `closes`; a cross-referenced event → relation `related_to`; branch naming (`agent/issue-<n>`) is a hint only, never a standalone basis. If GitHub reports no explicit link, none is created; V1 has no manual link management.
+52. Storage layout: plain directories on persistent host storage, not named Docker volumes — `/var/lib/pi-agent/workflows/{workflow_id}/tasks/{task_id}/workspace` and `.../runs/{run_id}/{pi-session, logs/{stdout.log, stderr.log, bridge.log}}`; UUID-based names; containers mount what they need. Backups: PostgreSQL and profile configuration only; workspace/session/log backups are an accepted V1 risk. Cleanup: root closure deletes the Workflow storage tree after containers stop; no age-based cleanup of open Workflows; periodic reconciliation removes orphaned directories.
+53. Polling parameters: GitHub REST API; default interval 60 s per repository; page size 100 with `Link` headers; 5-minute overlap window for timestamp queries; per-repository/per-stream cursors (endpoint families: issues, pulls, issues/comments, pulls/{n}/reviews, pulls/{n}/comments, issues/{n}/timeline); a cursor advances only after durable save; deleted comments are discovered via a daily full sweep of known IDs; review requests pending an initial review are rechecked each cycle. Rate limits: `ETag`/`If-None-Match` conditional requests (304 does not consume the primary limit; 5 000 req/h baseline); `403`/`429` honor `Retry-After`/`X-RateLimit-Reset`; secondary limits use bounded exponential backoff.
+54. Profile configuration is YAML in Git — `agents/<profile>/profile.yaml` plus Dockerfile, `prompts/`, `skills/` (runtime/image, prompt and skills references, MCP servers/tools, permission allow-list, resource limits, retry policy, startup/idle/execution timeouts, secret references). Creating an `AgentProfileVersion` pins the Git commit SHA, a configuration snapshot, and file hashes; any configuration change creates a new version. Secrets live in host-managed files (e.g. `/etc/pi-agent/secrets/`), referenced by name in YAML and mounted read-only in-container at `/run/secrets/<name>`; least-privilege per profile; secrets never travel via env vars or image layers.
 
 ## V1 command syntax
 
@@ -77,18 +87,8 @@ See [06-command-reference.md](06-command-reference.md) for the full command cont
 - Final security design (but profile capabilities and authorization metadata should be modeled now).
 - Language/framework/ORM selection.
 - Automatic PR creation by coder unless later explicitly enabled.
-- Free-form natural-language comment handling without a recognized command (open decision whether this should be enabled in V1).
+- Free-form natural-language comment handling without a recognized command (decided: not in V1; a conversational mode via `/respond`//`/ask` may be a future extension).
 
 ## Open decisions
 
-- Exact configured bot mention/account and whether an alias such as `/agent plan` is needed.
-- Whether a plain `@bot` mention with natural-language text should trigger an agent response without a slash command (current V1 proposal: no; recognized slash command required).
-- Whether the allowlist is enabled by default or only configured for selected repositories (Write permission remains the baseline).
-- GitHub App vs PAT for the overall installation/sync model (coder push credentials are already decided: GitHub App installation token).
-- Exact GitHub permission lookup and allowlist configuration source.
-- Docker volume naming, backup, and cleanup implementation for session/workspace storage (artifact storage is decided: inline in PostgreSQL).
-- Whether `/test-cases` should support PR targets in V1.
-- Whether coder should auto-create a PR (currently not assumed).
-- How Issue-created PR relations are detected (closing keywords, branch metadata, or explicit creation action).
-- Agent profile configuration file format and secrets injection mechanism.
-- Open product decisions (free-form mentions, PR-thread replies, coder auto-PR, `/test-cases` targets, allowlist default, GitHub App vs PAT for sync, Issue↔PR linking, volume naming/backup/cleanup, polling details, profile config format/secrets): see [10-open-product-decisions.md](10-open-product-decisions.md).
+None remain — all former open items are resolved (see decisions 45–54). Future enhancement candidates (not in V1): conversational mode via `/respond`//`/ask`, an explicit `/create-pr`, a `/reply`-style thread command, PR support for `/test-cases`, and a `/agent <command>` alias.

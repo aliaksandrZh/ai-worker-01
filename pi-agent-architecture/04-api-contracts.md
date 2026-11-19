@@ -85,7 +85,7 @@ The canonical V1 syntax is `@<bot-account> /<command> [arguments]`. The mention 
 | `/proceed` | Issue | (historical; replaced by `/code`) | — |
 | `/code` | Issue | Coder implements the approved plan (the command approves the latest plan), runs checks, commits/pushes branch, reports result; enabled when the coder profile is configured | Yes |
 | `/review` | PR | Reviewer reviews the pinned Head SHA in a fresh workspace and submits findings | Yes |
-| `/test-cases` | Issue in V1 | Test designer produces test scenarios/cases Artifact; does not implement/run tests by default | Yes |
+| `/test-cases` | Issue only in V1 (PR targets are rejected) | Test designer produces test scenarios/cases Artifact; does not implement/run tests by default | Yes |
 | `/status` | Issue or PR | Reports current/last Workflow, Task, Run, queue and result | No |
 | `/stop` | Issue or PR | Gracefully cancels the active Task and all queued Tasks of that Workflow; retains storage | No |
 | `/help` | Issue or PR | Lists available commands for the target type | No |
@@ -156,7 +156,7 @@ Returns desired/observed runtime status, heartbeat, container reference, and err
 
 Callbacks are routes on the same Agent Runtime API that manages Pi sessions and Komodo deployments; a separate webhook receiver service is not required. Agent containers send callbacks over the private network. The receiver must persist events before acknowledging them. If Control Plane and execution host are separated, private network reachability between them is required; public GitHub webhooks are not involved.
 
-The sender is the **Runtime Bridge** — a process inside the agent container that launches Pi in `--mode rpc`, reads the JSONL event stream, and posts the callbacks below; on a Pi crash it reports failure with the exit code. Callback URL and credentials are passed to the container at start; Bridge version and cadence are pinned in `AgentProfileVersion`. No Pi extension is needed in V1. The Bridge also captures Pi `stdout`/`stderr` (plus its own diagnostics) into a per-Run log directory that the Runtime API creates and mounts — `work-items/<work-item-id>/runs/<run-id>/{stdout.log, stderr.log, bridge.log}`; the files survive container stop, are size-limited (default 50 MiB per Run, configurable, with rotation), and are deleted at root cleanup.
+The sender is the **Runtime Bridge** — a process inside the agent container that launches Pi in `--mode rpc`, reads the JSONL event stream, and posts the callbacks below; on a Pi crash it reports failure with the exit code. Callback URL and credentials are passed to the container at start; Bridge version and cadence are pinned in `AgentProfileVersion`. No Pi extension is needed in V1. The Bridge also captures Pi `stdout`/`stderr` (plus its own diagnostics) into a per-Run log directory that the Runtime API creates and mounts — `/var/lib/pi-agent/workflows/{workflow_id}/runs/{run_id}/logs/{stdout.log, stderr.log, bridge.log}`; the files survive container stop, are size-limited (default 50 MiB per Run, configurable, with rotation), and are deleted at root cleanup.
 
 `POST /internal/runtime/runs/{runId}/heartbeat`
 

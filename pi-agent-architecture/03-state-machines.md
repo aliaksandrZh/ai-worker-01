@@ -196,9 +196,8 @@ Closure triggers cleanup for that root only:
 1. Mark Workflow `closed`; reject/cancel new or queued work.
 2. Cancel active Tasks/Runs.
 3. Stop and remove containers/deployments.
-4. Remove task workspace volumes.
-5. Delete Pi session files and Run log directories.
-6. Mark cleanup/deletion flags in PostgreSQL.
-7. Retain database records and history.
+4. Delete the Workflow storage tree — task workspace directories and per-Run `pi-session/` and `logs/` under `/var/lib/pi-agent/workflows/{workflow_id}/`.
+5. Mark cleanup/deletion flags in PostgreSQL.
+6. Retain database records and history.
 
 A related Issue and PR are separate roots. Closing one does not automatically clean the other.
