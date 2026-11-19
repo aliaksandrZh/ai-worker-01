@@ -44,6 +44,7 @@ flowchart TD
 - Parses commands and checks target type, permissions, and Workflow state.
 - Creates Workflows, Tasks, Runs, and durable queue jobs.
 - Selects a versioned Agent Profile.
+- Dispatches Agent Profile image builds: durable BuildJobs, asynchronous dispatch and status polling with retries (decision 81).
 - The Context Assembler part of the Orchestrator builds each Run's input (instructions, WorkItem data, comments, prior artifacts) within the size limits and freezes it as an immutable `RunContextSnapshot` before the Run starts (02 §14a, decision 63).
 - Enforces one active execution within a single workflow.
 - Owns business-state transitions and decides what happens after completion, failure, timeout, cancellation, a human response, or root closure. A final Task failure (retries exhausted) returns the Workflow to `waiting_for_human`; Workflow `failed` is reserved for unrecoverable integrity/state-corruption failures.
@@ -65,7 +66,7 @@ A small process on the single execution host. It observes what the control plane
 
 ### Build Worker
 
-Executes Agent Profile image builds locally on the execution host when a profile version is created (tag `agent-<profile>:v<n>`, local image store, no registry); a successful build sets the version `ready` (decisions 55–56).
+Executes Agent Profile image builds locally on the execution host for versions dispatched by the Orchestrator (tag `agent-<profile>:v<n>`, local image store, no registry). The build contract is asynchronous HTTP (decision 81): the Worker accepts `POST /internal/builds` (idempotent by `buildId`), immediately replies `202 Accepted`, builds the image, and serves progress/results to Orchestrator polling via `GET /internal/builds/{buildId}`; it keeps its own durable local build-job state so results remain retrievable after network failures or process restarts. It does not perform version state transitions — the Orchestrator sets `ready`/`build_failed` after validating the polled result. The Worker authenticates with a dedicated service credential (decision 65) and never accesses or modifies the control-plane PostgreSQL (decisions 55–56, 81).
 
 ### Outbox Dispatcher
 
@@ -73,7 +74,7 @@ A worker that delivers orchestration-owned system notifications to GitHub and ow
 
 ### Configuration plane
 
-V1 has no Admin API, CLI, or web UI: desired configuration is YAML in the system repository — `config/system.yaml` (global settings, `github.bot_login`, command grammar, operational knobs), `config/repositories.yaml` (registered repositories with per-repo allowlists, permitted commands, permitted WorkItem types, authorization policy), `config/routing.yaml` (routing rules: global defaults plus per-repo overrides), and `config/agents/<profile>/` (profile definitions). The Config Loader — a startup component of the Orchestrator — validates the configuration, creates/updates the corresponding DB records and sync cursors, and checks the bot identity against `GET /user`. Configuration is synchronized only at application startup/deployment; hot reload is out of scope (decisions 55–56). YAML is the source of desired configuration; PostgreSQL remains the source of runtime state.
+V1 has no Admin API, CLI, or web UI: desired configuration is YAML in the system repository — `config/system.yaml` (global settings, `github.bot_login`, command grammar, operational knobs), `config/repositories.yaml` (registered repositories with per-repo allowlists, permitted commands, permitted WorkItem types, authorization policy), `config/routing.yaml` (routing rules: global defaults plus per-repo overrides), and `config/agents/<profile>/` (profile definitions). The Config Loader — a startup component of the Orchestrator — validates the configuration, creates/updates the corresponding DB records and sync cursors, and checks the bot identity against `GET /user`. Created `AgentProfileVersion` rows start in state `draft`; the Config Loader never builds or dispatches image builds — build dispatch is Orchestrator-owned (decision 81). Configuration is synchronized only at application startup/deployment; hot reload is out of scope (decisions 55–56). YAML is the source of desired configuration; PostgreSQL remains the source of runtime state.
 
 ### Komodo
 
@@ -96,9 +97,9 @@ No `debugger` profile exists (the `/debug` command was removed). Commands that s
 
 Profile configuration is versioned and can include image, Pi runtime config, system prompt, skills, MCP servers, tool permissions, environment references, capabilities, retry defaults, execution-limit defaults, and resource limits. A version carries an unattended permission allow-list: approved tools/MCP operations run automatically, everything else is denied — no interactive dialogs in agent runs.
 
-Profile version images are built once when the version is created (local Docker build on the single execution host, tag `agent-<profile>:v<version>`, no external registry in V1) and only versions in the `ready` state are selectable. Changing the Dockerfile, dependencies, or configuration requires a new version. A Task pins one profile version so configuration changes do not alter an existing task.
+Profile version images are built once when the version is created (local Docker build on the single execution host, tag `agent-<profile>:v<version>`, no external registry in V1; asynchronous Orchestrator-driven flow per decision 81) and only versions in the `ready` state are selectable. Changing the Dockerfile, dependencies, or configuration requires a new version. A Task pins one profile version so configuration changes do not alter an existing task.
 
-Versions are created only through the configuration plane (`config/agents/<profile>/` → Config Loader → Build Worker, decisions 55–56). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected via `PI_CODING_AGENT_DIR`. LLM model/provider selection is deferred to V2 (decision 56).
+Versions are created only through the configuration plane (`config/agents/<profile>/` → Config Loader → Orchestrator dispatch → Build Worker, decisions 55–56, 81). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected via `PI_CODING_AGENT_DIR`. LLM model/provider selection is deferred to V2 (decision 56).
 
 Adding a profile should normally be configuration work, not a change to orchestration logic. Repository convention: keep each agent in its own directory (for example `config/agents/planner/`, `config/agents/coder/`, `config/agents/reviewer/`, `config/agents/test-designer/`), with its own Dockerfile/build context, Pi config, prompts, skills, and MCP configuration. The exact file layout can evolve, but profiles must not be entangled in one shared agent directory.
 
@@ -114,6 +115,7 @@ Adding a profile should normally be configuration work, not a change to orchestr
 - Agent profiles may expose selected GitHub MCP tools and other MCP servers. Agents are responsible for performing GitHub operations explicitly permitted by their profiles. The Agent Runtime records execution events and results, which are persisted by the Orchestrator. The Orchestrator remains responsible for workflow state, task scheduling, container lifecycle, command handling, and system-level notifications.
 - Komodo owns actual deployment/container state; PostgreSQL stores desired and last observed state.
 - AgentSession and Workspace DB records are owned (created/updated) by the Orchestrator; the Agent Runtime API owns physical provisioning (session files, workspace directory, per-Run log directory, container and mounts) and writes runtime metadata back.
+- Build state: the Orchestrator owns AgentProfileVersion build state and BuildJobs; the Build Worker owns only build execution and its local build-job state and never reads or writes the control-plane PostgreSQL (decision 81).
 
 ## 5. WorkItem, Workflow, Task, Session, Run, Container
 
@@ -267,7 +269,7 @@ The logical components may run in one Compose project initially or in separate C
 | `build-worker` | local Agent Profile image builds |
 | agent containers | dynamically started Pi agents with the Runtime Bridge inside |
 
-Dependencies: Poller — PostgreSQL + read-only PAT + repository configuration; Orchestrator — PostgreSQL + Runtime API credentials + system configuration; Runtime API — PostgreSQL, Docker API, host storage, callback credential management; Outbox Worker — PostgreSQL + repository-specific write PATs; Host Monitor — Docker API + host storage + service credential; Build Worker — Docker API + read-only access to profile sources; agent containers — own workspace, per-Run session/log/spool mounts, callback token, and only permitted profile secrets (agents never get the Docker socket and cannot manage neighboring containers).
+Dependencies: Poller — PostgreSQL + read-only PAT + repository configuration; Orchestrator — PostgreSQL + Runtime API credentials + system configuration; Runtime API — PostgreSQL, Docker API, host storage, callback credential management; Outbox Worker — PostgreSQL + repository-specific write PATs; Host Monitor — Docker API + host storage + service credential; Build Worker — Docker API + read-only access to profile sources + dedicated service credential for the internal build API, no PostgreSQL access (decision 81); agent containers — own workspace, per-Run session/log/spool mounts, callback token, and only permitted profile secrets (agents never get the Docker socket and cannot manage neighboring containers).
 
 Health checks: `pg_isready` for PostgreSQL; readiness/liveness endpoints for HTTP services; heartbeat/last-successful-cycle for workers; Docker Engine + storage reachability for Host Monitor and Build Worker. Startup order: PostgreSQL → migrations/config sync → Build Worker → Runtime API / Host Monitor → Orchestrator / Poller / Outbox Worker. `depends_on` and Compose health checks govern the first start, but every service must also re-establish connections after dependency restarts. The Orchestrator does not accept task-producing commands before configuration is synchronized, and profiles without a `ready` image are not used. External HTTP ports are not published without need; GitHub is reached through outbound connections only.
 

@@ -287,6 +287,22 @@ The poller may be a scheduled worker, not an HTTP API. Its contract is:
 - Never start agent work directly.
 - Commit history is not synchronized in V1: PR head/base SHAs are stored and commit metadata is read from Git during workspace preparation; `pulls/{number}/commits` may be consulted ad hoc (decisions 64, 77).
 
+### Build Worker internal API (decision 81)
+
+Asynchronous build contract — the Orchestrator never holds a connection open for the duration of a build. Both endpoints use the dedicated Build Worker service credential (decision 65); the Worker has no direct database access.
+
+**Submit a build**: `POST /internal/builds`
+- Payload: `buildId`, profile version reference, configuration snapshot, source commit SHA, build context reference.
+- Idempotent by `buildId`: an existing in-flight or finished build is returned as-is, never duplicated.
+- Response: `202 Accepted` with the `buildId`; the local Docker build then proceeds on the execution host.
+- The Orchestrator retries transient transport errors with exponential backoff without marking the version `build_failed`.
+
+**Poll build status and result**: `GET /internal/builds/{buildId}`
+- Response: build state and progress; on completion, the outcome. Success carries the local image tag, image ID/digest, and build-log reference; a real Docker build failure is a terminal failed result.
+- Unknown `buildId` → 404.
+
+The Orchestrator validates the polled result before setting `AgentProfileVersion` to `ready` or `build_failed`; the Worker never writes orchestration state.
+
 ## 7. Errors
 
 Standard internal error shape:

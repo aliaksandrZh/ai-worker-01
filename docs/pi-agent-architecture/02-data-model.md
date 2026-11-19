@@ -30,6 +30,7 @@ erDiagram
     AGENT_SESSION ||--o{ CONTAINER_INSTANCE : has
     RUN ||--|| RUN_CONTEXT_SNAPSHOT : fixed_by
     AGENT_PROFILE ||--o{ AGENT_PROFILE_VERSION : versions
+    AGENT_PROFILE_VERSION ||--|| BUILD_JOB : built_via
     WORK_ITEM ||--o{ AGENT_COMMAND : receives
     GITHUB_COMMENT ||--o| AGENT_COMMAND : triggers
     RUN ||--o{ RUN_EVENT : emits
@@ -327,16 +328,16 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `bridge_configuration` (Runtime Bridge version, heartbeat/event cadence)
 - `startup_timeout`, `max_run_duration` (execution-limit defaults)
 - `state` (`draft`, `building`, `ready`, `build_failed`, `disabled`)
-- `image_digest` / build metadata
+- `image_digest` / build metadata (including the `build_id` BuildJob reference)
 - `created_at`
 
-Unique `(agent_profile_id, version)`. Creating a version triggers an image build (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1); only `ready` versions may be selected for a Task. The per-field configuration values below (system prompt, skills, MCP, tools) are recorded in the immutable `config_snapshot` for lineage and display; at runtime the baked image is the sole effective configuration (decision 56).
+Unique `(agent_profile_id, version)`. Creating a version records state `draft`; the image build it triggers is asynchronous (decision 81): the Orchestrator creates a durable BuildJob (§12b), sets the version `building`, dispatches `POST /internal/builds` to the Build Worker (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1), polls `GET /internal/builds/{buildId}`, and on a validated success records `image_digest` / build metadata and sets the version `ready`. Only a real build failure produces terminal `build_failed`; network errors and temporary Worker unavailability keep the version `building` under exponential-backoff retry. Only `ready` versions may be selected for a Task. The per-field configuration values below (system prompt, skills, MCP, tools) are recorded in the immutable `config_snapshot` for lineage and display; at runtime the baked image is the sole effective configuration (decision 56).
 
 Profile secrets live outside Git and PostgreSQL in host-managed files (for example `/etc/pi-agent/secrets/`, restricted permissions); `profile.yaml` and the stored snapshot hold references only (e.g. `github_agent_pat`). The Runtime mounts a profile's required secrets read-only in-container at `/run/secrets/<name>`; secrets never travel via environment variables or image layers, and each profile receives only the secrets it needs (a read-only sync PAT for the Poller, write-capable PATs for agent MCP/Git operations, both repository-scoped).
 
 A Task references a profile version, so later profile changes do not retroactively alter task configuration.
 
-Profile versions are created exclusively through the configuration plane: the Config Loader reads `config/agents/<profile>/profile.yaml`, creates the `AgentProfile`/`AgentProfileVersion` rows, and the Build Worker builds the image locally (tag `agent-<profile>:v<n>`); a successful build sets `ready` (01 §2, decisions 55–56). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time, and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected with `PI_CODING_AGENT_DIR`; LLM model/provider selection is deferred to V2. Each version additionally carries a mandatory `max_context_tokens` — the Context size limit for Task input; it must fit the profile model's context window with a reserve for the answer and is enforced by the Context Assembler (decision 63).
+Profile versions are created exclusively through the configuration plane: the Config Loader reads `config/agents/<profile>/profile.yaml` and creates the `AgentProfile`/`AgentProfileVersion` rows (state `draft`); the Orchestrator then drives the build through the Build Worker (local build, tag `agent-<profile>:v<n>`) and sets `ready` only after validating the polled result — the Build Worker never writes the control-plane database (01 §2, decisions 55–56, 81). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time, and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected with `PI_CODING_AGENT_DIR`; LLM model/provider selection is deferred to V2. Each version additionally carries a mandatory `max_context_tokens` — the Context size limit for Task input; it must fit the profile model's context window with a reserve for the answer and is enforced by the Context Assembler (decision 63).
 
 ## 12a. AgentProfileRoutingRule
 
@@ -353,6 +354,19 @@ Fields:
 Unique rule scope should be enforced for a given repository/task type/priority. This makes profile selection configurable without hardcoding profile names in Orchestrator.
 
 V1 ships a seeded global rule set (`repository_id = NULL`); repository-specific rules override it, and the selected `AgentProfileVersion` is pinned on the Task at creation. When no matching rule exists, or the selected profile is not `ready`/enabled, the command is rejected before any Task is created with reason `agent_profile_not_configured`.
+
+## 12b. BuildJob
+
+Durable record of one AgentProfileVersion image build, created by the Orchestrator before first dispatch (decision 81):
+- `id` — the unique `buildId`, generated and persisted by the Orchestrator before dispatch; dispatch and status polling reference the same id
+- `agent_profile_version_id`
+- `dispatch_payload` — profile version, configuration snapshot, source commit SHA, build context reference (all also pinned on the version row; recorded for lineage)
+- `state` — Orchestrator-side dispatch/polling progress (distinct from the version status; the outcome is validated before `AgentProfileVersion.state` changes)
+- `attempts`, `next_retry_at` — exponential-backoff retry bookkeeping for dispatch/polling failures
+- `image_tag`, `image_digest`, `build_log_reference` — validated result recorded on completion; `image_digest` mirrors into `AgentProfileVersion`
+- `created_at`, `updated_at`
+
+One BuildJob per AgentProfileVersion; retries reuse it with the same `buildId` (idempotent worker-side). On Orchestrator restart the reconciler resumes unfinished BuildJobs (resume polling or redispatch, same `buildId`). The Worker keeps its own durable local build-job state for the same `buildId`; build-job state in PostgreSQL is updated only by the Orchestrator.
 
 ## 13. AgentSession
 
