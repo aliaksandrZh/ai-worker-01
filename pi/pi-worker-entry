@@ -1,13 +1,21 @@
 #!/bin/sh
-# pi-worker entry: optionally clone GIT_CLONE_REPO into /workspace, then exec pi.
-# Token file is dotenv-format (pi/.env): comments, blank lines, GIT_CLONE_TOKEN=<pat>
+# pi-worker entry: export the mount token for the GitHub MCP server, optionally
+# clone GIT_CLONE_REPO into /workspace (+ push-capable credential helper), exec pi.
 set -eu
+
+token=""
+if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "$GIT_CLONE_TOKEN_FILE" ]; then
+  token="$(tr -d '\r' <"$GIT_CLONE_TOKEN_FILE" | sed -n 's/^GIT_CLONE_TOKEN=//p' | head -n1)"
+fi
+export GITHUB_API_TOKEN="${token:-pi-no-token}" # must be non-empty: pi drops servers whose ${VAR} resolution fails (empty -> "needs attention" notify parked as blocked). Sentinel spawns the server; tools just 401 per call.
+
 if [ -n "${GIT_CLONE_REPO:-}" ]; then
-  token="$(tr -d '\r' <"${GIT_CLONE_TOKEN_FILE:?GIT_CLONE_TOKEN_FILE required}" \
-    | sed -n 's/^GIT_CLONE_TOKEN=//p' | head -n1)"
   : "${token:?GIT_CLONE_TOKEN not found in ${GIT_CLONE_TOKEN_FILE}}"
   GIT_TERMINAL_PROMPT=0 git clone \
     "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
   git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub token
+  # push support: helper re-reads the mounted token file at push time only (never stored in config/env)
+  git -C /workspace config credential.helper \
+    '!f() { test "$1" = get || return 0; t=$(tr -d "\r" < "$GIT_CLONE_TOKEN_FILE" | sed -n "s/^GIT_CLONE_TOKEN=//p" | head -n1); echo username=x-access-token; echo password=$t; }; f'
 fi
 exec pi "$@"
