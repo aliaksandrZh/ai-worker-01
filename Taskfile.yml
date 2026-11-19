@@ -32,10 +32,11 @@ tasks:
       - node --env-file-if-exists=.env write-api.mjs
 
   test:
-    desc: Unit + contract tests (api signals state machine, github-polling logic)
+    desc: Unit + contract tests (api signals state machine, github-polling poller + write-api)
     cmds:
       - node --test api/rpc-session.test.mjs
       - node --test github-polling/poll.test.mjs
+      - node --test github-polling/write-api.test.mjs
 
   check-signals:
     desc: Live walkthrough — create session, prompt, await via /wait, webhook settled line (api + komodo must be running)
