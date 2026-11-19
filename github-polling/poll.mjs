@@ -191,16 +191,18 @@ const cred = async (path, fetchImpl) => {
   return token();
 };
 
-export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET" } = {}) => {
+export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET", headers: extraHeaders = {}, body: jsonBody } = {}) => {
   const url = new URL(path, "https://api.github.com");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   const t = await cred(path, fetchImpl);
+  const accept = extraHeaders.accept ?? "application/vnd.github+json";
   const res = await fetchImpl(url, { method, headers: {
-    accept: "application/vnd.github+json",
+    accept,
     "x-github-api-version": "2022-11-28",
     "user-agent": "github-polling",
+    ...extraHeaders,
     ...(t ? { authorization: `Bearer ${t}` } : {}),
-  } });
+  }, ...(jsonBody !== undefined ? { body: JSON.stringify(jsonBody) } : {}) });
   const retryAfter = Number(res.headers.get("retry-after")) || 0;
   if (res.headers.get("x-ratelimit-remaining") === "0" || res.status === 429 || retryAfter)
     throw new RateLimitError(
@@ -209,7 +211,9 @@ export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET" 
   if (res.status === 401) throw new AuthError(401);
   if (res.status === 404) throw new NotFoundError(404);
   if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
-  return { items: res.status === 204 ? [] : await res.json(), headers: res.headers, status: res.status };
+  if (accept === "application/vnd.github+json")
+    return { items: res.status === 204 ? [] : await res.json(), headers: res.headers, status: res.status, text: null };
+  return { items: null, text: await res.text(), headers: res.headers, status: res.status }; // other accepts (diff etc.) — raw text
 };
 
 export const paged = async (path, params = {}, { stop, fetchImpl = fetch } = {}) => {
