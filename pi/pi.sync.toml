@@ -31,5 +31,5 @@ auto_update = true
 extra_args = "--interactive --init"
 volumes = """
 /Users/aliaksandrzhebit/Programming/azh/03/pi/pi-agent-state:/home/pi/.pi/agent
-/Users/aliaksandrzhebit/Programming/azh/03/pi/pi-worker-workspace:/workspace
+/Users/aliaksandrzhebit/Programming/azh/03/pi/pi-worker-entry:/usr/local/bin/pi-worker-entry:ro
 """

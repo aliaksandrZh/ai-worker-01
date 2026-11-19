@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiRpcSession } from "./rpc-session.mjs";
@@ -12,7 +12,13 @@ const API_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = join(API_DIR, "..");
 const LOGS_DIR = join(API_DIR, "logs");
 const STATE_DIR = join(REPO_DIR, "pi", "pi-agent-state");
-const WORKSPACE_DIR = join(REPO_DIR, "pi", "pi-worker-workspace");
+// every session mounts the entry script ro (image entrypoint is "sh" on it)
+const ENTRY_SCRIPT = join(REPO_DIR, "pi", "pi-worker-entry");
+// repo values land in newline-separated deployment env — keep them owner/name only
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// clone PAT stays out of env: the gitignored pi/.env (dotenv, key GIT_CLONE_TOKEN),
+// mounted into repo sessions only
+const TOKEN_FILE = join(REPO_DIR, "pi", ".env");
 const PREFIX = "pi-session-";
 
 const PORT = process.env.PORT || 3000;
@@ -90,7 +96,7 @@ const waitRunning = async (name, { timeoutMs = 90000 } = {}) => {
   throw new Error(`session container ${name} did not reach running state after ${timeoutMs}ms`);
 };
 
-const createSession = async (id) => {
+const createSession = async (id, repo) => {
   const name = deploymentName(id);
   await komodo.write("CreateDeployment", {
     name,
@@ -103,8 +109,12 @@ const createSession = async (id) => {
       labels: `pi-session=${id}`,
       volumes: [
         `${STATE_DIR}:/home/pi/.pi/agent`,
-        `${WORKSPACE_DIR}:/workspace`,
+        `${ENTRY_SCRIPT}:/usr/local/bin/pi-worker-entry:ro`,
+        ...(repo ? [`${TOKEN_FILE}:/run/secrets/git-clone-token:ro`] : []),
       ].join("\n"),
+      environment: repo
+        ? `GIT_CLONE_REPO=${repo}\nGIT_CLONE_TOKEN_FILE=/run/secrets/git-clone-token`
+        : undefined,
     },
   });
   // shortcut: "Deploy" (create + start) not "StartDeployment" (docker start only — fails on a fresh deployment with No such container).
@@ -126,7 +136,8 @@ const createSession = async (id) => {
     hostBridge: HOST_BRIDGE,
     onSignal: (sig) => notifySession(id, sig),
   });
-  await session.connect();
+  // repo sessions only reach pi after the in-container clone — allow it time
+  await session.connect(repo ? { initTimeoutMs: 120000 } : {});
   sessions.set(id, session);
   return { id, sessionId: session.stateInfo?.sessionId, sessionFile: session.stateInfo?.sessionFile };
 };
@@ -173,10 +184,14 @@ createServer(async (req, res) => {
     const m = path.match(/^\/sessions\/([^/]+)(\/.*)?$/);
     if (req.method === "POST" && path === "/sessions") {
       const body = await readBody(req);
+      const repo = typeof body?.repo === "string" ? body.repo.trim() : null;
+      if (repo && (!REPO_RE.test(repo) || !existsSync(TOKEN_FILE) ||
+          !/^GIT_CLONE_TOKEN=.+/m.test(readFileSync(TOKEN_FILE, "utf8"))))
+        return send(res, 400, { error: 'repo must be "owner/name" and pi/.env must define GIT_CLONE_TOKEN' });
       const id = `s${Date.now().toString(36)}${Math.floor(Math.random() * 0xffff)
         .toString(16)
         .padStart(4, "0")}`;
-      const created = await createSession(id);
+      const created = await createSession(id, repo);
       return send(res, 201, { ...created, ...(body?.name ? { name: body.name } : {}) });
     }
     if (req.method === "GET" && path === "/sessions") {

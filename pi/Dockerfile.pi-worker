@@ -26,10 +26,12 @@ RUN apt-get update \
 RUN npm install --global --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
     && npm cache clean --force
 
+COPY pi-worker-entry /usr/local/bin/pi-worker-entry
+
 USER pi
 
 # Pi sessions and configuration live under /home/pi/.pi/agent.
 # Mount this directory as a named volume to preserve sessions between runs.
-# Mount the project/worktree at /workspace.
-ENTRYPOINT ["pi"]
+# The workspace may be populated at start by pi-worker-entry from GIT_CLONE_REPO.
+ENTRYPOINT ["sh", "/usr/local/bin/pi-worker-entry"]
 CMD ["--mode", "rpc"]

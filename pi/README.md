@@ -11,11 +11,12 @@
 
 | file | role |
 |------|------|
-| `Dockerfile.pi-worker` | the image recipe (pi v1.5.2 via npm, node:24-bookworm-slim, non-root `pi` user, `ENTRYPOINT pi` + `CMD --mode rpc`) |
+| `Dockerfile.pi-worker` | the image recipe (pi v1.5.2 via npm, node:24-bookworm-slim, non-root `pi` user, `ENTRYPOINT sh pi-worker-entry` + `CMD --mode rpc`) |
 | `pi.sync.toml` | Komodo Resource Sync file — declares everything: builder, build, deployment |
-| `.dockerignore` | keeps the two runtime folders out of the image build context |
+| `.dockerignore` | keeps the runtime state out of the image build context |
 | `pi-agent-state/` | bind mount target for `/home/pi/.pi/agent` (runtime sessions; `models.json`, `settings.json` tracked in git) |
-| `pi-worker-workspace/` | bind mount target for `/workspace` (the worker's work products) — ignored by git |
+| `pi-worker-entry` | container-start script (mounted readonly as `/usr/local/bin/pi-worker-entry`, the image entrypoint): when `GIT_CLONE_REPO` is set it clones the repo into `/workspace` first, then execs pi |
+| `.env` | clone PAT dotenv file (gitignored; `GIT_CLONE_TOKEN=<pat>`) — mounted into `repo` session containers only |
 
 ## Before you start
 
@@ -73,6 +74,7 @@ terminal websockets. Endpoints (see `docs/superpowers/specs/2026-11-18-pi-rpc-ap
 cd ../api && npm start
 BASE=http://localhost:3000
 curl -s -XPOST $BASE/sessions -d '{"name":"demo"}'   # spawns a session container
+curl -s -XPOST $BASE/sessions -d '{"name":"demo","repo":"aliaksandrZh/04"}'   # also clones that repo into /workspace at container start (needs pi/.env with GIT_CLONE_TOKEN)
 curl -s $BASE/sessions
 # POST  /sessions/:id/rpc      {"type":"prompt","message":"..."}   (any RPC command)
 # GET   /sessions/:id/events?since=0&type=tool_execution_start
@@ -86,13 +88,18 @@ node rpc-smoke.mjs                                     # end-to-end check
 container and exposes `host_shell` (a tool that executes commands on the
 host through the api) plus the `/host-check` command.
 
-Sessions and files survive redeploys: state in `pi-agent-state/`, work
-products in `pi-worker-workspace/`, both visible on the host.
+Sessions survive redeploys: state in `pi-agent-state/`. Work products live only in the
+session container's `/workspace` (no host mount) — `POST /sessions {"repo": "owner/name"}`
+clones the repo into that workspace at container start (dotenv `pi/.env` with key
+`GIT_CLONE_TOKEN` — mounted read-only into that container only, token never touches api env).
 
 ## Gotchas
 
 - `--interactive` in `extra_args` is not decoration: `pi --mode rpc` lives on
   stdin, and without an open stdin the container exits 0 seconds after deploy.
+- The image entrypoint is `sh /usr/local/bin/pi-worker-entry` — the script is
+  a read-only mount on every deployment (`pi.sync.toml`, `api/server.mjs`);
+  run the image without that mount and the container exits at start.
 - The deployment references `pi-worker:latest` directly, not the Build
   resource: a Build-attached deployment deploys the build's tracked version
   marker, which can name a version that was never actually built.

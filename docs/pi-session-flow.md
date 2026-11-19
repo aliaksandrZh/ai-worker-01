@@ -15,14 +15,16 @@ your HTTP client ──> api/server.mjs (:3000) ──> Komodo Core (:9120) ─�
                                       pi-session-<id> container:
                                         main process = pi --mode rpc
                                         /home/pi/.pi/agent ← pi/pi-agent-state   (shared)
-                                        /workspace          ← pi/pi-worker-workspace (shared)
+                                        /workspace          (container-local; GIT_CLONE_REPO clones it at start)
 ```
 
 - `api/server.mjs` — the translator: HTTP → Komodo RPC (`komodo_client`) for lifecycle,
   Komodo terminal websocket for the pi data plane.
 - `pi-session-<id>` — one Komodo Deployment per session. The container's main process is
-  pi itself in RPC mode (`Dockerfile.pi-worker`: `ENTRYPOINT ["pi"]`, `CMD ["--mode","rpc"]`,
-  `--interactive --init` extra args keep its stdin open for attach).
+  the entry script
+  (`Dockerfile.pi-worker`: `ENTRYPOINT ["sh","/usr/local/bin/pi-worker-entry"]`,
+  `CMD ["--mode","rpc"]`, `--interactive --init` extra args keep stdin open for attach):
+  it runs the `GIT_CLONE_REPO` clone when set, then execs pi in RPC mode.
 - `pi/pi-agent-state/extensions/host-bridge.ts` — pi extension auto-loaded inside every
   session container; exposes `host_shell` (runs commands on the host) and `/host-check`.
 - pi's model comes from `pi/pi-agent-state/models.json` — Ollama on the host via
@@ -42,6 +44,7 @@ your HTTP client ──> api/server.mjs (:3000) ──> Komodo Core (:9120) ─�
 
 ```bash
 curl -s -XPOST localhost:3000/sessions -d '{"name":"todo-app"}'
+curl -s -XPOST localhost:3000/sessions -d '{"name":"todo-app","repo":"aliaksandrZh/04"}'   # also clones the repo into /workspace at start
 ```
 
 Expected: `{"id":"smwmfmffwed3c","sessionId":"01a1efd6-…","sessionFile":"/home/pi/.pi/agent/sessions/--workspace--/…jsonl","name":"todo-app"}`
@@ -58,7 +61,12 @@ Internally, in order:
      enables signal handling
    - `restart: "no"`, `auto_update: false`, `labels: "pi-session=<id>"`
    - `volumes`: `pi/pi-agent-state:/home/pi/.pi/agent` and
-     `pi/pi-worker-workspace:/workspace` (both shared between sessions)
+     `pi/pi-worker-entry:/usr/local/bin/pi-worker-entry:ro` (entry script, read-only)
+   - `environment` + one extra volume when the request carried `repo`: env `GIT_CLONE_REPO` /
+     `GIT_CLONE_TOKEN_FILE=/run/secrets/git-clone-token` and volume
+     `pi/.env:/run/secrets/git-clone-token:ro` — the entry script parses the dotenv key
+     `GIT_CLONE_TOKEN` from it and clones into the empty `/workspace` before exec'ing pi
+     (token never touches api env or Komodo config)
 3. `komodo.execute_and_poll("Deploy", { deployment })` — **Deploy, not StartDeployment**:
    Deploy creates and starts the container; StartDeployment only does
    `docker start` and fails with "No such container" on a freshly created deployment.
@@ -73,7 +81,8 @@ Internally, in order:
    frame must be `payload + 0x01` (Forward tag); output arrives as raw PTY bytes
    (echoes, CRLF — the API parser drops what isn't a protocol record).
 6. Handshake: the API sends `{"id":"api-1","type":"get_state"}` and the POST resolves
-   only when pi's response record arrives (20 s timeout). That response's `data`
+   only when pi's response record arrives (20 s timeout; 120 s for repo sessions whose
+   clone runs first). That response's `data`
    carries `sessionId` and `sessionFile` — pi writes its session there, on disk, in the
    shared mount, from the first message on.
 
@@ -102,8 +111,8 @@ curl -s -XPOST localhost:3000/sessions/smwmfmffwed3c/rpc \
   `success:false` payload.
 
 For the demo prompt above pi answered: 4 tool calls (`write`, `write`, `write`, `bash`
-with a `node --check` self-verification), then `agent_settled`, and the three files
-materialized on the host under `pi/pi-worker-workspace/` through the shared mount.
+with a `node --check` self-verification), then `agent_settled`, and the three files landed in the session container's
+`/workspace` (container-local — fetch them with the `bash` rpc command or host-bridge).
 
 ### 3. Observe: `GET /sessions/:id/events?since=<n>&type=<csv>` — MANDATORY to track runs
 
@@ -258,6 +267,7 @@ Verify afterwards: `GET /sessions` no longer lists the id and
 | env (api/.env) | default | meaning |
 |---|---|---|
 | `KOMODO_URL` / `KOMODO_API_KEY` / `KOMODO_API_SECRET` | `http://localhost:9120` / — | Komodo Core + api key |
+| clone token | `<repo>/pi/.env` | dotenv file (`GIT_CLONE_TOKEN=<pat>` key) mounted read-only into `repo` session containers |
 | `PORT` | `3000` | API listen port |
 | `PI_WORKER_DEPLOYMENT` | `pi-worker` | base deployment behind `/status` `/start` `/stop` |
 | `PI_WORKER_SERVER` | `Local` | Komodo server for session deployments |

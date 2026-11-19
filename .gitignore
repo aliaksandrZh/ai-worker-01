@@ -1,4 +1,3 @@
-pi/pi-worker-workspace/
 pi/pi-agent-state/**
 !pi/pi-agent-state/models.json
 !pi/pi-agent-state/settings.json
@@ -14,3 +13,4 @@ github-polling/.env
 github-polling/state.json
 github-polling/*.pem
 github-polling/*.private-key.pem
+pi/.env
