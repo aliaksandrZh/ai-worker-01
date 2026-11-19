@@ -14,3 +14,5 @@
 - [ ] Every service emits structured JSON logs with the correlation field set (timestamp, level, service, message, correlationId, repositoryId, workflowId, taskId, runId, eventId — null when absent; secrets never logged)
 - [ ] HTTP services expose readiness/liveness; workers expose heartbeat/last-successful-cycle
 - [ ] CI runs the unit test runner green
+- [ ] Health/metrics endpoints expose the §14 baseline: Poller lag/duration/errors/rate-limit-remaining; queue pending/oldest-job-age/claim-wait; Runs active/duration/startup/heartbeat-age/progress-age/timeout counts; reconciliation mismatch + orphan counts; Outbox pending/failed/dead-letter counts; DB size
+- [ ] Mandatory backups automated per decision 52/76: PostgreSQL dumps + profile/config repository snapshots on schedule; DB size monitoring in place

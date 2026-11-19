@@ -9,6 +9,7 @@
 **Status:** ready-for-agent
 
 - [ ] All 16 acceptance scenarios automated on the disposable GitHub repository
+- [ ] Repository pause behavior (decision 75) and revoked-PAT handling (decision 65) verified inside the Authorization / Queue / Command parser scenarios
 - [ ] The cross-cutting scenarios hold: cross-Workflow concurrency, restart recovery, callback outage + spool, Outbox duplicate control, cleanup
 - [ ] The suite runs green in CI on the release build
 - [ ] Phase-1 rollout config ships the planner profile only; profile-gated commands rejected via `agent_profile_not_configured`

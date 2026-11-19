@@ -14,4 +14,6 @@
 - [ ] Comment already edited when first seen → not accepted as a command; edits after processing never retrigger
 - [ ] Non-allowlisted user → rejected; GitHub 404 → rejected; transient error → stays `received`, check deferred
 - [ ] `arguments` is always `{}`; trailing text stored as user context for the Context Assembler
-- [ ] Acceptance scenarios "Command parser" and "Authorization" (`05` matrix) pass
+- [ ] Command on a paused repository (`is_enabled = false`) → rejected with a recorded reason, no Task (decision 75)
+- [ ] Revoked/expired PAT during authorization → surfaced as a system configuration error, no automatic fallback to another PAT (decisions 65, 66)
+- [ ] Acceptance scenarios "Command parser" and "Authorization" (incl. revoked-PAT handling, `05` matrix) pass

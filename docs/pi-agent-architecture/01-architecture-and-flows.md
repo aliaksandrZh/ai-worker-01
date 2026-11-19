@@ -100,7 +100,7 @@ Profile version images are built once when the version is created (local Docker 
 
 Versions are created only through the configuration plane (`config/agents/<profile>/` → Config Loader → Build Worker, decisions 55–56). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected via `PI_CODING_AGENT_DIR`. LLM model/provider selection is deferred to V2 (decision 56).
 
-Adding a profile should normally be configuration work, not a change to orchestration logic. Repository convention: keep each agent in its own directory (for example `agents/planner/`, `agents/coder/`, `agents/reviewer/`, `agents/test-designer/`), with its own Dockerfile/build context, Pi config, prompts, skills, and MCP configuration. The exact file layout can evolve, but profiles must not be entangled in one shared agent directory.
+Adding a profile should normally be configuration work, not a change to orchestration logic. Repository convention: keep each agent in its own directory (for example `config/agents/planner/`, `config/agents/coder/`, `config/agents/reviewer/`, `config/agents/test-designer/`), with its own Dockerfile/build context, Pi config, prompts, skills, and MCP configuration. The exact file layout can evolve, but profiles must not be entangled in one shared agent directory.
 
 ## 4. Data ownership
 

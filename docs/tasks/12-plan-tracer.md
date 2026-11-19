@@ -4,7 +4,7 @@
 
 **Spec:** `docs/pi-agent-architecture/06-command-reference.md` §3 (/plan), §13 (system notifications + required publications); `04-api-contracts.md` §3–§4; `03-state-machines.md` §2–§4; `05-v1-decisions.md` decisions 11, 12, 26, 33, 34, 36 (phase 1), 42, 57, 58, 59, 63; `01-architecture-and-flows.md` §6 (plan flow diagram), §15 (Pi mapping).
 
-**Blocked by:** 09, 10, 11, 08
+**Blocked by:** 09, 10, 11, 11b, 08
 
 **Status:** ready-for-agent
 

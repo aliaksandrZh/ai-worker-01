@@ -4,7 +4,7 @@
 
 **Spec:** `docs/pi-agent-architecture/06-command-reference.md` §4 (/code + workspace/git rules + mid-run blockers); `02-data-model.md` §16 (workspace); `05-v1-decisions.md` decisions 14, 26, 47, 50, 72, 74 (coder never touches forks), 80; `03-state-machines.md` §2 (Blocked).
 
-**Blocked by:** 12, 11, 10
+**Blocked by:** 12, 11, 11b, 10
 
 **Status:** ready-for-agent
 

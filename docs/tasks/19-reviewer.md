@@ -4,7 +4,7 @@
 
 **Spec:** `docs/pi-agent-architecture/06-command-reference.md` §5 (/review), §10 (thread context), §11 (automatic first review); `01-architecture-and-flows.md` §7 (PR flow); `04-api-contracts.md` §5 (reviewer data plane); `02-data-model.md` §16 (reviewer workspace); `05-v1-decisions.md` decisions 16, 17, 31, 45, 46, 64, 74.
 
-**Blocked by:** 12, 11, 10, 05
+**Blocked by:** 12, 11, 11b, 10, 05
 
 **Status:** ready-for-agent
 

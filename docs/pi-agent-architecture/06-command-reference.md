@@ -254,10 +254,11 @@ Claim-time recheck: a queued command starts when capacity becomes free, provided
 
 ## 13. System notifications (Outbox)
 
-The Orchestrator publishes orchestration-owned system notifications to GitHub through the Outbox (`action_type = comment`). Agent-owned writes go through GitHub MCP and never wait on the Outbox.
+The Orchestrator publishes orchestration-owned system notifications and control-command replies (`/status`, `/help`) to GitHub through the Outbox (`action_type = comment`). Agent-owned writes go through GitHub MCP and never wait on the Outbox.
 
 | Event | GitHub notification |
 |---|---|
+| `/status` or `/help` request (incl. the `nothing to stop` reply) | Yes (the command's own reply) |
 | Run failed, automatic retry scheduled | No (retry happens silently) |
 | Task finally failed (auto retries exhausted, including `TimedOut`) | Yes |
 | `/stop` cancelled the active Task and/or queued Tasks | Yes |

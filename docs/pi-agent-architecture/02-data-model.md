@@ -313,7 +313,7 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `agent_profile_id`
 - `version`
 - `container_image`
-- `source_directory` — Git directory `agents/<profile>/` containing `profile.yaml` (Dockerfile, `prompts/`, `skills/`) plus `source_commit_sha`, `config_snapshot`, `config_hash` (immutable snapshot pinned at version creation)
+- `source_directory` — Git directory `config/agents/<profile>/` containing `profile.yaml` (Dockerfile, `prompts/`, `skills/`) plus `source_commit_sha`, `config_snapshot`, `config_hash` (immutable snapshot pinned at version creation)
 - `runtime_type` (Pi initially)
 - `system_prompt`
 - `skills_configuration`
@@ -517,7 +517,7 @@ Use transactional claiming/locking and retry/backoff. Concurrency: each Workflow
 
 ## 20. OutboxAction
 
-Reliable external write/action queue. Used only for orchestration-owned system notifications: final Task failures, command rejections, cancellation confirmations. Agent GitHub operations (plan comments, coder summaries, reviews) are performed by agents via GitHub MCP and do not go through the Outbox.
+Reliable external write/action queue. Used only for orchestration-owned comments: system notifications (final Task failures, command rejections, cancellation confirmations) and control-command replies (`/status`, `/help`, `nothing to stop`). Agent GitHub operations (plan comments, coder summaries, reviews) are performed by agents via GitHub MCP and do not go through the Outbox.
 
 Fields:
 - `id`

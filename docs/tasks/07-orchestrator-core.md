@@ -15,3 +15,4 @@
 - [ ] Command selecting a missing/disabled/unready profile → rejected `agent_profile_not_configured`, no Task created
 - [ ] No Run ever starts while its Task is `Failed` (Failed→Queued transition precedes any new Run)
 - [ ] Within one Workflow, a code Run and a review Run never overlap (Workflow-scoped serialization)
+- [ ] While `Repository.is_enabled = false`: task-producing commands rejected, queued Tasks stay unclaimed, active Runs may finish; re-enabling resumes processing (decision 75)
