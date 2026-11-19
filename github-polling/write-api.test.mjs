@@ -1,7 +1,11 @@
 // Write API tests — route passthrough/validation against a stubbed fetch (App auth layer lives in poll.mjs).
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { setToken, installationToken, cred } from "./poll.mjs";
+import { setToken, installationToken, cred, gh } from "./poll.mjs";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { route } from "./write-api.mjs";
 
 const stub = (json, headers = {}, status = 200) => ({
@@ -157,6 +161,9 @@ describe("write-api passthrough routes", () => {
 });
 
 describe("write-api graphql passthrough (Projects V2)", () => {
+  const keys = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const gqlKeyFile = join(mkdtempSync(join(tmpdir(), "app-key-")), "gql-key.pem");
+  writeFileSync(gqlKeyFile, keys.privateKey.export({ type: "pkcs1", format: "pem" }));
   beforeEach(() => setToken("t"));
   afterEach(() => setToken(null));
 
@@ -164,7 +171,25 @@ describe("write-api graphql passthrough (Projects V2)", () => {
     const { status } = await run("POST", "/repos/own/r/graphql", { variables: {} }, async () => stub(1));
     assert.equal(status, 400);
   });
+  test("user tier: graphql goes out with the USER token, no app minting", async () => {
+    setToken(null);
+    process.env.GITHUB_APP_INSTALLATION_ID = "42";
+    process.env.GITHUB_USER_TOKEN = "usertok";
+    try {
+      const calls = [];
+      const impl = async (u, o) => (calls.push({ u: String(u), auth: o.headers.authorization }), stub({ data: { viewer: { login: "jsxhuz" } } }));
+      const { json } = await run("POST", "/repos/own/r/graphql", { query: "query{ viewer{ login } }" }, impl);
+      assert.deepEqual(json, { data: { viewer: { login: "jsxhuz" } } });
+      assert.equal(calls.length, 1); // no /access_tokens mint call
+      assert.equal(calls[0].auth, "Bearer usertok");
+    } finally {
+      delete process.env.GITHUB_USER_TOKEN;
+    }
+  });
   test("mints installation token and posts to /graphql as bearer", async () => {
+    setToken(null); // ladder decides, not an injected token
+    process.env.GITHUB_APP_ID = "5828763";
+    process.env.GITHUB_APP_KEY_FILE = gqlKeyFile;
     process.env.GITHUB_APP_INSTALLATION_ID = "42";
     try {
       const calls = [];
@@ -211,13 +236,13 @@ describe("auth ladder — user token adapter", () => {
     withApp();
     process.env.GITHUB_USER_TOKEN = "usertok";
     let seen;
-    await gh("/repos/own/r/issues", {}, async (u, o) => (seen = o, stub([1])));
+    await gh("/repos/own/r4/issues", {}, async (u, o) => (seen = o, stub([1])));
     assert.equal(seen.headers.authorization, "Bearer usertok");
   });
   test("app still works when user token unset (no deletion)", async () => {
     withApp();
     const calls = [];
-    await gh("/repos/own/r/issues", {}, async (u, o) => (calls.push({ u: String(u) }), calls.length === 1
+    await gh("/repos/own/r5/issues", {}, async (u, o) => (calls.push({ u: String(u) }), calls.length === 1
       ? stub({ token: "instok", expires_at: new Date(Date.now() + 9 * 60_000).toISOString() })
       : stub([1])));
     assert.equal(calls.length, 2);
