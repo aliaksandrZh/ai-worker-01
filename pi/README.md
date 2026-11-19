@@ -14,7 +14,8 @@
 | `Dockerfile.pi-worker` | the image recipe (pi v1.5.2 via npm, node:24-bookworm-slim, non-root `pi` user, `ENTRYPOINT sh pi-worker-entry` + `CMD --mode rpc`) |
 | `pi.sync.toml` | Komodo Resource Sync file — declares everything: builder, build, deployment |
 | `.dockerignore` | keeps the runtime state out of the image build context |
-| `pi-agent-state/` | bind mount target for `/home/pi/.pi/agent` (runtime sessions; `models.json`, `settings.json` tracked in git) |
+| `pi-agent-state/` | bind mount target for `/home/pi/.pi/agent` (runtime sessions; `models.json`, `settings.json`, `mcp.json` tracked in git) |
+| `pi-agent-state/mcp.json` | MCP servers for every session — local `github-mcp-server` (baked into the image), 4 pinned tools, token via `${GITHUB_API_TOKEN}` templating |
 | `pi-worker-entry` | container-start script (mounted readonly as `/usr/local/bin/pi-worker-entry`, the image entrypoint): when `GIT_CLONE_REPO` is set it clones the repo into `/workspace` first, then execs pi |
 | `.env` | clone PAT dotenv file (gitignored; `GIT_CLONE_TOKEN=<pat>`) — mounted into `repo` session containers only |
 
@@ -97,6 +98,23 @@ clones the repo into that workspace at container start (dotenv `pi/.env` with ke
 
 - `--interactive` in `extra_args` is not decoration: `pi --mode rpc` lives on
   stdin, and without an open stdin the container exits 0 seconds after deploy.
+- Sessions reach github.com in two ways: the official `github-mcp-server`
+  (baked in from `ghcr.io/github/github-mcp-server:v2.2.0`, exactly 4 tools pinned
+  in `pi-agent-state/mcp.json` via `GITHUB_TOOLS`) and native `git push` from the
+  clone. The token feeding both is `pi/.env`'s `GIT_CLONE_TOKEN` (currently the
+  `jsxhuz` PAT, same value as `github-polling`'s `GITHUB_USER_TOKEN`): the entry
+  script exports it for pi's mcp.json templating and installs a repo-local git
+  credential helper that re-reads the mounted file at push time — the token is
+  never stored in env beyond that export, in the clone config, or in remote URLs.
+  **Keep the exported value non-empty**: pi drops an MCP server whose `${VAR}`
+  resolves to empty ("MCP servers need attention" notify — which the api parks as
+  a blocked dialog); the entry exports a `pi-no-token` sentinel instead, so tokenless
+  sessions spawn the server and just fail per call.
+- Repo sessions created before the image rebuild have no `github-mcp-server`
+  binary: run the Komodo Build (`Builds → pi-worker → Run Build`) after editing
+  `Dockerfile.pi-worker`, otherwise `pi mcp list` in the session shows the server
+  command missing. The `pi` side needs no restart — `mcp.json` is read at session
+  start via the shared state mount.
 - The image entrypoint is `sh /usr/local/bin/pi-worker-entry` — the script is
   a read-only mount on every deployment (`pi.sync.toml`, `api/src/server.mjs`);
   run the image without that mount and the container exits at start.

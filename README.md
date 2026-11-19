@@ -11,6 +11,10 @@ HTTP client ──> api/src/server.mjs (:3000) ──> Komodo Core (:9120) ─�
 
 github-polling (standalone, no docker):
   src/poll.mjs (:—, console)  +  src/write-api.mjs (:3901)  →  github.com (GitHub App / PAT)
+
+Repo session containers reach github.com directly: in-container official GitHub MCP server
+(baked into the image, 4 pinned tools via pi/pi-agent-state/mcp.json) + native git push
+via the clone PAT the entry script exports/reads on demand (credential helper).
 ```
 
 ## Folders — what each is and how to run it
