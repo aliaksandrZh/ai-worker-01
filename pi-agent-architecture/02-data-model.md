@@ -25,9 +25,10 @@ erDiagram
     TASK ||--o{ JOB : schedules
     TASK }o--|| AGENT_PROFILE_VERSION : uses
     AGENT_PROFILE_VERSION ||--o{ PROFILE_ROUTING_RULE : selected_by
-    RUN }o--|| AGENT_SESSION : executes_in
+    RUN ||--|| AGENT_SESSION : executes_in
     CONTAINER_INSTANCE ||--o{ RUN : executes
     AGENT_SESSION ||--o{ CONTAINER_INSTANCE : has
+    RUN ||--|| RUN_CONTEXT_SNAPSHOT : fixed_by
     AGENT_PROFILE ||--o{ AGENT_PROFILE_VERSION : versions
     WORK_ITEM ||--o{ AGENT_COMMAND : receives
     GITHUB_COMMENT ||--o| AGENT_COMMAND : triggers
@@ -83,6 +84,8 @@ Constraints:
 - Unique `(repository_id, number)`.
 - Unique `github_node_id`.
 
+The Poller updates `title`, `body`, `labels`, and other synced fields whenever GitHub reports a newer `updated_at_github`; body edits trigger no Task by themselves. Existing `RunContextSnapshot`s stay immutable — a new Run assembles context from the currently synced state. A changed PR Head SHA never rewrites the SHA pinned on an already-created Review Task.
+
 ## 4. WorkItemLink
 
 Represents an explicit relationship between two GitHub WorkItems, for example an Issue and a PR created to implement it.
@@ -101,7 +104,7 @@ Constraints:
 
 Link detection (V1): GitHub timeline events synced by the Poller are the authoritative source — a closed event whose commit carries closing keywords (closes/fixes…, with `commit_id`) creates relation `closes`; a cross-referenced event creates relation `related_to`. Branch naming conventions (`agent/issue-<n>`) are only a hint and never create a link on their own. If GitHub reports no explicit link, none is created; V1 has no separate manual link management (explicit agent/admin-created links are future work).
 
-Closing one root WorkItem does not automatically close the related WorkItem or clean its Workflow in V1.
+Closing one root WorkItem does not automatically close the related WorkItem or clean its Workflow in V1. `relation_type` in V1 is limited to `closes` and `related_to`; `created_from`, `blocks`, and `custom` are reserved for future extensions (decision 79).
 
 ## 5. GitHubComment
 
@@ -162,17 +165,17 @@ Fields:
 - `processed_at`
 - `processing_error`
 
-Examples:
-- `issue_updated`
-- `issue_comment_created`
-- `comment_updated`
-- `comment_deleted`
-- `pull_request_opened`
-- `review_requested`
-- `review_request_removed`
-- `pull_request_synchronize`
-- `pull_request_closed`
-- `work_item_closed`
+Examples (normalized names, decision 78):
+- `work_item_created`
+- `work_item_updated`
+- `work_item_closed` (with `close_reason = merged` for merged PRs)
+- `issue_comment_created` / `issue_comment_updated` / `issue_comment_deleted`
+- `review_comment_created` / `review_comment_updated` / `review_comment_deleted`
+- `pull_request_review_submitted` / `pull_request_review_dismissed`
+- `review_requested` / `review_request_removed`
+- `pull_request_synchronized`
+
+`source` enumerates the detection path: `rest_resource_sync`, `timeline_api`, `snapshot_diff`, `full_reconciliation`.
 
 A merged Pull Request is treated as a closed WorkItem for lifecycle and cleanup purposes; no separate `pull_request_merged` event is required (`merged_at` is kept for history).
 
@@ -183,7 +186,7 @@ Deduplication should use stable external IDs where available, otherwise a determ
 Fields:
 - `id`
 - `repository_id`
-- `stream` (issues, PRs, comments, reviews, events, commits, etc.)
+- `stream` (issues, PRs, issue/PR conversation comments, PR reviews, PR inline comments, timeline events, etc.)
 - `cursor_value` (opaque string or timestamp/ID)
 - `last_success_at`
 - `last_attempt_at`
@@ -216,7 +219,7 @@ Suggested status values:
 
 A completed Task normally returns the long-lived Workflow to `waiting_for_human`. V1 does not require a separate permanent `completed` Workflow state because more Tasks may be requested later; root closure sets `closed`.
 
-In V1, keep one long-lived Workflow per root WorkItem (create it on the first accepted task-producing command). A completed operation normally returns it to `waiting_for_human` rather than permanently completing the Workflow, so later commands can append Tasks. A Task that finally fails also returns it to `waiting_for_human`; `failed` is reserved for unrecoverable integrity/state-corruption failures (see state machines). A root close marks it `closed`. V1 enforces one Workflow per WorkItem with a full `UNIQUE(work_item_id)` constraint (no historical workflows; a partial "one active" index is future work).
+In V1, keep one long-lived Workflow per root WorkItem (create it on the first accepted task-producing command). A completed operation normally returns it to `waiting_for_human` rather than permanently completing the Workflow, so later commands can append Tasks. A Task that finally fails also returns it to `waiting_for_human`; `failed` is reserved for unrecoverable integrity/state-corruption failures (see state machines). A root close marks it `closed`. V1 enforces one Workflow per WorkItem with a full `UNIQUE(work_item_id)` constraint (no historical workflows; a partial "one active" index is future work). A subsequently reopened root WorkItem does not resurrect its Workflow: the record stays `closed`, no second Workflow is created, and commands for the reopened item are rejected with a recorded reason (decision 73).
 
 ## 10. Task
 
@@ -231,6 +234,7 @@ Fields:
 - `status`
 - `trigger_command_id` (nullable)
 - `target_head_sha` (nullable; set by review Tasks — the pinned PR Head SHA this Task reviews)
+- `target_base_sha` (nullable; set by review Tasks — the pinned Base SHA used to form the diff locally via Git, decision 64)
 - Input artifacts are linked through `TaskArtifactInput` (many-to-many), not stored as an unbounded ID array.
 - `created_at`
 - `claimed_at`
@@ -243,6 +247,8 @@ Fields:
 Unique `(workflow_id, sequence)`.
 
 Tasks execute sequentially in V1. Explicit dependency relationships can be introduced if future workflows require branching.
+
+A Task may reach a terminal `Blocked` state when its Run ends with `outcome = needs_human_input` (mid-run blocker; see 03 §2 and 06 §4, decision 72). The one-unfinished-Task invariant is additionally enforced in PostgreSQL by a partial unique index and transactional creation with a Workflow-row lock (decision 79, 02 §23).
 
 ## 10a. TaskArtifactInput
 
@@ -275,6 +281,8 @@ Fields:
 Unique `github_comment_id` for recognized commands, or a unique external comment identifier plus parser version.
 
 One comment produces at most one AgentCommand; only the original (unedited) comment version is parsed. `waiting` was removed: queue waiting is expressed by `Task`/`OrchestrationJob` states and human waiting by `Workflow.status = waiting_for_human`.
+
+`arguments` is `{}` for every V1 command; text after the command line is preserved as user context and consumed by the Context Assembler — it is never parsed as positional arguments or flags (decision 79).
 
 ## 11a. Command semantics
 
@@ -328,6 +336,8 @@ Profile secrets live outside Git and PostgreSQL in host-managed files (for examp
 
 A Task references a profile version, so later profile changes do not retroactively alter task configuration.
 
+Profile versions are created exclusively through the configuration plane: the Config Loader reads `config/agents/<profile>/profile.yaml`, creates the `AgentProfile`/`AgentProfileVersion` rows, and the Build Worker builds the image locally (tag `agent-<profile>:v<n>`); a successful build sets `ready` (01 §2, decisions 55–56). The image is the sole source of Pi runtime configuration in V1: the Pi version is pinned at build time, and the profile's Pi configuration (settings, MCP, extensions, skills, prompts, system instructions) is baked read-only at `/opt/pi-agent/profile` and selected with `PI_CODING_AGENT_DIR`; LLM model/provider selection is deferred to V2. Each version additionally carries a mandatory `max_context_tokens` — the Context size limit for Task input; it must fit the profile model's context window with a reserve for the answer and is enforced by the Context Assembler (decision 63).
+
 ## 12a. AgentProfileRoutingRule
 
 Maps an operation to a profile, optionally scoped to a repository.
@@ -346,11 +356,12 @@ V1 ships a seeded global rule set (`repository_id = NULL`); repository-specific 
 
 ## 13. AgentSession
 
-One Pi session per Run attempt. The session is not shared across Tasks, Runs, or Agent Profiles: a retry creates a new Run and a new Pi Session; the previous session is retained until cleanup. A new Task always gets a new session. Session record remains after backing file deletion. The DB record is created by the Orchestrator (status `provisioning`) when the Run is prepared; the Runtime API provisions the backing files and writes runtime metadata back into the record.
+One Pi session per Run attempt. The session is not shared across Tasks, Runs, or Agent Profiles: a retry creates a new Run and a new Pi Session; the previous session is retained until cleanup. A new Task always gets a new session. Each AgentSession is one-shot and 1:1 with its Run (`run_id` unique): it is never pooled, reassigned, or reused — a terminated Session never returns to service (decision 57). Recovery after a Runtime restart may reopen the backing files of the same Run only. The DB record is created by the Orchestrator (status `provisioning`) when the Run is prepared; the Runtime API provisions the backing files and writes runtime metadata back into the record.
 
 Fields:
 - `id`
-- `task_id` (the Task whose attempt this session executes; a Task has one session per Run)
+- `run_id` (unique; the single Run this session has ever executed — AgentSession is 1:1 with Run)
+- `task_id` (denormalized reference for queries)
 - `agent_profile_version_id`
 - `runtime_session_id`
 - `session_file_path` (host-relative/managed path)
@@ -389,6 +400,23 @@ Fields:
 - `logs_deleted_at`
 
 Unique `(task_id, attempt_number)`. `attempt_number` is assigned by the Orchestrator when the Run is created; agents never change it.
+
+`Run.result_summary` is a short per-attempt diagnostic intended for `/status` and failure notifications; full results live in Artifacts — the summary does not duplicate artifact content (decision 79).
+
+## 14a. RunContextSnapshot
+
+Immutable record of what the Context Assembler assembled for one Run (decision 63).
+
+Fields:
+- `id`
+- `run_id` (unique — one snapshot per Run)
+- `task_id`
+- `content_hash`
+- `included_sources` (JSON)
+- `excluded_sources` (JSON, with the pruning reason per element)
+- `created_at`
+
+Snapshots are never modified. Pruning priority when the context exceeds limits: never drop the command, mandatory inputs, or the last approved plan; keep recent user answers and unfinished discussions first; drop older/less-significant comments; for reviewers keep unresolved review threads. No silent truncation: if mandatory input cannot fit, the Run is not started and the Task fails with `context_too_large`.
 
 ## 15. ContainerInstance
 
@@ -434,6 +462,8 @@ V1 uses plain directories on persistent host storage, not named Docker volumes: 
 
 A coder Task works on `agent/issue-<number>` based on the default-branch HEAD captured at first provision (`base_sha`); later coder Tasks in the same Workflow, and retries, continue the existing agent branch. The Workspace DB record is created by the Orchestrator on the Task's first Run and is reused by retries; the Runtime API provisions the physical storage.
 
+Reviewer workspaces are provisioned from the pinned pair `target_head_sha`/`target_base_sha` — the Runtime obtains both Git revisions and forms the diff locally (GitHub `pulls/{n}/files` is not used as the diff source, decision 64). Fork-PR heads are checked out from the PR head ref of the base repository at the pinned SHA in a fresh read-only workspace; fork code is treated as untrusted — its scripts/builds/tests are never run automatically (decision 74). The coder `base_sha` is captured at first provision; V1 performs no automatic rebase onto a moved default branch — a manual rebase before PR creation may be required (accepted limitation, decision 72).
+
 ## 17. Artifact
 
 Fields:
@@ -446,7 +476,7 @@ Fields:
 - `metadata`
 - `created_at`
 
-Artifacts provide explicit handoff between agents. Avoid relying only on one agent's conversation history.
+Artifacts provide explicit handoff between agents. Avoid relying only on one agent's conversation history. Plan Artifacts carry no approval status in V1 — approval of the latest successful plan is expressed by the command that consumes it (`/code`, see 06 §4, decision 80). Since artifacts are immutable, a plan revision always means a new planning Task and a new Artifact.
 
 V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's token budget); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future. An Artifact of `type = log_reference` points to the Run log directory on host storage; its content is not copied into PostgreSQL.
 
@@ -463,7 +493,7 @@ Fields:
 
 Unique `(run_id, event_id)`.
 
-Events include started, progress, tool activity, heartbeat, permission_blocked (not progress; resets no timers), artifact produced, completed, failed, cancelled.
+Events (normalized names, mapped from pi RPC events — 04 §4, decisions 58, 68): `agent_started`, `turn_started`, `turn_completed`, `assistant_output` (aggregated text deltas), `tool_started`, `tool_progress`, `tool_completed`, `agent_settled`, `heartbeat`, `permission_blocked`, `artifact_produced`, `completed`, `failed`, `cancelled`. Progress counts: non-empty assistant text deltas (aggregated), tool-execution start/update/end, turn completion, artifact creation; heartbeat, thinking deltas, queue updates, and bare process liveness never count as progress. `permission_blocked` is not progress and resets no timers.
 
 ## 19. OrchestrationJob
 
@@ -483,7 +513,7 @@ Fields:
 - `created_at`
 - `updated_at`
 
-Use transactional claiming/locking and retry/backoff. Concurrency: each Workflow holds at most one unfinished Task; a global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds the total number of concurrently running Runs across Workflows — extra jobs wait in the queue. Queue order: FIFO by `available_at`, then `priority`; `/stop` is a control action handled immediately outside the queue.
+Use transactional claiming/locking and retry/backoff. Concurrency: each Workflow holds at most one unfinished Task; a global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds the total number of concurrently running Runs across Workflows — extra jobs wait in the queue. Queue order: FIFO by `available_at`, then `priority`; `/stop` is a control action handled immediately outside the queue. The cap counts Runs in states `Claimed`, `Starting`, `Running`, and `Stopping` (awaiting confirmed stop of processes/container); the slot is released only at the Run's terminal state plus confirmed stop — queued/pending work occupies no slot (decision 75).
 
 ## 20. OutboxAction
 
@@ -494,7 +524,7 @@ Fields:
 - `repository_id`
 - `work_item_id`
 - `task_id` (nullable)
-- `action_type` (`comment`, `create_branch`, `create_pr`, `submit_review`, `review_comment`, etc.)
+- `action_type` (`comment` in V1 — the Outbox publishes orchestration-owned system notifications only; agent GitHub writes go through GitHub MCP and never through the Outbox)
 - `payload`
 - `status`
 - `attempts`
@@ -506,15 +536,24 @@ Fields:
 
 Unique `idempotency_key`.
 
+Delivery policy (V1, decision 67): transient failures (network, 5xx, 429, rate-limit 403) retry with exponential backoff — max interval 1 hour, total retry window 24 hours; permanent errors (401, regular 403, 404, 422) and transient exhaustion after 24 hours move the action to a retained `dead_letter` state (payload, attempts, and last error kept; surfaced in host logs and health status). Duplicate control: the delivered comment carries an invisible HTML-comment marker containing `idempotency_key`; after an ambiguous timeout the Outbox checks existing comments for the marker before re-sending; a single dispatcher owns one action at a time via a DB lease. The V1 guarantee is at-least-once delivery with best-effort deduplication.
+
 ## 21. Authorization configuration
 
-V1 repository configuration should contain:
+Desired authorization configuration lives in YAML (01 §2, decisions 55, 66): `system.yaml` holds the global bot identity (`github.bot_login`) and command-grammar/parser settings; `repositories.yaml` holds per repository: the allowlist of permitted logins, permitted commands, permitted WorkItem types, and the authorization policy. The Config Loader validates the configuration at startup — including checking via `GET /user` that the PAT identity matches `github.bot_login`; a mismatch is a configuration error.
+
+Contents per repository:
 - Minimum GitHub permission required (`write`).
 - Allowlist of permitted logins: enabled by default and seeded with the repository owner's account; a non-empty allowlist requires both Write permission and membership; an explicitly emptied allowlist disables list filtering, leaving the Write-permission baseline.
-- Bot identity.
-- Command policy.
+- Permitted commands and WorkItem types.
 
-Authorization should be evaluated when the command is processed. Removing a user from the allowlist prevents future commands; it does not interrupt an already-running Task.
+Authorization mechanics (decision 66):
+- Write permission is verified with `GET /repos/{owner}/{repo}/collaborators/{username}/permission`; `write` and `admin` are accepted, `maintain` is treated as `write`, `triage` as `read`.
+- Results are cached for at most 60 seconds; a stale cache is rechecked when a queued Task is claimed.
+- GitHub `404` for the collaborator lookup rejects the command; transient GitHub errors (5xx, network, rate limits — honoring `Retry-After`/`X-RateLimit-Reset`) leave the command `received` and defer the check.
+- A PAT without sufficient scope to perform the check is a system configuration error, not a per-user rejection.
+
+Authorization is evaluated when the command is processed. Removing a user from the allowlist prevents future commands; it does not interrupt an already-running Task.
 
 ## 22. Root closure and retention
 
@@ -526,15 +565,19 @@ When the root WorkItem closes:
 - The Workflow storage tree (workspace directories, per-Run `pi-session/` and `logs/`) is deleted.
 - DB records are retained and marked with storage cleanup/deletion timestamps/status.
 
+PostgreSQL retention in V1: no automatic deletion of any orchestration history — Workflows, Tasks, Runs, Artifacts, comments, reviews, events, tombstones, and audit records are kept indefinitely; regular backups and database size monitoring are mandatory; archival and partitioning are future work (decision 76).
+
 ## 23. Recommended indexes
 
 - WorkItem: `(repository_id, number)` unique; `github_node_id` unique.
 - GitHubComment: `(kind, github_comment_id)` unique; `(work_item_id, created_at_github)`.
+- AgentSession: `run_id` unique (one-shot sessions, decision 57).
+- RunContextSnapshot: `run_id` unique.
 - GitHubEvent: `(repository_id, processing_status, received_at)`; `(source, dedupe_key)` unique where applicable.
 - SyncCursor: `(repository_id, stream)` unique.
 - Workflow: `(work_item_id)` unique for one long-lived V1 Workflow; `(status, updated_at)`.
 - WorkItemLink: `(source_work_item_id, target_work_item_id, relation_type)` unique.
-- Task: `(workflow_id, sequence)` unique; `(status, created_at)`; `trigger_command_id` unique where non-null if one command creates at most one Task.
+- Task: `(workflow_id, sequence)` unique; `(status, created_at)`; `trigger_command_id` unique where non-null if one command creates at most one Task; plus `ux_task_one_unfinished_per_workflow` — partial unique index on `task(workflow_id)` WHERE `status` IN (`Queued`, `Claimed`, `Starting`, `Running`); Task/Job creation additionally locks the Workflow row (`SELECT … FOR UPDATE`) and rechecks the invariant (decision 79).
 - Workspace: `task_id` unique.
 - Run: `(task_id, attempt_number)` unique.
 - AgentCommand: comment ID unique; `(status, created_at)`.

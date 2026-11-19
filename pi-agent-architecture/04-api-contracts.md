@@ -40,16 +40,7 @@ Returns workflow status, root WorkItem, current task, and task summaries.
 
 `GET /api/v1/tasks/{taskId}`
 
-`POST /api/v1/tasks/{taskId}/retry`
-
-`POST /api/v1/tasks/{taskId}/cancel`
-
-Retry request:
-```json
-{
-  "reason": "Retry after correcting runtime configuration"
-}
-```
+There are no admin HTTP endpoints for task management in V1 (decision 65): task retry and cancellation flow only through the GitHub command path (`/retry`, `/stop`).
 
 ### Commands
 
@@ -101,7 +92,7 @@ Admission: if the target Workflow already has an unfinished Task (queued/claimed
 
 `POST /internal/runtime/runs/{runId}/start`
 
-Ownership: the Orchestrator owns the DB rows — it creates the Run (`starting`), the AgentSession (`provisioning`, one per Run), and the Task's Workspace (created on the first Run, reused by retries). The Runtime API provisions the physical resources — Pi session files, workspace directory, container and mounts, the per-Run log directory — and returns runtime metadata. The request IDs act as idempotency/resource keys; there are no separate create-session/create-workspace endpoints.
+Ownership: the Orchestrator owns the DB rows — it creates the Run (`starting`), the AgentSession (`provisioning`, one per Run), and the Task's Workspace (created on the first Run, reused by retries). The `input` sent here is the Context Package the Orchestrator's Context Assembler built and froze as the Run's immutable `RunContextSnapshot` (02 §14a, decision 63); the Bridge converts it to one structured Markdown message and delivers it to Pi with a single RPC `prompt`. The Runtime API provisions the physical resources — Pi session files, workspace directory, container and mounts, the per-Run log directory — and returns runtime metadata. The request IDs act as idempotency/resource keys; there are no separate create-session/create-workspace endpoints.
 
 ```json
 {
@@ -126,11 +117,13 @@ Response:
 {
   "runId": "run_123",
   "runtimeSessionId": "pi-session-…",
-  "sessionFilePath": "/home/pi/.pi/agent/sessions/…",
+  "sessionFilePath": "/var/lib/pi-agent/workflows/<workflow_id>/runs/<run_id>/pi-session/<session-file>",
   "containerInstanceId": "container_123",
   "status": "starting"
 }
 ```
+
+The start response's `sessionFilePath` is the actual path discovered by the Bridge after starting Pi with `--session-dir` pinned to the per-Run host directory and `--session-id = <runId>` (decision 57).
 
 ### Send input to active runtime (removed from V1)
 
@@ -205,6 +198,8 @@ Completion:
 }
 ```
 
+A `completed` callback may carry `outcome`: `completed` (default) or `needs_human_input` — the agent finished after publishing a mid-run blocker question and checkpointing work to the agent branch; the Task ends in the terminal `Blocked` state (06 §4, decision 72).
+
 Failure:
 
 `POST /internal/runtime/runs/{runId}/failed`
@@ -222,6 +217,50 @@ Failure:
 
 Callbacks should be idempotent using `eventId`. The Orchestrator owns Task/Workflow transitions; agents report facts/results but do not directly set orchestration status.
 
+### Runtime Bridge V1 contract (decisions 58–61)
+
+**Input delivery.** The Bridge launches Pi in `--mode rpc` and delivers the entire Task input as a single RPC `prompt` containing the structured content rendered from the Run's `RunContextSnapshot`. Task input is never passed through environment variables and never mounted as a separate input file in V1. A successful RPC response means the prompt was accepted, not that the work finished; the Bridge then waits for `agent_settled` (which also covers automatic continuations/retries).
+
+**Event source.** Realtime events are read exclusively from Pi's RPC stdout JSONL stream; the session `.jsonl` file under the session directory is saved history, not an event source. `stderr` is used for Bridge and Pi diagnostics only. Mapping (pi event → RunEvent):
+
+| Pi RPC event | RunEvent |
+|---|---|
+| `agent_start` | `agent_started` |
+| `turn_start` | `turn_started` |
+| `turn_end` | `turn_completed` |
+| `message_update` (text delta) | `assistant_output` (aggregated) |
+| `tool_execution_start` | `tool_started` |
+| `tool_execution_update` | `tool_progress` |
+| `tool_execution_end` | `tool_completed` |
+| `agent_settled` | `agent_settled` |
+
+Progress counts: non-empty assistant text deltas (aggregated before persistence so one DB event does not spawn per token), tool-execution start/update/end, turn completion, artifact creation. Heartbeat, thinking deltas, `queue_update`, and bare liveness are not progress.
+
+**Run result.** After `agent_settled`, the agent must have written a structured `result.json` in the Run's writable directory:
+
+```json
+{
+  "schemaVersion": 1,
+  "summary": "Implementation completed",
+  "artifacts": [
+    { "type": "implementation_summary", "format": "markdown", "path": "artifacts/summary.md" }
+  ],
+  "requiredPublications": [
+    { "toolCallId": "call-123", "kind": "issue_comment", "externalId": "github-comment-id" }
+  ]
+}
+```
+
+The Bridge validates the manifest and artifact files (they must stay within the allowed directory), derives `branch`//`commitSha` itself via Git, correlates `requiredPublications` with `tool_execution_end` records (verifying the GitHub publications actually happened and without errors — the verification mechanism behind decision 42), and posts the normalized result via `/completed`.
+
+**Authentication.** The Runtime API creates a fresh random credential per Run, delivered to the Bridge as a read-only secret file (not a regular environment variable, never exposed to Pi). The credential is stored hashed in PostgreSQL, allows only the callbacks of that specific `runId`, and is revoked after terminal delivery is confirmed.
+
+**Sender resilience.** Callbacks are written to a durable spool on persistent host storage (`runs/{run_id}/callback-spool/`) before being sent. Network errors, 5xx, and 429 are retried with exponential backoff using the same `eventId`; heartbeats may be coalesced to the latest value; lifecycle and terminal callbacks are never silently dropped. After a Bridge restart, undelivered callbacks are redelivered from the spool. The delivery cycle ends only when the Runtime API confirms persistence of the terminal callback — the next Run for the same Task does not start until the previous Run's termination is fixed (scope: same Task/Workflow — see `open-questions.md`).
+
+**Graceful stop (from `/stop`).** Orchestrator → Runtime API → Bridge control signal; then: (1) RPC `clear_queue` removes queued messages first (an `abort` alone can continue processing queued messages); (2) `abort` and `abort_bash`; (3) wait up to ~30 s for `agent_settled`; (4) close Pi's stdin for a graceful exit; (5) SIGTERM, then SIGKILL if the process remains; (6) verify child processes are stopped; (7) post the terminal `cancelled` callback.
+
+The Execution Host Monitor posts telemetry to `POST /internal/runtime/monitor/telemetry` with its own host credential (decision 62); the Runtime API stores the signal timestamps the Orchestrator uses for reconciliation.
+
 ## 5. GitHub write adapter
 
 Conceptual operations:
@@ -236,7 +275,7 @@ Conceptual operations:
 
 Agent profiles perform their GitHub operations through GitHub MCP (reading, commenting, submitting reviews) under their permission allow-list; all agent-owned GitHub writes go directly through the agent. The Outbox is reserved exclusively for orchestration-owned system notifications: final Task failures, command rejections, cancellation confirmations (see 06 §13).
 
-The reviewer Task input should include the pinned PR Head SHA (`target_head_sha`), diff, relevant conversation comments, submitted reviews, and inline review threads. The reviewer must report which SHA it reviewed.
+The reviewer Task input should include the pinned PR Head SHA (`target_head_sha`) and Base SHA (`target_base_sha`), the Git-formed diff, relevant conversation comments, submitted reviews, and inline review threads (unresolved threads first). The reviewer must report which SHA it reviewed. The diff is formed locally from the two pinned revisions during workspace provisioning — GitHub `pulls/{n}/files` is not used as the diff source (3 000-file cap). Fork-PR heads are checked out from the PR head ref of the base repository at the pinned SHA; fork code is treated as untrusted (decision 74).
 
 ## 6. Polling API / internal integration
 
@@ -246,6 +285,7 @@ The poller may be a scheduled worker, not an HTTP API. Its contract is:
 - Persist upserts and event records.
 - Advance cursor only after persistence succeeds.
 - Never start agent work directly.
+- Commit history is not synchronized in V1: PR head/base SHAs are stored and commit metadata is read from Git during workspace preparation; `pulls/{number}/commits` may be consulted ad hoc (decisions 64, 77).
 
 ## 7. Errors
 
@@ -269,13 +309,15 @@ Suggested error categories:
 - Timeout.
 - Storage failure.
 
+Error codes used across the system: `agent_profile_not_configured`, `agent_image_not_ready`, `agent_profile_not_ready`, `review_head_changed_before_execution`, `review_request_removed_before_execution`, `review_source_unavailable`, `github_publication_failed`, `startup_timeout`, `idle_timeout`, `context_too_large`, `required_permission_denied`, `task_not_retryable`.
+
 ## 8. Idempotency and concurrency
 
 - Start Run: idempotency key = `runId`; `agentSessionId`/`workspaceId` act as resource keys.
 - Callback: unique event ID per Run.
 - Command: unique GitHub comment ID; duplicate poll deliveries cannot repeat the action.
-- GitHub write: Outbox idempotency key (system notifications only).
+- GitHub write: Outbox idempotency key (system notifications only; duplicate control via the invisible HTML-comment marker and per-action dispatcher lease — at-least-once with best-effort deduplication, decision 67).
 - Polling: external IDs/fingerprints.
 - Task claim: transaction/lease.
-- V1 global execution concurrency limit = 1.
+- V1 global execution cap: `max_concurrent_runs` (default 10, Orchestrator configuration; the `system.yaml` initial value for a single execution host may be lower) bounds concurrently running Runs across Workflows (see 02 §19).
 - Commands are idempotent by GitHub comment ID; `/status`, `/stop`, `/help`, and `/retry` do not create new Tasks (`/retry` creates a new Run on the last failed Task).

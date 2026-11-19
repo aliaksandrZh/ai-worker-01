@@ -18,7 +18,7 @@ Examples:
 @pi-worker /review
 ```
 
-The bot mention is required in V1. The command is a slash-prefixed verb. `/agent plan` may be supported later as an alias, but it is not the canonical syntax in this draft. The actual bot account name is configured per installation/repository.
+The bot mention is required in V1. The command is a slash-prefixed verb. `/agent plan` may be supported later as an alias, but it is not the canonical syntax in this draft. The bot account name is configured globally in `system.yaml` (`github.bot_login`) and validated against the PAT identity (`GET /user`) at startup; per-repository allowlists and permitted commands live in `repositories.yaml` (decisions 55, 66).
 
 Common rules:
 
@@ -84,7 +84,7 @@ Purpose: start implementation of the approved plan.
 Preconditions:
 - Target must be an open Issue.
 - Workflow must be `waiting_for_human`.
-- There must be a successful plan Artifact (the latest successful planning Task); sending `/code` itself is the explicit approval of that plan, unless a repository configuration explicitly permits implementation without a plan.
+- There must be a successful plan Artifact (the latest successful planning Task); sending `/code` itself is the explicit approval of that plan. There is no implement-without-plan mode in V1 (decision 80).
 - No unfinished Task for the Workflow may exist (a same-Workflow command after another one is rejected at admission).
 
 Behavior:
@@ -101,7 +101,7 @@ Workspace and Git rules (applied when the coder phase is enabled):
 - Push uses a fine-grained GitHub PAT with Contents write (repository-scoped), mounted read-only at `/run/secrets/<name>` and exposed via a temporary credential helper; the token is never stored in remotes or git config.
 - Commits are authored as the dedicated bot account owning the PAT (name + noreply email); no signing by default; force push is forbidden; direct push to the original repository, no fork.
 
-Mid-run blockers: the agent posts a comment describing the blocker, the user replies with a normal comment and reruns `/code` to continue — a new Task/Run whose context includes the answers.
+Mid-run blockers: the agent publishes its question to the Issue via GitHub MCP, checkpoints partial results and changes to the agent branch, and finishes normally — the Run ends `Succeeded` with `outcome = needs_human_input`, the Task reaches the terminal `Blocked` state, and the Workflow returns to `waiting_for_human`. After the user replies, the next command (e.g. `/code`) creates a new Task/Run with a new Pi session; the new workspace continues from the current agent branch. Uncommitted changes are not guaranteed to survive (decision 72).
 
 Automatic PR creation is not done in V1; the preferred future path is an explicit `/create-pr` command (an explicit user action, not implicit profile configuration). Pushing the branch and reporting it are the agreed baseline.
 
@@ -115,7 +115,7 @@ Preconditions:
 - No review Task for the same Workflow may currently be running.
 
 Behavior:
-1. Read the current PR Head SHA and Base SHA, and pin the Head SHA on the Task (`target_head_sha`).
+1. Read the current PR Head SHA and Base SHA, and pin both on the Task (`target_head_sha`, `target_base_sha`); the diff is later formed locally via Git from these revisions (decision 64).
 2. Create a `review` Task using the `reviewer` profile.
 3. Create a fresh workspace at the pinned Head SHA. It must not reuse the coder's writable workspace. Make it read-only where possible.
 4. Create a new Pi session.
@@ -126,6 +126,8 @@ Behavior:
 SHA handling: if the PR Head SHA changed before a queued review Task starts, the Task is cancelled (`review_head_changed_before_execution`) and a system notification asks the user to run `/review` again. If the current SHA cannot be resolved at execution time, the start is deferred until sync recovers.
 
 Each explicit `/review` comment is a distinct review request, even if the Head SHA has not changed. Duplicate delivery of the same GitHub comment must not create another review.
+
+Draft and fork PRs (decision 74): no automatic initial review is created while a PR is draft — when it becomes ready for review (bot still requested), the initial review Task is created; explicit `/review` is allowed on a draft PR and the result is marked as a draft review (marking mechanism in `open-questions.md`). Fork PRs are reviewable: checkout from the PR head ref of the base repository at the pinned `head_sha` in a fresh read-only workspace; fork code is untrusted, so its scripts/builds/tests are never executed automatically; if the head cannot be resolved, the Task fails with `review_source_unavailable`. The coder never works against forks.
 
 ## 6. `/test-cases`
 
@@ -162,7 +164,7 @@ WorkItem: Issue #123
 Workflow: Active
 
 Current Task:
-- Type: implement | Status: Running | Agent: coder | Run: 1/2
+- Type: implement | Status: Running | Agent: coder | Run attempt: #2
 - Started: 14:32 | Duration: 18m
 
 Execution:
@@ -175,14 +177,14 @@ Last completed Task:
 - plan — Succeeded
 ```
 
-Omit sections that do not apply (no Run before creation, no container before provisioning); include the last error/rejection reason when present.
+Omit sections that do not apply (no Run before creation, no container before provisioning); include the last error/rejection reason when present. `Run attempt: #N` is the absolute attempt number within the Task (automatic and manual retries included); there is no fixed retry denominator, so no total is shown (decision 79).
 
 ## 8. `/stop`
 
 Purpose: request cancellation of the active Task and any queued work of this WorkItem's Workflow.
 
 Behavior:
-1. If a Task is running, send a graceful stop/cancel request to the Agent Runtime; the Runtime asks Pi/processes to stop safely, then stops the container.
+1. If a Task is running, send a graceful stop/cancel request to the Agent Runtime; the Runtime asks Pi/processes to stop safely, then stops the container. The exact Bridge stop sequence is defined in 04 §4 (decision 61): RPC `clear_queue` → `abort`/`abort_bash` → wait for `agent_settled` → close stdin → SIGTERM/SIGKILL → verified child-process teardown → terminal `cancelled` callback.
 2. Mark Run/Task `cancelled` after runtime confirmation or reconciliation.
 3. Cancel ALL queued Tasks of the same Workflow (together with their Jobs); otherwise queued work would start automatically after the stop, contradicting the intent of `/stop`.
 4. Keep the Workflow storage (session/log files and the workspace directory) so results can be inspected or a new Task can be created later.
@@ -199,7 +201,8 @@ Purpose: publish the command reference in a short GitHub comment.
 
 Behavior:
 - Does not create a Workflow or Task.
-- Shows commands valid for the current target type and their short descriptions.
+- Shows commands valid for the current target type and their short descriptions; commands that are phase-gated, profile-gated, or invalid for the current Workflow state are omitted.
+- Adapts to the current Workflow state; one comment.
 - May link to repository documentation for full usage.
 
 ## 9a. `/retry`
@@ -218,7 +221,9 @@ Behavior:
 3. Create a new Pi session (never continue the previous session).
 4. Start the Run; further behavior follows the original command's task type.
 
-Automatic retries exist only for transient infrastructure errors before a Run starts executing; after execution began, `/retry` is the recovery path. The admin endpoint `POST /api/v1/tasks/{taskId}/retry` remains for operators.
+Automatic retries exist only for transient infrastructure errors before a Run starts executing; after execution began, `/retry` is the recovery path. There is no admin HTTP endpoint for task retry in V1 (decision 65): `/retry` is available only as a GitHub command.
+
+Processing (decision 70): in one transaction the Orchestrator moves the Task from `Failed` to `Queued` and creates the new OrchestrationJob; the Task then passes `Claimed → Starting → Running` as usual. The new Run gets `attempt_number + 1` and a new Pi session; previous Runs and the Task's input artifacts (including the approved plan) are reused unchanged. If the pinned `AgentProfileVersion` is `disabled` or not `ready`, `/retry` is rejected with `agent_profile_not_ready` and the Task remains `Failed`.
 
 ## 10. PR comment and review-thread context
 
@@ -233,6 +238,7 @@ Separate from comment commands:
 - Each review Task pins the PR Head SHA at creation (`target_head_sha`); SHA drift before a queued Task starts cancels the Task with `review_head_changed_before_execution` and a system comment asks for a new `/review`.
 - A new commit (`pull_request_synchronize`) updates PR data but does not trigger another review automatically.
 - Further reviews happen only through an explicit `@bot /review` command.
+- Removal of the review request is detected from two sources: the `review_request_removed` timeline event and a diff of the PR's current `requested_reviewers` against the last synced snapshot. Before starting an initial review, the Orchestrator re-checks that the bot is still among the requested reviewers; if the request was withdrawn before execution, the Task is cancelled with `review_request_removed_before_execution`. An already-executing review is not interrupted (decision 31).
 
 ## 12. Commands received while work is running
 
@@ -270,4 +276,4 @@ Fix the underlying issue and submit the command again (or use /retry).
 
 The earlier TODO about a separate "proceed after answering questions" command is resolved: plan questions and answers are ordinary comments, `/plan` reruns the planning iteration over them, and `/code` (which itself approves the latest plan) starts implementation. Aliases were considered and dropped (`/plan-continue` etc.) — users repeat `/plan` and `/code`.
 
-Required publications: Task `succeeded` requires confirmed publication of the agent's mandatory results via GitHub MCP — plan/questions for the planner, push + result summary for the coder, review + inline comments for the reviewer, scenarios for the test-designer. The agent retries transient GitHub/MCP failures inside the Run, checking GitHub before re-posting to avoid duplicates. If confirmation still fails, the Run/Task fail with `error_code = github_publication_failed` (artifacts are kept), the Orchestrator sends a system notification (it never re-publishes the agent's result), and `/retry` is the recovery path.
+Required publications: Task `succeeded` requires confirmed publication of the agent's mandatory results via GitHub MCP — plan/questions for the planner, push + result summary for the coder, review + inline comments for the reviewer, scenarios for the test-designer. The agent retries transient GitHub/MCP failures inside the Run, checking GitHub before re-posting to avoid duplicates. Verification mechanism (decision 59): the agent's `result.json` manifest lists `requiredPublications` (toolCallId, kind, externalId); the Bridge correlates them with `tool_execution_end` records and its own Git facts before posting `completed`. If confirmation still fails, the Run/Task fail with `error_code = github_publication_failed` (artifacts are kept), the Orchestrator sends a system notification (it never re-publishes the agent's result), and `/retry` is the recovery path.
