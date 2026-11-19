@@ -1,9 +1,10 @@
 // GitHub repo activity poller — console monitoring, stateful across runs.
-// Auth: `gh auth token` when the gh CLI is installed+authed, else GITHUB_TOKEN, else anonymous.
+// Auth: installed GitHub App (GITHUB_APP_ID + PEM) → JWT → installation token; else `gh auth token`; else GITHUB_TOKEN; else anonymous.
 // Spec: docs/superpowers/specs/2026-11-19-github-polling-design.md
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createSign } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -122,18 +123,84 @@ const token = () => {
   return _token;
 };
 
-export const gh = async (path, params = {}, fetchImpl = fetch) => {
+// ---------------- GitHub App auth ----------------
+
+// server-to-server: JWT (RS256, ≤10 min) → installation access token (~10 min) → Bearer; no OAuth client secret involved.
+const DIR = dirname(fileURLToPath(import.meta.url));
+const appCfg = () => ({
+  id: process.env.GITHUB_APP_ID || "",
+  keyFile: process.env.GITHUB_APP_KEY_FILE || join(DIR, "app.pem"),
+});
+
+let _appKey = null, _appKeyFile = null, _noKey = false;
+const appKey = () => {
+  const { keyFile } = appCfg();
+  if (_appKey === null || _appKeyFile !== keyFile) {
+    _appKey = readFileSync(keyFile);
+    _appKeyFile = keyFile;
+  }
+  return _appKey;
+};
+
+const appReady = () => {
+  const { id, keyFile } = appCfg();
+  if (!id) return false;
+  try {
+    appKey();
+    return true;
+  } catch (e) {
+    if (!_noKey) {
+      _noKey = true;
+      console.warn(`github-polling: GITHUB_APP_ID=${id} but key “${keyFile}” unreadable (${e?.message}) — falling back to gh/PAT/anonymous`);
+    }
+    return false;
+  }
+};
+
+export const appJwt = () => {
+  const now = Math.floor(Date.now() / 1000);
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const head = enc({ alg: "RS256", typ: "JWT" });
+  const body = enc({ iss: Number(appCfg().id), iat: now - 60, exp: now + 540 });
+  const sig = createSign("RSA-SHA256").update(`${head}.${body}`).sign(appKey());
+  return `${head}.${body}.${sig.toString("base64url")}`;
+};
+
+const instTokens = new Map(); // repo → { token, exp }
+export const installationToken = async (repo, fetchImpl = fetch) => {
+  const cached = instTokens.get(repo);
+  if (cached && Date.now() < cached.exp - 60_000) return cached.token;
+  const instId = process.env.GITHUB_APP_INSTALLATION_ID
+    ?? (await gh(`/repos/${repo}/installation`, {}, fetchImpl)).items.id;
+  const minted = await gh(`/app/installations/${instId}/access_tokens`, {}, fetchImpl, { method: "POST" });
+  const exp = Date.parse(minted.items.expires_at) || Date.now() + 9 * 60_000;
+  instTokens.set(repo, { token: minted.items.token, exp });
+  return minted.items.token;
+};
+
+// credential for one GitHub REST call: explicit token (tests) → app (JWT for mint/install paths, install token for repos) → gh/PAT → anonymous
+const cred = async (path, fetchImpl) => {
+  if (_token !== null) return _token;
+  if (appReady()) {
+    const mintPath = path.match(/^\/repos\/[^/]+\/[^/]+\/installation\b|^\/app\//);
+    if (mintPath) return appJwt();
+    const repoPath = path.match(/^\/repos\/([^/]+\/[^/]+)/);
+    if (repoPath) return installationToken(repoPath[1], fetchImpl);
+    return appJwt();
+  }
+  return token();
+};
+
+export const gh = async (path, params = {}, fetchImpl = fetch, { method = "GET" } = {}) => {
   const url = new URL(path, "https://api.github.com");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const t = token();
-  const res = await fetchImpl(url, {
-    headers: {
-      accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
-      "user-agent": "github-polling",
-      ...(t ? { authorization: `Bearer ${t}` } : {}),
-    },
-  });
+  const t = await cred(path, fetchImpl);
+  const res = await fetchImpl(url, { method, headers: {
+    accept: "application/vnd.github+json",
+    "x-github-api-version": "2022-11-28",
+    "user-agent": "github-polling",
+    ...(t ? { authorization: `Bearer ${t}` } : {}),
+  } });
   const retryAfter = Number(res.headers.get("retry-after")) || 0;
   if (res.headers.get("x-ratelimit-remaining") === "0" || res.status === 429 || retryAfter)
     throw new RateLimitError(
@@ -313,7 +380,9 @@ export const main = async () => {
   const intervalMs = (Number(process.env.GITHUB_POLL_INTERVAL_SEC) || 60) * 1000;
   const state = readState(STATE_FILE);
   console.log(
-    `github-polling: ${repos.join(", ")} — every ${intervalMs / 1000}s — ${token() ? "authed via gh/GITHUB_TOKEN" : "anonymous (60 req/h)"}`,
+    `github-polling: ${repos.join(", ")} — every ${intervalMs / 1000}s — ${
+      appReady() ? `GitHub App id ${appCfg().id}` : token() ? "authed via gh/GITHUB_TOKEN" : "anonymous (60 req/h)"
+    }`,
   );
   while (true) {
     const t0 = Date.now();

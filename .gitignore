@@ -12,3 +12,5 @@ api/logs/
 # github-polling
 github-polling/.env
 github-polling/state.json
+github-polling/*.pem
+github-polling/*.private-key.pem

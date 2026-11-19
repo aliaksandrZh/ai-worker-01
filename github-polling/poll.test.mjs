@@ -1,14 +1,16 @@
-import { describe, test } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { generateKeyPairSync, verify } from "node:crypto";
 import {
   capRing, flatten, parseNextLink, snapshot, diffEntry, absorbFresh,
   eventLine, issueEventLine, commitLine, commentLine,
   readState, writeState,
   RateLimitError, AuthError, NotFoundError, ApiError,
   resolveToken, setToken, gh, paged,
+  appJwt, installationToken,
 } from "./poll.mjs";
 
 describe("capRing", () => {
@@ -269,6 +271,80 @@ const stub = (json, headers = {}, status = 200) => ({
   headers: new Headers(headers),
   json: async () => json,
   text: async () => (typeof json === "string" ? json : JSON.stringify(json)),
+});
+
+describe("GitHub App auth", () => {
+  const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pub = keys.publicKey.export({ type: "pkcs1", format: "pem" }).toString();
+  const keyFile = join(mkdtempSync(join(tmpdir(), "app-key-")), "key.pem");
+  writeFileSync(keyFile, keys.privateKey.export({ type: "pkcs1", format: "pem" }));
+
+  beforeEach(() => {
+    setToken(null);
+    process.env.GITHUB_APP_ID = "5828763";
+    process.env.GITHUB_APP_KEY_FILE = keyFile;
+  });
+  afterEach(() => {
+    delete process.env.GITHUB_APP_ID;
+    delete process.env.GITHUB_APP_KEY_FILE;
+    delete process.env.GITHUB_APP_INSTALLATION_ID;
+    setToken(null);
+  });
+
+  test("appJwt — RS256, iss/exp payload, signature verifies against the public key", () => {
+    const [h, b, s] = appJwt().split(".");
+    assert.equal(JSON.parse(Buffer.from(h, "base64url")).alg, "RS256");
+    const payload = JSON.parse(Buffer.from(b, "base64url"));
+    assert.equal(payload.iss, 5828763);
+    assert.equal(payload.exp - payload.iat, 600);
+    assert.ok(verify("RSA-SHA256", Buffer.from(`${h}.${b}`), pub, Buffer.from(s, "base64url")));
+  });
+
+  test("installationToken — discovers installation, mints, then caches", async () => {
+    const calls = [];
+    const impl = async (u, o) => {
+      calls.push({ u: String(u), method: o.method ?? "GET", auth: o.headers.authorization });
+      if (calls.length === 1) return stub({ id: 42 });
+      return stub({ token: "instok", expires_at: new Date(Date.now() + 9 * 60_000).toISOString() });
+    };
+    assert.equal(await installationToken("own/r1", impl), "instok");
+    assert.equal(await installationToken("own/r1", impl), "instok"); // cache hit — no network
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].method, "GET");
+    assert.match(calls[0].u, /\/repos\/own\/r1\/installation$/);
+    assert.ok(calls[0].auth.startsWith("Bearer eyJ"));
+    assert.equal(calls[1].method, "POST");
+    assert.match(calls[1].u, /\/app\/installations\/42\/access_tokens$/);
+  });
+
+  test("stale token re-mints; explicit installation id skips discovery", async () => {
+    process.env.GITHUB_APP_INSTALLATION_ID = "42";
+    const calls = [];
+    const impl = async (u, o) =>
+      (calls.push({ method: o.method ?? "GET" }),
+        stub({ token: `tok${calls.length}`, expires_at: new Date(Date.now() + 30_000).toISOString() }));
+    assert.equal(await installationToken("own/r2", impl), "tok1");
+    assert.equal(await installationToken("own/r2", impl), "tok2"); // expiring in 30s < 60s freshness window
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every((c) => c.method === "POST"));
+  });
+
+  test("gh routes repo paths through the installation token, mint path via JWT", async () => {
+    process.env.GITHUB_APP_INSTALLATION_ID = "42";
+    const calls = [];
+    const impl = async (u, o) => {
+      calls.push({ method: o.method ?? "GET", auth: o.headers.authorization, u: String(u) });
+      return calls.length === 1
+        ? stub({ token: "instok2", expires_at: new Date(Date.now() + 9 * 60_000).toISOString() })
+        : stub([1]);
+    };
+    const r = await gh("/repos/own/r3/issues", {}, impl);
+    assert.equal(r.items[0], 1);
+    assert.equal(calls[0].method, "POST");
+    assert.match(calls[0].u, /access_tokens/);
+    assert.equal(calls[1].method, "GET");
+    assert.equal(calls[1].auth, "Bearer instok2");
+  });
 });
 
 describe("gh", () => {
