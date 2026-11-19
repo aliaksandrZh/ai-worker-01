@@ -14,7 +14,7 @@
 - [ ] `routing.yaml` creates the seeded global rule set (`repository_id = NULL`) with per-repo override capability
 - [ ] `github.bot_login` mismatch with `GET /user` identity fails startup as a configuration error
 - [ ] Schema-invalid YAML fails startup with a diagnosable error and no partial DB rows
-- [ ] Cross-knob validation per `01 §16`: `poll_interval ≥ 30 s`, `heartbeat_interval < idle_timeout`, positive timeouts/windows, `per_page` within the GitHub API maximum, mandatory per-profile `max_context_tokens` — any violation fails startup with a diagnosable error
+- [ ] Cross-knob validation per `01 §16`: `poll_interval ≥ 30 s`, `heartbeat_interval < idle_timeout`, positive timeouts/windows, `per_page` within the GitHub API maximum, mandatory per-profile `max_context_tokens` (presence/positivity validated in V1 — the model-window fit check is V2, decision 56) — any violation fails startup with a diagnosable error
 - [ ] Cold-start gate (`01 §13`): until configuration synchronization completes successfully, the Orchestrator accepts no task-producing commands (rejected/deferred); `/status`, `/help`, and health endpoints remain available
 - [ ] Onboarding seeds each new repository's allowlist with the repository owner's account by default (decisions 7, 49)
 - [ ] `profile.yaml` bridge configuration (Runtime Bridge version + heartbeat/event cadence) is pinned into the AgentProfileVersion row (`02 §12`, decision 54)

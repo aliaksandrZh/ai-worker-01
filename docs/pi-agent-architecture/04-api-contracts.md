@@ -236,6 +236,8 @@ Callbacks should be idempotent using `eventId`. The Orchestrator owns Task/Workf
 
 Progress counts: non-empty assistant text deltas (aggregated before persistence so one DB event does not spawn per token), tool-execution start/update/end, turn completion, artifact creation. Heartbeat, thinking deltas, `queue_update`, and bare liveness are not progress.
 
+**Event persistence.** Every delivered callback is persisted as a `RunEvent` before acknowledgement, covering the full `02 §18` type set. Two types have no Pi RPC source: `artifact_produced` is recorded when the Runtime API persists the validated result manifest and creates the Artifact rows; `heartbeat` is recorded from the `/heartbeat` route (idempotent by `eventId`, updating `Run.last_heartbeat_at`; sender-side coalescing means only delivered beats appear).
+
 **Run result.** After `agent_settled`, the agent must have written a structured `result.json` in the Run's writable directory:
 
 ```json

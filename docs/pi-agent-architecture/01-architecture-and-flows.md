@@ -316,7 +316,7 @@ All operational knobs live in `config/system.yaml`; profile-level timeouts and r
 | `max_log_size` | System | 50 MiB per Run | hard limit |
 | `max_artifact_size` | System | 256 KiB | hard limit |
 | `max_task_artifacts_size` | System | 512 KiB | hard limit |
-| `max_context_tokens` | AgentProfileVersion | mandatory | fits the model context window with a reserve for the answer |
+| `max_context_tokens` | AgentProfileVersion | mandatory | positive; V1 validates presence/positivity only — the model-window fit check needs model metadata V1 does not carry (LLM selection deferred to V2, decision 56) and is a V2 validation |
 | `max_automatic_retries` | System / Profile | 1 | transient pre-execution failures only |
 | `outbox_retry_window` | System | 24 h | positive |
 | `orphan_grace_period` | System | 24 h | positive |
