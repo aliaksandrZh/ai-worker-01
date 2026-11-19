@@ -29,7 +29,7 @@ Common rules:
 5. Ordinary comments are synchronized and stored but do not start work by themselves. The Task context includes relevant Issue/PR discussion and existing PR review threads. A bot mention with free-form text but no recognized command is not an execution trigger in V1; support for that behavior remains an open product decision.
 6. A command is validated against the WorkItem type and current Workflow/Task state.
 7. Commands that start work create a Task; the Task selects a versioned AgentProfile and receives a new Pi session.
-8. Only one Task may execute at a time globally in V1. Other eligible work waits in the durable queue, except `/stop`, which is a control command and is processed with priority.
+8. Concurrency: each Workflow holds at most one unfinished Task; a system global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds concurrently running Runs across Workflows. Other eligible work waits in the durable queue, except `/stop`, which is a control command and is processed with priority.
 9. The Orchestrator, not the agent, owns Workflow and Task state transitions.
 10. Invalid or unauthorized commands receive a concise GitHub comment explaining why they were not executed.
 
@@ -43,7 +43,7 @@ Command recognition rules (the parsed text is preserved in `AgentCommand.source_
 
 ## 2. Command summary
 
-Rollout: phase 1 ships `planner` only (`/plan`, `/status`, `/stop`, `/help`). `/code`, `/review`, and `/test-cases` become available when their profiles are configured; commands for missing/unready profiles are rejected with `agent_profile_not_configured`. `/debug` is parked (no profile planned).
+Rollout: phase 1 ships `planner` only (`/plan`, `/status`, `/stop`, `/help`). `/code`, `/review`, and `/test-cases` become available when their profiles are configured; commands for missing/unready profiles are rejected with `agent_profile_not_configured`.
 
 | Command | Valid target | Agent profile | Creates Task? | Main result |
 |---|---|---|---|---|
@@ -51,7 +51,6 @@ Rollout: phase 1 ships `planner` only (`/plan`, `/status`, `/stop`, `/help`). `/
 | `/code` | Issue | `coder` | Yes | Implements the approved plan: checks, commit/push branch, result summary |
 | `/review` | Pull Request | `reviewer` | Yes | Reviews the pinned PR Head SHA and submits review/comments |
 | `/test-cases` | Issue; PR may be enabled by configuration | `test-designer` | Yes | Produces test scenarios/cases as an artifact and GitHub comment |
-| `/debug` | Issue or Pull Request | `debugger` (parked; no profile planned) | Yes | Investigates a problem and reports diagnosis/evidence; no code changes by default |
 | `/status` | Issue or Pull Request | None | No | Reports Workflow, current Task/Run, queue position, and last result |
 | `/stop` | Issue or Pull Request | None | No | Requests cancellation of the active Task and queued Tasks for that Workflow |
 | `/help` | Issue or Pull Request | None | No | Lists supported commands and basic usage |
@@ -145,34 +144,14 @@ Behavior:
 
 This command designs tests; it does not imply that tests are implemented or executed.
 
-## 7. `/debug` (parked)
-
-Purpose: investigate a reported defect or unexpected behavior.
-
-Status: parked — no `debugger` profile is planned; the command stays documented until it is dropped or remapped (see 09-open-questions.md Q4).
-
-Preconditions:
-- Target must be an open Issue or Pull Request.
-- No Task for the Workflow may currently be running.
-
-Behavior:
-1. Create a `debug` Task using `debugger`.
-2. Create a new Pi session and task-specific workspace.
-3. Investigate the reported symptoms, inspect relevant code/logs/tests available to the agent, and attempt reproduction where possible.
-4. By default, debugger is diagnostic/read-only: it reports likely cause, evidence, reproduction steps, and recommended fix. It does not modify code.
-5. Persist a diagnostic Artifact and publish a summary to GitHub.
-6. Stop the container and mark Workflow `waiting_for_human`.
-
-If a fix is desired, the user can follow with `/code` or a future explicit fix command. Automatic code modification by `/debug` is not part of V1.
-
-## 8. `/status`
+## 7. `/status`
 
 Purpose: inspect current orchestration state without starting an agent.
 
 Behavior:
 - Does not create a Workflow if none exists.
 - Does not create a Task, Run, Session, or Container.
-- Reports whether the Workflow exists and its status; current/last Task and profile; Run state; whether this WorkItem has work queued/running; and most recent result/error. It should distinguish this WorkItem from the global execution slot (which may be occupied by a Task for another WorkItem).
+- Reports whether the Workflow exists and its status; current/last Task and profile; Run state; whether this WorkItem has work queued/running; and most recent result/error. It should distinguish this WorkItem's state from the system-wide execution capacity (other Workflows may be running under the `max_concurrent_runs` cap).
 - If no Workflow exists, reports that no agent workflow has been started for this WorkItem.
 
 Draft output format (one comment; exact Markdown is left to implementation):
@@ -198,7 +177,7 @@ Last completed Task:
 
 Omit sections that do not apply (no Run before creation, no container before provisioning); include the last error/rejection reason when present.
 
-## 9. `/stop`
+## 8. `/stop`
 
 Purpose: request cancellation of the active Task and any queued work of this WorkItem's Workflow.
 
@@ -214,7 +193,7 @@ Behavior:
 
 `/stop` does not close the GitHub Issue/PR and does not trigger root cleanup.
 
-## 10. `/help`
+## 9. `/help`
 
 Purpose: publish the command reference in a short GitHub comment.
 
@@ -223,7 +202,7 @@ Behavior:
 - Shows commands valid for the current target type and their short descriptions.
 - May link to repository documentation for full usage.
 
-## 10a. `/retry`
+## 9a. `/retry`
 
 Purpose: repeat the last failed Task of the Workflow without creating a new Task.
 
@@ -241,11 +220,11 @@ Behavior:
 
 Automatic retries exist only for transient infrastructure errors before a Run starts executing; after execution began, `/retry` is the recovery path. The admin endpoint `POST /api/v1/tasks/{taskId}/retry` remains for operators.
 
-## 11. PR comment and review-thread context
+## 10. PR comment and review-thread context
 
 For a PR `/review`, the reviewer receives the current diff plus relevant PR conversation comments, submitted reviews, and inline review threads. Findings are submitted as a GitHub review and inline comments. When practical, the reviewer should reply in the relevant existing thread rather than create a duplicate finding. Free-form bot-mention replies without `/review` are not an execution trigger in V1; enabling direct comment-response behavior without a slash command is still an open decision.
 
-## 12. Automatic first PR review
+## 11. Automatic first PR review
 
 Separate from comment commands:
 - When GitHub reports that the bot account has been requested as a reviewer on a PR, Poller persists a `review_requested` event.
@@ -255,7 +234,7 @@ Separate from comment commands:
 - A new commit (`pull_request_synchronize`) updates PR data but does not trigger another review automatically.
 - Further reviews happen only through an explicit `@bot /review` command.
 
-## 13. Commands received while work is running
+## 12. Commands received while work is running
 
 Admission rules:
 - If the target Workflow already has an unfinished Task (queued, claimed, starting, or running), a further command for that Workflow is rejected immediately with a reason — same-Workflow commands are not queued. This prevents, for example, `/code` becoming a deferred approval of a plan that is still being produced.
@@ -263,10 +242,10 @@ Admission rules:
 
 Claim-time recheck: a queued command starts when capacity becomes free, provided its Workflow state and preconditions are still valid at execution time (pinned PR SHA unchanged for reviews, WorkItem still open, plan still present). A Task that became invalid is cancelled or rejected with a recorded reason.
 
-`/stop` is a control command handled immediately and prioritized for the targeted WorkItem. The final global-vs-per-Workflow concurrency scope is tracked in 09-open-questions.md Q1.
+`/stop` is a control command handled immediately and prioritized for the targeted WorkItem. Concurrency model: each Workflow holds at most one unfinished Task; the global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds concurrently running Runs across Workflows.
 
 
-## 14. System notifications (Outbox)
+## 13. System notifications (Outbox)
 
 The Orchestrator publishes orchestration-owned system notifications to GitHub through the Outbox (`action_type = comment`). Agent-owned writes go through GitHub MCP and never wait on the Outbox.
 
@@ -289,4 +268,6 @@ Automatic retries exhausted. The Workflow is waiting for human input.
 Fix the underlying issue and submit the command again (or use /retry).
 ```
 
-The earlier TODO about a separate "proceed after answering questions" command is resolved: plan questions and answers are ordinary comments, `/plan` reruns the planning iteration over them, and `/code` (which itself approves the latest plan) starts implementation. Optional `/plan-continue`-style aliases remain an open question (09-open-questions.md Q5).
+The earlier TODO about a separate "proceed after answering questions" command is resolved: plan questions and answers are ordinary comments, `/plan` reruns the planning iteration over them, and `/code` (which itself approves the latest plan) starts implementation. Aliases were considered and dropped (`/plan-continue` etc.) — users repeat `/plan` and `/code`.
+
+Required publications: Task `succeeded` requires confirmed publication of the agent's mandatory results via GitHub MCP — plan/questions for the planner, push + result summary for the coder, review + inline comments for the reviewer, scenarios for the test-designer. The agent retries transient GitHub/MCP failures inside the Run, checking GitHub before re-posting to avoid duplicates. If confirmation still fails, the Run/Task fail with `error_code = github_publication_failed` (artifacts are kept), the Orchestrator sends a system notification (it never re-publishes the agent's result), and `/retry` is the recovery path.

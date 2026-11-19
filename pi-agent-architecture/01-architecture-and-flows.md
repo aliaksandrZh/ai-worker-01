@@ -45,11 +45,10 @@ flowchart TD
 
 ### Agent Runtime API
 
-- Creates a new Pi session for each Task.
-- Provisions task-specific workspaces and mounts persistent storage.
+- Provisions the physical resources for each Run — Pi session files (one new session per attempt), the task workspace directory, and container/mounts, including the per-Run log directory — from Orchestrator-owned identifiers; AgentSession/Workspace DB records are owned by the Orchestrator.
 - Creates/starts/stops container deployments via Komodo.
 - Sends task instructions and inputs to Pi.
-- Callbacks are emitted by the Runtime Bridge — a process inside the agent container that launches Pi in `--mode rpc`, reads the JSONL event stream, and posts events, a periodic heartbeat (default 30 seconds), completion, and failure callbacks to this API.
+- Callbacks are emitted by the Runtime Bridge — a process inside the agent container that launches Pi in `--mode rpc`, reads the JSONL event stream, and posts events, a periodic heartbeat (default 30 seconds), completion, and failure callbacks to this API. It also captures Pi `stdout`/`stderr` and its own diagnostics into the per-Run log directory created and mounted by the Runtime API.
 - Receives progress, heartbeat, artifact, completion, and failure callbacks through routes on this same API; a separate webhook receiver service is not required.
 - Reconciles desired state in PostgreSQL with actual Komodo/container state.
 - Does not decide business workflow transitions.
@@ -71,7 +70,7 @@ Planned profiles (added later via configuration):
 | `reviewer` | Review a PR at a fixed Head SHA (enabled in a later phase) | Read-only review; submit findings |
 | `test-designer` | Design test scenarios/cases (enabled in a later phase) | Produce test artifacts; do not implement tests by default |
 
-No `debugger` profile is planned; `/debug` is parked (see 09-open-questions.md). Commands that select a missing, not-ready, or disabled profile are rejected before a Task is created (`agent_profile_not_configured`).
+No `debugger` profile exists (the `/debug` command was removed). Commands that select a missing, not-ready, or disabled profile are rejected before a Task is created (`agent_profile_not_configured`).
 
 Profile configuration is versioned and can include image, Pi runtime config, system prompt, skills, MCP servers, tool permissions, environment references, capabilities, retry defaults, execution-limit defaults, and resource limits. A version carries an unattended permission allow-list: approved tools/MCP operations run automatically, everything else is denied — no interactive dialogs in agent runs.
 
@@ -90,6 +89,7 @@ Adding a profile should normally be configuration work, not a change to orchestr
 - Reviewer workspace is fresh and isolated from coder workspace.
 - Agent profiles may expose selected GitHub MCP tools and other MCP servers. Agents are responsible for performing GitHub operations explicitly permitted by their profiles. The Agent Runtime records execution events and results, which are persisted by the Orchestrator. The Orchestrator remains responsible for workflow state, task scheduling, container lifecycle, command handling, and system-level notifications.
 - Komodo owns actual deployment/container state; PostgreSQL stores desired and last observed state.
+- AgentSession and Workspace DB records are owned (created/updated) by the Orchestrator; the Agent Runtime API owns physical provisioning (session files, workspace directory, per-Run log directory, container and mounts) and writes runtime metadata back.
 
 ## 5. WorkItem, Workflow, Task, Session, Run, Container
 
@@ -157,7 +157,6 @@ sequenceDiagram
 - `/plan` creates a `planner` Task and returns plan, gaps, and questions.
 - `/code` creates a `coder` Task only after a successful plan Artifact (the latest successful planning Task); sending `/code` itself is the approval of that plan (unless repository configuration explicitly permits implementing without a plan). Enabled once the coder phase ships.
 - `/test-cases` creates a `test-designer` Task and produces test case artifacts; it does not imply implementation or execution of tests.
-- `/debug` is parked: no `debugger` profile is planned (see 09).
 - `/status`, `/stop`, `/help`, and `/retry` are control/recovery commands and do not create new agent Tasks.
 - Every Run attempt has a distinct Pi session. Tasks never share Pi conversation history.
 - At most one unfinished Task may exist per Workflow: a further command for that Workflow is rejected at admission; commands for other Workflows are queued while execution capacity is busy.
@@ -188,9 +187,7 @@ Persist all relevant comments, including Issue comments, PR conversation comment
 
 ## 9. Sequential scheduling
 
-V1 has one execution slot (`max_concurrent_runs = 1`) per Workflow. At most one unfinished Task may exist per Workflow; further commands for that Workflow are rejected at admission.
-
-The final V1 concurrency wording (per-Workflow slot vs an additional global cap) is still open — see [09-open-questions.md](09-open-questions.md) Q1.
+V1 enforces two limits: each Workflow holds at most one unfinished Task (a further command for that Workflow is rejected at admission), and the Orchestrator configuration bounds the total number of concurrently running Runs with `max_concurrent_runs` (default 10). When the cap is reached, work for other Workflows waits in the durable FIFO queue.
 
 Use transactional claiming/leases in PostgreSQL so that multiple Orchestrator workers cannot claim the same job.
 
@@ -200,6 +197,7 @@ Use transactional claiming/leases in PostgreSQL so that multiple Orchestrator wo
 - A container is an execution resource, not the durable identity of the Task.
 - When a Task finishes, stop its container. Retain session files and the task workspace volume on persistent Docker-host storage so the task can be inspected or resumed according to retry policy.
 - Every Run attempt uses a new Pi session (a retry creates a new Run and a new session for the same Task). Workspace reuse follows task-type policy: a retry may reuse the Task workspace if it remains valid, a coder Task continues its existing agent branch, and a reviewer always gets a fresh workspace.
+- Run `stdout`/`stderr` and Bridge diagnostics are written to a per-Run log directory on persistent host storage, created and mounted by the Runtime API; the files are deleted at root cleanup.
 - A Reviewer always receives a fresh workspace at the review SHA.
 - The coder must save changes, commit, push a branch, and report the branch/result in the Issue before marking implementation successful.
 - Automatic PR creation is not assumed in V1. Whether coder creates a PR should be a separate explicit command or repository setting.
@@ -211,7 +209,7 @@ When a root Issue or PR closes:
 2. Cancel active/queued Tasks and stop active Runs.
 3. Stop and remove associated containers/Komodo deployments.
 4. Delete task workspace volumes.
-5. Delete Pi session files.
+5. Delete Pi session files and Run log directories.
 6. Mark deletion/cleanup timestamps and storage status in PostgreSQL.
 7. Preserve DB records, comments, events, task/run history, and artifact metadata.
 

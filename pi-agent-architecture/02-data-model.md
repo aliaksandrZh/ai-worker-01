@@ -225,7 +225,7 @@ Fields:
 - `id`
 - `workflow_id`
 - `sequence`
-- `type` (`plan`, `implement`, `review`, `test_design`, `debug`, `custom`)
+- `type` (`plan`, `implement`, `review`, `test_design`, `custom`)
 - `agent_profile_version_id`
 - `status`
 - `trigger_command_id` (nullable)
@@ -262,7 +262,7 @@ Fields:
 - `work_item_id`
 - `github_comment_id` (FK to synchronized GitHubComment; unique for command processing)
 - `author_login`
-- `command_name` (`plan`, `code`, `review`, `test_cases`, `debug`, `status`, `stop`, `help`, `retry`)
+- `command_name` (`plan`, `code`, `review`, `test_cases`, `status`, `stop`, `help`, `retry`)
 - `arguments` (JSONB)
 - `parser_version`
 - `status` (`received`, `authorized`, `queued`, `processed`, `rejected`, `failed`)
@@ -284,7 +284,7 @@ The canonical V1 comment format is `@<bot-account> /<command> [arguments]`. The 
 - `proceed` (historical name; replaced by `code`): create coder Task after the plan is approved; commit/push branch and report result.
 - `review`: create reviewer Task for the pinned PR Head SHA (`target_head_sha`); fresh isolated workspace.
 - `test-cases`: create test-designer Task; produce test case Artifact, without implementing/running tests by default.
-- `debug`: create diagnostic Task; read-only by default (parked: no profile planned).
+- `debug`: the command was removed (no `debugger` profile exists).
 - `retry`: repeat the last failed Task of the Workflow as a new Run with a new Pi session.
 - `status`, `stop`, `help`: control/information commands; do not create agent Tasks.
 
@@ -332,7 +332,7 @@ Maps an operation to a profile, optionally scoped to a repository.
 Fields:
 - `id`
 - `repository_id` (nullable; null means global default)
-- `task_type` (`plan`, `implement`, `review`, `test_design`, `debug`)
+- `task_type` (`plan`, `implement`, `review`, `test_design`)
 - `agent_profile_version_id`
 - `priority`
 - `is_enabled`
@@ -343,7 +343,7 @@ V1 ships a seeded global rule set (`repository_id = NULL`); repository-specific 
 
 ## 13. AgentSession
 
-One Pi session per Run attempt. The session is not shared across Tasks, Runs, or Agent Profiles: a retry creates a new Run and a new Pi Session; the previous session is retained until cleanup. A new Task always gets a new session. Session record remains after backing file deletion.
+One Pi session per Run attempt. The session is not shared across Tasks, Runs, or Agent Profiles: a retry creates a new Run and a new Pi Session; the previous session is retained until cleanup. A new Task always gets a new session. Session record remains after backing file deletion. The DB record is created by the Orchestrator (status `provisioning`) when the Run is prepared; the Runtime API provisions the backing files and writes runtime metadata back into the record.
 
 Fields:
 - `id`
@@ -380,6 +380,10 @@ Fields:
 - `error_code`
 - `error_message`
 - `result_summary`
+- `log_storage_reference`
+- `log_size_bytes`
+- `logs_completed_at`
+- `logs_deleted_at`
 
 Unique `(task_id, attempt_number)`. `attempt_number` is assigned by the Orchestrator when the Run is created; agents never change it.
 
@@ -423,7 +427,7 @@ Fields:
 
 Every Task gets a task-specific Workspace. Volumes persist after the Task container stops and are deleted when the root WorkItem is closed. Reviewer always receives a fresh workspace at the pinned reviewed Head SHA, separate from coder workspaces, read-only where possible.
 
-A coder Task works on `agent/issue-<number>` based on the default-branch HEAD captured at first provision (`base_sha`); later coder Tasks in the same Workflow, and retries, continue the existing agent branch.
+A coder Task works on `agent/issue-<number>` based on the default-branch HEAD captured at first provision (`base_sha`); later coder Tasks in the same Workflow, and retries, continue the existing agent branch. The Workspace DB record is created by the Orchestrator on the Task's first Run and is reused by retries; the Runtime API provisions the physical storage.
 
 ## 17. Artifact
 
@@ -439,7 +443,7 @@ Fields:
 
 Artifacts provide explicit handoff between agents. Avoid relying only on one agent's conversation history.
 
-V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's token budget); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future.
+V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's token budget); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future. An Artifact of `type = log_reference` points to the Run log directory on host storage; its content is not copied into PostgreSQL.
 
 ## 18. RunEvent
 
@@ -474,7 +478,7 @@ Fields:
 - `created_at`
 - `updated_at`
 
-Use transactional claiming/locking and retry/backoff. V1 global concurrency is 1 (the final scope wording — per-Workflow slot vs an additional global cap — is tracked in 09-open-questions.md Q1). Queue order: FIFO by `available_at`, then `priority`; `/stop` is a control action handled immediately outside the queue.
+Use transactional claiming/locking and retry/backoff. Concurrency: each Workflow holds at most one unfinished Task; a global cap `max_concurrent_runs` (default 10, Orchestrator configuration) bounds the total number of concurrently running Runs across Workflows — extra jobs wait in the queue. Queue order: FIFO by `available_at`, then `priority`; `/stop` is a control action handled immediately outside the queue.
 
 ## 20. OutboxAction
 
@@ -515,6 +519,7 @@ When the root WorkItem closes:
 - Active runs are stopped.
 - Containers and task volumes are removed.
 - Pi session files are deleted.
+- Run log directories are deleted.
 - DB records are retained and marked with storage cleanup/deletion timestamps/status.
 
 ## 23. Recommended indexes

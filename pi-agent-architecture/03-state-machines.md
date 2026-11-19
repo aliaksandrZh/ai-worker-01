@@ -47,7 +47,7 @@ stateDiagram-v2
     Cancelled --> [*]
 ```
 
-- `Queued`: durable work waiting for an execution slot.
+- `Queued`: durable work waiting for global execution capacity (`max_concurrent_runs`).
 - `Claimed`: worker holds a lease.
 - `Starting`: profile/session/workspace/container are being prepared. `startup_timeout` (default 10 minutes) fails the Run with `startup_timeout` if preparation never completes.
 - `Running`: agent is executing.
@@ -82,7 +82,7 @@ Run is terminal after `Succeeded`, `Failed`, `Cancelled`, or `TimedOut`. A Run r
 
 ## 4. AgentSession
 
-A new Pi session is created for every Run attempt (a retry creates another session for the same Task). A session is never shared with another Task/profile/Run. Its files remain on persistent host storage until root WorkItem cleanup.
+A new Pi session is created for every Run attempt (a retry creates another session for the same Task). A session is never shared with another Task/profile/Run. Its files remain on persistent host storage until root WorkItem cleanup. The DB record is created by the Orchestrator when the Run is prepared (`provisioning`); the Runtime API provisions the backing files and reports runtime metadata.
 
 ```mermaid
 stateDiagram-v2
@@ -197,7 +197,7 @@ Closure triggers cleanup for that root only:
 2. Cancel active Tasks/Runs.
 3. Stop and remove containers/deployments.
 4. Remove task workspace volumes.
-5. Delete Pi session files.
+5. Delete Pi session files and Run log directories.
 6. Mark cleanup/deletion flags in PostgreSQL.
 7. Retain database records and history.
 
