@@ -1,6 +1,6 @@
 // GitHub repo activity poller — console monitoring, stateful across runs.
 // Auth: installed GitHub App (GITHUB_APP_ID + PEM) → JWT → installation token; else `gh auth token`; else GITHUB_TOKEN; else anonymous.
-// Spec: docs/superpowers/specs/2026-11-19-github-polling-design.md
+// See root README.md for the service's role and env.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -129,7 +129,7 @@ const token = () => {
 const DIR = dirname(fileURLToPath(import.meta.url));
 const appCfg = () => ({
   id: process.env.GITHUB_APP_ID || "",
-  keyFile: process.env.GITHUB_APP_KEY_FILE || join(DIR, "app.pem"),
+  keyFile: process.env.GITHUB_APP_KEY_FILE || join(DIR, "..", "app.pem"),
 });
 
 let _appKey = null, _appKeyFile = null, _noKey = false;
@@ -244,7 +244,7 @@ export const paged = async (path, params = {}, { stop, fetchImpl = fetch } = {})
 // ---------------- poll cycle ----------------
 
 const RING_CAP = 5000; // shortcut: keeps state.json bounded; a repo with >5000 events between polls loses the tail
-const STATE_FILE = process.env.GITHUB_STATE_FILE || join(dirname(fileURLToPath(import.meta.url)), "state.json");
+const STATE_FILE = process.env.GITHUB_STATE_FILE || join(dirname(fileURLToPath(import.meta.url)), "..", "state.json");
 
 export const newRepoState = () => ({
   base: false,

@@ -68,7 +68,7 @@ docker attach pi-worker
 
 The `api/` HTTP server operates sessions through Komodo — one
 `pi-session-<id>` Deployment per session, driven over Komodo attach-mode
-terminal websockets. Endpoints (see `docs/superpowers/specs/2026-11-18-pi-rpc-api-design.md`):
+terminal websockets. Endpoints (see the root `README.md`):
 
 ```bash
 cd ../api && npm start
@@ -81,7 +81,7 @@ curl -s $BASE/sessions
 # GET   /sessions/:id/ui   +  POST /sessions/:id/ui/:requestId   (dialogs pi raised)
 # POST  /sessions/:id/connect     (reattach after an api restart)
 curl -s -XDELETE $BASE/sessions/:id                   # stop + delete container
-node rpc-smoke.mjs                                     # end-to-end check
+node src/rpc-smoke.mjs                                 # end-to-end check
 ```
 
 `pi/pi-agent-state/extensions/host-bridge.ts` runs inside every session
@@ -98,7 +98,7 @@ clones the repo into that workspace at container start (dotenv `pi/.env` with ke
 - `--interactive` in `extra_args` is not decoration: `pi --mode rpc` lives on
   stdin, and without an open stdin the container exits 0 seconds after deploy.
 - The image entrypoint is `sh /usr/local/bin/pi-worker-entry` — the script is
-  a read-only mount on every deployment (`pi.sync.toml`, `api/server.mjs`);
+  a read-only mount on every deployment (`pi.sync.toml`, `api/src/server.mjs`);
   run the image without that mount and the container exits at start.
 - The deployment references `pi-worker:latest` directly, not the Build
   resource: a Build-attached deployment deploys the build's tracked version

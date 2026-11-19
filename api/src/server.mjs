@@ -9,8 +9,8 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 const { KomodoClient } = await import("komodo_client");
 
 const API_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_DIR = join(API_DIR, "..");
-const LOGS_DIR = join(API_DIR, "logs");
+const REPO_DIR = join(API_DIR, "..", "..");
+const LOGS_DIR = join(API_DIR, "..", "logs");
 const STATE_DIR = join(REPO_DIR, "pi", "pi-agent-state");
 // every session mounts the entry script ro (image entrypoint is "sh" on it)
 const ENTRY_SCRIPT = join(REPO_DIR, "pi", "pi-worker-entry");

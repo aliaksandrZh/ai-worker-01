@@ -97,7 +97,7 @@ try {
 
   // 7. logging: raw capture — each log line is {ts, dir, line}; parse it back out
   step = 7;
-  const logPath = join(API_DIR, "logs", `pi-session-${id}.log`);
+  const logPath = join(API_DIR, "..", "logs", `pi-session-${id}.log`);
   assert(existsSync(logPath), `log file exists: ${logPath}`);
   const protocolRecords = readFileSync(logPath, "utf8")
     .split("\n")

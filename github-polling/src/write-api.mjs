@@ -1,6 +1,6 @@
 // Write API for the installed GitHub App: issues, comments, PRs, reviews, contents, changes.
 // Separate process from the read-only poller; same .env/credentials. CORS open for console.html.
-// Spec: docs/superpowers/plans/2026-11-19-github-write-api.md
+// See root README.md for the service's role and env.
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gh, cred, RateLimitError, NotFoundError, ApiError } from "./poll.mjs";

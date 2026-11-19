@@ -17,26 +17,26 @@ tasks:
     desc: Run console webhook receiver for /sessions/:id/notify (port 3900)
     dir: api
     cmds:
-      - node webhook-listener.mjs
+      - node src/webhook-listener.mjs
 
   github-polling:
     desc: Poll GitHub repo activity and log to console (needs github-polling/.env, see .env.example)
     dir: github-polling
     cmds:
-      - node --env-file-if-exists=.env poll.mjs
+      - node --env-file-if-exists=.env src/poll.mjs
 
   github-api:
-    desc: GitHub App write API (issues/PRs/reviews/changes; needs github-polling/.env; test via console.html)
+    desc: GitHub App write API (issues/PRs/reviews/changes; needs github-polling/.env; test via src/console.html)
     dir: github-polling
     cmds:
-      - node --env-file-if-exists=.env write-api.mjs
+      - node --env-file-if-exists=.env src/write-api.mjs
 
   test:
     desc: Unit + contract tests (api signals state machine, github-polling poller + write-api)
     cmds:
-      - node --test api/rpc-session.test.mjs
-      - node --test github-polling/poll.test.mjs
-      - node --test github-polling/write-api.test.mjs
+      - node --test api/src/rpc-session.test.mjs
+      - node --test github-polling/src/poll.test.mjs
+      - node --test github-polling/src/write-api.test.mjs
 
   check-signals:
     desc: Live walkthrough — create session, prompt, await via /wait, webhook settled line (api + komodo must be running)

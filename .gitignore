@@ -8,6 +8,9 @@ api/.env
 .playwright-mcp/
 api/logs/
 
+# process artifacts from agent sessions — never commit
+docs/superpowers/
+
 # github-polling
 github-polling/.env
 github-polling/state.json

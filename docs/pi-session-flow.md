@@ -8,7 +8,7 @@
 ## The moving parts
 
 ```
-your HTTP client ──> api/server.mjs (:3000) ──> Komodo Core (:9120) ──> Periphery ──> docker
+your HTTP client ──> api/src/server.mjs (:3000) ──> Komodo Core (:9120) ──> Periphery ──> docker
                          │                         │
                          └── terminal websocket ────┘  (raw bytes = pi's RPC stdin/stdout)
                                                     │
@@ -18,7 +18,7 @@ your HTTP client ──> api/server.mjs (:3000) ──> Komodo Core (:9120) ─�
                                         /workspace          (container-local; GIT_CLONE_REPO clones it at start)
 ```
 
-- `api/server.mjs` — the translator: HTTP → Komodo RPC (`komodo_client`) for lifecycle,
+- `api/src/server.mjs` — the translator: HTTP → Komodo RPC (`komodo_client`) for lifecycle,
   Komodo terminal websocket for the pi data plane.
 - `pi-session-<id>` — one Komodo Deployment per session. The container's main process is
   the entry script
@@ -138,7 +138,7 @@ curl -s "localhost:3000/sessions/smwmfmffwed3c/events?since=0&type=agent_settled
 
 After `POST /rpc` prompt (`disposition: "started"`) the run's end comes as `agent_settled` and a
 human blocker comes as a parked `extension_ui_request`. Three routes wrap those signals; all three
-drive the same state machine inside `PiRpcSession` (`api/rpc-session.mjs`):
+drive the same state machine inside `PiRpcSession` (`api/src/rpc-session.mjs`):
 
 1. **Pull — `GET /sessions/:id/status`** — derive everything from one call:
 
@@ -175,7 +175,7 @@ drive the same state machine inside `PiRpcSession` (`api/rpc-session.mjs`):
 3. **Push — `POST /sessions/:id/notify` {"url":"http://you:port/hook"}** — every signal is also
    POSTed to your url as `{"id":"<session>", ...signal}` (settled: `+aborted`; blocked: `+pending`;
    `disconnected`). `DELETE /sessions/:id/notify` unregisters. For testing by hand run
-   `node api/webhook-listener.mjs` (console-logging receiver, port 3900).
+   `node src/webhook-listener.mjs` (console-logging receiver, port 3900, run from `api/`).
 
 Caveats:
 
