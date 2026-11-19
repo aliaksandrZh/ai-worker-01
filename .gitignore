@@ -1,6 +1,7 @@
 pi/pi-agent-state/**
 !pi/pi-agent-state/models.json
 !pi/pi-agent-state/settings.json
+!pi/pi-agent-state/mcp.json
 !pi/pi-agent-state/extensions/
 !pi/pi-agent-state/extensions/**
 api/node_modules/

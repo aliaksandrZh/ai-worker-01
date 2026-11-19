@@ -2,11 +2,18 @@
 # Ollama runs on the host; this image only contains Pi and the basic tools
 # required to inspect and modify a mounted workspace.
 
-FROM node:24-bookworm-slim
-
 ARG PI_VERSION=1.5.2
+ARG GH_MCP_VERSION=v2.2.0
 ARG PI_UID=10001
 ARG PI_GID=10001
+
+# Source stage: the official GitHub MCP server image (static Go binary inside, at /server/github-mcp-server)
+FROM ghcr.io/github/github-mcp-server:${GH_MCP_VERSION} AS gh-mcp
+
+FROM node:24-bookworm-slim
+ARG PI_VERSION
+ARG PI_UID
+ARG PI_GID
 
 ENV HOME=/home/pi
 WORKDIR /workspace
@@ -27,6 +34,9 @@ RUN npm install --global --ignore-scripts "@earendil-works/pi-coding-agent@${PI_
     && npm cache clean --force
 
 COPY pi-worker-entry /usr/local/bin/pi-worker-entry
+
+# Official GitHub MCP server (static Go binary from the upstream image)
+COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
 
 USER pi
 
