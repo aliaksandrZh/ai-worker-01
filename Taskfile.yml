@@ -25,6 +25,12 @@ tasks:
     cmds:
       - node --env-file-if-exists=.env poll.mjs
 
+  github-api:
+    desc: GitHub App write API (issues/PRs/reviews/changes; needs github-polling/.env; test via console.html)
+    dir: github-polling
+    cmds:
+      - node --env-file-if-exists=.env write-api.mjs
+
   test:
     desc: Unit + contract tests (api signals state machine, github-polling logic)
     cmds:
