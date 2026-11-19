@@ -3,30 +3,35 @@
 // Spec: docs/superpowers/specs/2026-11-19-github-polling-design.md
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 // ---------------- state files ----------------
 
 export class RateLimitError extends Error {
   constructor(resetAt) {
     super("GitHub rate limit reached");
+    this.name = "RateLimitError";
     this.resetAt = resetAt;
   }
 }
 export class AuthError extends Error {
   constructor(status) {
     super(`GitHub auth failed (HTTP ${status})`);
+    this.name = "AuthError";
     this.status = status;
   }
 }
 export class NotFoundError extends Error {
   constructor(status) {
     super(`GitHub API not found (HTTP ${status})`);
+    this.name = "NotFoundError";
     this.status = status;
   }
 }
 export class ApiError extends Error {
   constructor(status, body) {
     super(`GitHub API error (HTTP ${status})`);
+    this.name = "ApiError";
     this.status = status;
     this.body = body;
   }
@@ -93,6 +98,67 @@ export const diffEntry = (p, n) => {
   for (const x of a) if (!b.has(x)) out.push(`review-requested: ${x}`);
   for (const x of b) if (!a.has(x)) out.push(`review-removed: ${x}`);
   return out;
+};
+
+// ---------------- REST layer ----------------
+
+export const resolveToken = () => {
+  try {
+    const r = spawnSync("gh", ["auth", "token"], { encoding: "utf8" });
+    if (r.status === 0 && r.stdout?.trim()) return r.stdout.trim();
+  } catch { /* gh not installed */ }
+  return process.env.GITHUB_TOKEN || "";
+};
+
+let _token = null; // lazily resolved once; tests inject via setToken
+export const setToken = (t) => (_token = t);
+const token = () => {
+  if (_token === null) _token = resolveToken();
+  return _token;
+};
+
+export const gh = async (path, params = {}, fetchImpl = fetch) => {
+  const url = new URL(path, "https://api.github.com");
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
+  const t = token();
+  const res = await fetchImpl(url, {
+    headers: {
+      accept: "application/vnd.github+json",
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "github-polling",
+      ...(t ? { authorization: `Bearer ${t}` } : {}),
+    },
+  });
+  const retryAfter = Number(res.headers.get("retry-after")) || 0;
+  if (res.headers.get("x-ratelimit-remaining") === "0" || res.status === 429 || retryAfter)
+    throw new RateLimitError(
+      retryAfter ? Date.now() + retryAfter * 1000 : Number(res.headers.get("x-ratelimit-reset")) * 1000,
+    );
+  if (res.status === 401) throw new AuthError(401);
+  if (res.status === 404) throw new NotFoundError(404);
+  if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => ""));
+  return { items: res.status === 204 ? [] : await res.json(), headers: res.headers, status: res.status };
+};
+
+export const paged = async (path, params = {}, { stop, fetchImpl = fetch } = {}) => {
+  const pageCap = Number(process.env.GITHUB_PAGE_CAP) || 5;
+  const items = [];
+  let url = path;
+  let q = params;
+  for (let page = 1; ; page++) {
+    const res = await gh(url, q, fetchImpl);
+    if (!Array.isArray(res.items)) return [res.items]; // single-object endpoint
+    items.push(...res.items);
+    const next = parseNextLink(res.headers.get("link"));
+    if (!next) return items;
+    if (res.items.some(stop ?? (() => false))) return items; // include page, caller dedups
+    if (page >= pageCap) {
+      console.warn(`github-polling: page cap ${pageCap} reached for ${path} — results may be truncated`);
+      return items;
+    }
+    url = next;
+    q = {};
+  }
 };
 
 // ---------------- log line builders ----------------

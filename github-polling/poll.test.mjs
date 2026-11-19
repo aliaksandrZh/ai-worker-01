@@ -8,6 +8,7 @@ import {
   eventLine, issueEventLine, commitLine, commentLine,
   readState, writeState,
   RateLimitError, AuthError, NotFoundError, ApiError,
+  resolveToken, setToken, gh, paged,
 } from "./poll.mjs";
 
 describe("capRing", () => {
@@ -246,5 +247,86 @@ describe("error classes", () => {
     assert.equal(new NotFoundError(404).status, 404);
     assert.equal(new ApiError(422, "boom").body, "boom");
     assert.ok(new RateLimitError(1) instanceof Error);
+  });
+  test("resolveToken exists (live credential check pinned to Task 4 run)", () => {
+    assert.equal(typeof resolveToken, "function");
+  });
+});
+
+// -------- REST layer (Task 2) --------
+
+const stub = (json, headers = {}, status = 200) => ({
+  ok: status >= 200 && status < 300, status,
+  headers: new Headers(headers),
+  json: async () => json,
+  text: async () => (typeof json === "string" ? json : JSON.stringify(json)),
+});
+
+describe("gh", () => {
+  test("builds url + auth headers", async () => {
+    setToken("t123");
+    let seen;
+    const impl = async (u, opts) => ((seen = { u: String(u), o: opts }), stub([1]));
+    const r = await gh("/repos/a/b", { per_page: 1 }, impl);
+    assert.equal(r.items[0], 1);
+    assert.equal(seen.u, "https://api.github.com/repos/a/b?per_page=1");
+    assert.equal(seen.o.headers.authorization, "Bearer t123");
+    assert.equal(seen.o.headers.accept, "application/vnd.github+json");
+    assert.equal(seen.o.headers["x-github-api-version"], "2022-11-28");
+    assert.equal(seen.o.headers["user-agent"], "github-polling");
+  });
+  test("403 + remaining 0 → RateLimitError with reset ms", async () => {
+    const impl = async () => stub(null, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1795070756" }, 403);
+    await assert.rejects(() => gh("/x", {}, impl), (e) => e instanceof RateLimitError && e.resetAt === 1795070756000);
+  });
+  test("retry-after → RateLimitError in the future", async () => {
+    const impl = async () => stub(null, { "retry-after": "60" }, 429);
+    await assert.rejects(
+      () => gh("/x", {}, impl),
+      (e) => e instanceof RateLimitError && e.resetAt > Date.now() + 30_000,
+    );
+  });
+  test("401 → AuthError, 404 → NotFoundError, plain 403 → ApiError", async () => {
+    await assert.rejects(() => gh("/x", {}, async () => stub(null, {}, 401)), AuthError);
+    await assert.rejects(() => gh("/x", {}, async () => stub(null, {}, 404)), NotFoundError);
+    await assert.rejects(() => gh("/x", {}, async () => stub(null, {}, 403)), ApiError);
+  });
+});
+
+describe("paged", () => {
+  test("single page, no next link — one call", async () => {
+    const calls = [];
+    const impl = async (u, o) => (calls.push(u), stub([1, 2]));
+    assert.deepEqual(await paged("/things", { per_page: 1 }, { fetchImpl: impl }), [1, 2]);
+    assert.equal(calls.length, 1);
+  });
+  test("follows rel=next; early-stops when stop matches (page still included)", async () => {
+    const calls = [];
+    const impl = async (u) => {
+      calls.push(String(u));
+      if (calls.length === 1) {
+        return stub([1, 2], { link: '<https://api.github.com/things?page=2>; rel="next"' });
+      }
+      return stub([3, 4], { link: '<https://api.github.com/things?page=3>; rel="next"' });
+    };
+    const got = await paged("/things", {}, { stop: (x) => x === 4, fetchImpl: impl });
+    assert.deepEqual(got, [1, 2, 3, 4]);
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[1]).search, "?page=2");
+  });
+  test("page cap reached — warns and returns what it has", async () => {
+    process.env.GITHUB_PAGE_CAP = "1";
+    const orig = console.warn;
+    const warns = [];
+    console.warn = (...a) => warns.push(a.join(" "));
+    try {
+      const impl = async () => stub([1], { link: '<https://api.github.com/things?page=2>; rel="next"' });
+      assert.deepEqual(await paged("/things", {}, { fetchImpl: impl }), [1]);
+    } finally {
+      console.warn = orig;
+      delete process.env.GITHUB_PAGE_CAP;
+    }
+    assert.equal(warns.length, 1);
+    assert.match(warns[0], /page cap/);
   });
 });
