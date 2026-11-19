@@ -3,11 +3,11 @@
 // Spec: docs/superpowers/plans/2026-11-19-github-write-api.md
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { gh, RateLimitError, NotFoundError, ApiError } from "./poll.mjs";
+import { gh, installationToken, RateLimitError, NotFoundError, ApiError } from "./poll.mjs";
 
 const PORT = Number(process.env.WRITE_API_PORT) || 3901;
 const ROUTES =
-  "routes: GET /health, GET /repos/:r/contents[/PATH]?ref=, GET /repos/:r/pulls/:n/diff, GET /repos/:r/pulls/:n/files, POST /repos/:r/issues {title}, PATCH /repos/:r/issues/:n {state,title,body,labels,assignees}, POST /repos/:r/issues/:n/comments {body}, POST /repos/:r/pulls {head,title}, POST /repos/:r/pulls/:n/reviews {event,body,comments}, POST /repos/:r/changes {branch,message,updates,pr?}";
+  "routes: GET /health, GET /repos/:r/contents[/PATH]?ref=, GET /repos/:r/pulls/:n/diff, GET /repos/:r/pulls/:n/files, POST /repos/:r/issues {title}, PATCH /repos/:r/issues/:n {state,title,body,labels,assignees}, POST /repos/:r/issues/:n/comments {body}, POST /repos/:r/pulls {head,title}, POST /repos/:r/pulls/:n/reviews {event,body,comments}, POST /repos/:r/changes {branch,message,updates,pr?}, POST /repos/:r/graphql {query,variables} (Projects V2)";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -76,6 +76,12 @@ export const route = async (req, res, fetchImpl = fetch, raw = "") => {
       if (!["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(b.event))
         return send(400, { error: "event must be APPROVE, REQUEST_CHANGES or COMMENT" });
       return send(200, (await gh(`/repos/${r}/pulls/${m[1]}/reviews`, {}, fetchImpl, { method: "POST", body: b })).items);
+    }
+    // Projects V2 (GraphQL-only): POST {query, variables} with the repo's installation token
+    if (method === "POST" && sub === "/graphql") {
+      if (typeof b.query !== "string" || !b.query.trim()) return send(400, { error: "query required" });
+      const token = await installationToken(r, fetchImpl);
+      return send(200, (await gh("/graphql", {}, fetchImpl, { method: "POST", bearer: token, body: { query: b.query, variables: b.variables ?? {} } })).items);
     }
     if (method === "POST" && sub === "/changes") {
       if (typeof b.branch !== "string" || !b.branch.trim()) return send(400, { error: "branch required" });

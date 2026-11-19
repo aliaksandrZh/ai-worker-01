@@ -1,7 +1,7 @@
 // Write API tests — route passthrough/validation against a stubbed fetch (App auth layer lives in poll.mjs).
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { setToken } from "./poll.mjs";
+import { setToken, installationToken } from "./poll.mjs";
 import { route } from "./write-api.mjs";
 
 const stub = (json, headers = {}, status = 200) => ({
@@ -153,6 +153,39 @@ describe("write-api passthrough routes", () => {
     const { status, json } = await run("GET", "/repos/own/r/pulls/5/files", "", async () => stub([{ filename: "x" }]));
     assert.equal(status, 200);
     assert.equal(json[0].filename, "x");
+  });
+});
+
+describe("write-api graphql passthrough (Projects V2)", () => {
+  beforeEach(() => setToken("t"));
+  afterEach(() => setToken(null));
+
+  test("400 when query missing", async () => {
+    const { status } = await run("POST", "/repos/own/r/graphql", { variables: {} }, async () => stub(1));
+    assert.equal(status, 400);
+  });
+  test("mints installation token and posts to /graphql as bearer", async () => {
+    process.env.GITHUB_APP_INSTALLATION_ID = "42";
+    try {
+      const calls = [];
+      const impl = async (u, o) => {
+        calls.push({ u: String(u), method: o.method ?? "GET", auth: o.headers.authorization, body: o.body });
+        if (calls.length === 1) return stub({ token: "instok", expires_at: new Date(Date.now() + 9 * 60_000).toISOString() });
+        return stub({ data: { repository: { issue: { id: "NODE1" } } } });
+      };
+      const { status, json } = await run("POST", "/repos/own/r/graphql",
+        { query: "query { repository { issue { id } } }", variables: { a: 1 } }, impl);
+      assert.equal(status, 200);
+      assert.deepEqual(json, { data: { repository: { issue: { id: "NODE1" } } } });
+      assert.equal(calls[0].method, "POST");
+      assert.match(calls[0].u, /access_tokens$/);
+      assert.equal(calls[1].method, "POST");
+      assert.match(calls[1].u, /api\.github\.com\/graphql$/);
+      assert.equal(calls[1].auth, "Bearer instok");
+      assert.equal(JSON.parse(calls[1].body).variables.a, 1);
+    } finally {
+      delete process.env.GITHUB_APP_INSTALLATION_ID;
+    }
   });
 });
 

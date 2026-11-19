@@ -65,6 +65,11 @@
     <textarea id="rbody">console review body</textarea>
     <button onclick="review()">review</button>
   </div>
+  <div class="card"><h2>projects — GraphQL (Projects V2)</h2>
+    <label>preset</label><select id="gpre" onchange="$('gq').value = PRESETS[this.value];"></select>
+    <textarea id="gq" style="min-height:140px"></textarea>
+    <button onclick="gql()">run graphql</button>
+  </div>
   <div class="card"><h2>changes — edit file(s) + commit + optional PR</h2>
     <textarea id="chjson">{
   "branch": "console-demo",
@@ -115,6 +120,47 @@ const comment = () => api("POST", p(() => `/repos/${repo()}/issues/${v("en")}/co
 const createPR = () => api("POST", p(() => `/repos/${repo()}/pulls`), { head: v("ph"), base: v("pb"), title: v("pt") });
 const review = () => api("POST", p(() => `/repos/${repo()}/pulls/${v("rn")}/reviews`), { event: v("revent"), body: v("rbody") });
 const changes = () => api("POST", p(() => `/repos/${repo()}/changes`), JSON.parse(v("chjson")));
+const PRESETS = {
+  discover: {
+    query: `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    projectsV2(first: 10) { nodes { id title number } }
+    issue(number: $number) { id title projectItems(first: 10) { nodes { id project { id title } } } }
+  }
+  user(login: $owner) { projectsV2(first: 10) { nodes { id title number } } }
+}`,
+    variables: { owner: "aliaksandrZh", repo: "04", number: 2 },
+  },
+  inspect: {
+    query: `query($id: ID!) {
+  node(id: $id) { ... on ProjectV2 {
+    id title number
+    items(first: 50) { nodes { id
+      content { ... on Issue { id number title } }
+      fieldValues(first: 10) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } }
+  } }
+    fields(first: 20) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } ... on ProjectV2FieldCommon { id name dataType } } }
+  } } }`,
+    variables: { id: "REPLACE_WITH_PROJECT_ID" },
+  },
+  add: {
+    query: `mutation($projectId: ID!, $contentId: ID!) { addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) { item { id } } }`,
+    variables: { projectId: "REPLACE", contentId: "REPLACE_WITH_ISSUE_NODE_ID" },
+  },
+  status: {
+    query: `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: ID!) { updateProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: { singleSelectOptionId: $optionId } }) { projectV2Item { id } } }`,
+    variables: { projectId: "REPLACE", itemId: "REPLACE", fieldId: "REPLACE", optionId: "REPLACE" },
+  },
+};
+const gql = () => api("POST", p(() => `/repos/${repo()}/graphql`), JSON.parse(v("gq")));
+{
+  const sel = $("gpre");
+  for (const k of Object.keys(PRESETS)) sel.add(new Option(k, k));
+  sel.add(new Option("(custom)", ""));
+  sel.value = "discover";
+  sel.onchange = () => { if (sel.value) $("gq").value = JSON.stringify(PRESETS[sel.value], null, 2); };
+  $("gq").value = JSON.stringify(PRESETS.discover, null, 2);
+}
 let routes = "";
 api("GET", "/health").then(() => {});
 </script>
