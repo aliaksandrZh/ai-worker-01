@@ -21,6 +21,10 @@ export const route = async (req, res, fetchImpl = fetch, raw = "") => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const method = req.method ?? "GET";
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    // CSRF guard: browsers may drive this API with the user's App credentials — only null-origin (file://) or local pages may call
+    const origin = req.headers?.origin ?? null;
+    if (origin !== null && origin !== "null" && !/^https?:\/\/localhost(:\d+)?$/.test(origin))
+      return send(403, { error: `origin ${origin} not allowed — call from localhost, file:// or curl` });
     if (method === "OPTIONS") return res.writeHead(204, CORS).end();
     if (method === "GET" && path === "/health") return send(200, { routes: ROUTES });
 

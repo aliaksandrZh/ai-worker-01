@@ -11,14 +11,14 @@ const stub = (json, headers = {}, status = 200) => ({
   text: async () => (typeof json === "string" ? json : JSON.stringify(json)),
 });
 
-const run = async (method, url, body, impl) => {
+const run = async (method, url, body, impl, headers = {}) => {
   const raw = typeof body === "string" || body == null ? body : JSON.stringify(body);
   const res = {
     code: null, raw: null,
     writeHead(code, h) { this.code = code; this.headers = h; return this; },
     end(x) { this.raw = x; },
   };
-  await route({ method, url }, res, impl, raw);
+  await route({ method, url, headers }, res, impl, raw);
   let json = null;
   try { json = JSON.parse(res.raw); } catch { /* raw passthrough */ }
   return { status: res.code, json, raw: res.raw };
@@ -59,6 +59,12 @@ describe("write-api validation", () => {
     }
   });
 
+  test("403 for foreign web origins (CSRF guard) — curl/no-origin passes", async () => {
+    const { status: foreign } = await run("POST", "/repos/own/r/issues", { title: "t" }, async () => stub(1), { origin: "https://evil.example" });
+    assert.equal(foreign, 403);
+    const { status: okNoOrigin } = await run("POST", "/repos/own/r/issues", { title: "t" }, async () => stub({ number: 1 }, {}, 201), { origin: "null" });
+    assert.equal(okNoOrigin, 201);
+  });
   test("unknown route → 404 with route list", async () => {
     const { status, json } = await run("GET", "/nope", "", async () => stub(1));
     assert.equal(status, 404);
