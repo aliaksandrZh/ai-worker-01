@@ -8,3 +8,7 @@ api/node_modules/
 api/.env
 .playwright-mcp/
 api/logs/
+
+# github-polling
+github-polling/.env
+github-polling/state.json

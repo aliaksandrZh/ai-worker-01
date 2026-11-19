@@ -19,10 +19,17 @@ tasks:
     cmds:
       - node webhook-listener.mjs
 
+  github-polling:
+    desc: Poll GitHub repo activity and log to console (needs github-polling/.env, see .env.example)
+    dir: github-polling
+    cmds:
+      - node --env-file-if-exists=.env poll.mjs
+
   test:
-    desc: Unit + contract tests (api signals state machine)
+    desc: Unit + contract tests (api signals state machine, github-polling logic)
     cmds:
       - node --test api/rpc-session.test.mjs
+      - node --test github-polling/poll.test.mjs
 
   check-signals:
     desc: Live walkthrough — create session, prompt, await via /wait, webhook settled line (api + komodo must be running)
