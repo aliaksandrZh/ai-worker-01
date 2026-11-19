@@ -131,6 +131,16 @@ const PRESETS = {
 }`,
     variables: { owner: "aliaksandrZh", repo: "04", number: 2 },
   },
+  "by-number": {
+    query: `query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { id title number closed
+    items(first: 50) { nodes { id
+      content { ... on Issue { id number title } }
+      fieldValues(first: 10) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } }
+  } }
+    fields(first: 20) { nodes { ... on ProjectV2SingleSelectField { id name options { id name } } ... on ProjectV2FieldCommon { id name dataType } } }
+} } }`,
+    variables: { owner: "aliaksandrZh", number: 4 },
+  },
   inspect: {
     query: `query($id: ID!) {
   node(id: $id) { ... on ProjectV2 {
