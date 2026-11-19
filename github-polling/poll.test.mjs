@@ -303,6 +303,14 @@ describe("gh", () => {
 });
 
 describe("paged", () => {
+  test("injects per_page=100 when caller omits it; preserves explicit per_page", async () => {
+    const calls = [];
+    const impl = async (u) => (calls.push(String(u)), stub([1]));
+    await paged("/things", {}, { fetchImpl: impl });
+    await paged("/things", { per_page: 7 }, { fetchImpl: impl });
+    assert.match(calls[0], /per_page=100/);
+    assert.match(calls[1], /per_page=7/);
+  });
   test("single page, no next link — one call", async () => {
     const calls = [];
     const impl = async (u, o) => (calls.push(u), stub([1, 2]));

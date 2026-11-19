@@ -149,7 +149,7 @@ export const paged = async (path, params = {}, { stop, fetchImpl = fetch } = {})
   const pageCap = Number(process.env.GITHUB_PAGE_CAP) || 5;
   const items = [];
   let url = path;
-  let q = params;
+  let q = { per_page: 100, ...params };
   for (let page = 1; ; page++) {
     const res = await gh(url, q, fetchImpl);
     if (!Array.isArray(res.items)) return [res.items]; // single-object endpoint
