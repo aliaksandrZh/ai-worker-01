@@ -268,7 +268,7 @@ Failure notifications include: the command, task type/profile, attempt count, st
 
 ```text
 Task failed: /code
-Agent: coder | Attempts: 1/2 | Stage: Container startup
+Agent: coder | Attempt: #2 | Stage: Container startup
 Failure: container image could not be pulled (id: run_123)
 
 Automatic retries exhausted. The Workflow is waiting for human input.

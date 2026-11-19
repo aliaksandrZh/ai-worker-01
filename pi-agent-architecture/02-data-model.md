@@ -330,7 +330,7 @@ Commands are deduplicated by GitHub comment ID. Unauthorized/invalid commands ar
 - `image_digest` / build metadata
 - `created_at`
 
-Unique `(agent_profile_id, version)`. Creating a version triggers an image build (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1); only `ready` versions may be selected for a Task.
+Unique `(agent_profile_id, version)`. Creating a version triggers an image build (local Docker build on the execution host, tag `agent-<profile-name>:v<version>`, no external registry in V1); only `ready` versions may be selected for a Task. The per-field configuration values below (system prompt, skills, MCP, tools) are recorded in the immutable `config_snapshot` for lineage and display; at runtime the baked image is the sole effective configuration (decision 56).
 
 Profile secrets live outside Git and PostgreSQL in host-managed files (for example `/etc/pi-agent/secrets/`, restricted permissions); `profile.yaml` and the stored snapshot hold references only (e.g. `github_agent_pat`). The Runtime mounts a profile's required secrets read-only in-container at `/run/secrets/<name>`; secrets never travel via environment variables or image layers, and each profile receives only the secrets it needs (a read-only sync PAT for the Poller, write-capable PATs for agent MCP/Git operations, both repository-scoped).
 
@@ -478,7 +478,7 @@ Fields:
 
 Artifacts provide explicit handoff between agents. Avoid relying only on one agent's conversation history. Plan Artifacts carry no approval status in V1 — approval of the latest successful plan is expressed by the command that consumes it (`/code`, see 06 §4, decision 80). Since artifacts are immutable, a plan revision always means a new planning Task and a new Artifact.
 
-V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's token budget); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future. An Artifact of `type = log_reference` points to the Run log directory on host storage; its content is not copied into PostgreSQL.
+V1 storage rules: content is stored inline in PostgreSQL; artifacts are immutable after creation; handoff happens by loading `TaskArtifactInput` artifacts into the next Task's input. Limits: 256 KiB per artifact, 512 KiB of artifact content total per Task input (plus the profile's mandatory `max_context_tokens`, 02 §12, decision 63); no silent truncation — oversized output must be split or shortened by the agent. Supported formats in V1: `markdown`, `json`, `text`; `file_reference` is future. An Artifact of `type = log_reference` points to the Run log directory on host storage; its content is not copied into PostgreSQL.
 
 ## 18. RunEvent
 

@@ -21,6 +21,10 @@ flowchart TD
     K --> C[Specialized Pi Agent Containers]
     C <--> RA
     RA --> DB
+    HM[Execution Host Monitor] --> RA
+    BW[Build Worker] --> K
+    DB --> OW[Outbox Dispatcher]
+    OW --> GH
 ```
 
 ### GitHub Integration / Poller
@@ -105,7 +109,7 @@ Adding a profile should normally be configuration work, not a change to orchestr
 - Pi session files live on persistent Docker-host storage in V1. Every Run attempt uses a new Pi session; a retry creates a new session.
 - Artifacts are stored inline in PostgreSQL and passed to the next Task through its input; there is no shared artifact volume in V1.
 - Agent containers have no host shell access (no host-bridge capability).
-- Each Task has its own persistent workspace directory on the execution host (acompanied by per-Run session and log directories). The container can be stopped and restarted while the task data remains.
+- Each Task has its own persistent workspace directory on the execution host (accompanied by per-Run session and log directories). The container can be stopped and restarted while the task data remains.
 - Reviewer workspace is fresh and isolated from coder workspace.
 - Agent profiles may expose selected GitHub MCP tools and other MCP servers. Agents are responsible for performing GitHub operations explicitly permitted by their profiles. The Agent Runtime records execution events and results, which are persisted by the Orchestrator. The Orchestrator remains responsible for workflow state, task scheduling, container lifecycle, command handling, and system-level notifications.
 - Komodo owns actual deployment/container state; PostgreSQL stores desired and last observed state.
@@ -117,13 +121,13 @@ These are separate concepts:
 
 - **WorkItem**: GitHub Issue or PR.
 - **Workflow**: long-lived orchestration lifecycle for one root WorkItem.
-- **Task**: one unit of work such as plan, implementation, review, test design, or debugging.
+- **Task**: one unit of work such as plan, implementation, review, or test design.
 - **AgentSession**: a new Pi session for each Task.
 - **Run**: one attempt to execute a Task; retry creates another Run.
 - **Workspace**: persistent task-specific repository working copy/storage.
 - **ContainerInstance**: replaceable container deployment used to execute a Run.
 
-One Issue and a PR created from it are separate WorkItems and have separate Workflows. Store their relationship explicitly (for example, `WorkItemLink` with `closes`, `created_from`, or `related_to`). Closing the Issue must not silently close an independently open PR Workflow unless a future explicit policy says so.
+One Issue and a PR created from it are separate WorkItems and have separate Workflows. Store their relationship explicitly (via `WorkItemLink` with `closes` or `related_to`, decision 79). Closing the Issue must not silently close an independently open PR Workflow unless a future explicit policy says so.
 
 ## 6. Issue command flow: plan → human approval → code
 
@@ -292,3 +296,28 @@ Minimal metrics (exposed through health/metrics endpoints and structured logs; n
 | Runtime Bridge | External supervisor process — NOT a Pi extension (decision 33) |
 
 Key boundaries: the RPC stream is the realtime event source, the session JSONL is history; `agent_settled` means Pi's work has finally finished, including automatic continuations and retries; MCP/skills/extensions must be pinned inside the AgentProfileVersion image.
+
+## 16. Configuration reference (system.yaml)
+
+All operational knobs live in `config/system.yaml`; profile-level timeouts and resource limits may be lowered or redefined per `AgentProfileVersion`, but cannot bypass system constraints.
+
+| Setting | Owner | Default | Validation |
+|---|---|---|---|
+| `poll_interval` | System | 60 s | ≥ 30 s |
+| `poll_overlap` | System | 5 min | positive |
+| `per_page` | Poller | 100 | GitHub API maximum |
+| `max_concurrent_runs` | Orchestrator | 10 | ≥ 1 |
+| `startup_timeout` | System / Profile | 10 min | positive |
+| `idle_timeout` | System / Profile | 60 min | positive |
+| `max_run_duration` | System / Profile | 4 h | positive |
+| `heartbeat_interval` | Runtime | 30 s | less than `idle_timeout` |
+| `max_log_size` | System | 50 MiB per Run | hard limit |
+| `max_artifact_size` | System | 256 KiB | hard limit |
+| `max_task_artifacts_size` | System | 512 KiB | hard limit |
+| `max_context_tokens` | AgentProfileVersion | mandatory | fits the model context window with a reserve for the answer |
+| `max_automatic_retries` | System / Profile | 1 | transient pre-execution failures only |
+| `outbox_retry_window` | System | 24 h | positive |
+| `orphan_grace_period` | System | 24 h | positive |
+| `orphan_quarantine_period` | System | 24 h | positive |
+
+Artifacts, logs, and context are never silently truncated: exceeding a limit rejects the operation with a diagnosable error (decisions 63, 67, 76, 77).

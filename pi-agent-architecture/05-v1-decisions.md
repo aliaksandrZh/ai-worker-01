@@ -25,8 +25,8 @@
 21. Closing an Issue does not implicitly close/clean its related PR Workflow; each root is handled independently.
 22. Reconciliation checks active containers/runtime state. Runtime heartbeat and task progress are separate signals.
 23. The 60-minute idle timeout triggers on the absence of ALL observable activity while the container is alive (heartbeat keeps running as a separate liveness signal). It is configurable and initiates reconciliation; it does not map to `TimedOut`.
-24. File/object storage and parallel execution are future enhancements.
-25. GitHub Projects are out of scope for V1,
+24. File/object storage and parallel execution within a single Workflow are future enhancements (cross-Workflow Runs already run concurrently under `max_concurrent_runs`, decision 10).
+25. GitHub Projects are out of scope for V1.
 26. `/code` replaces `/proceed`: the command approves the latest successful plan Artifact and starts the coder Task against it. Plan iteration is comment-driven: the user answers plan questions as ordinary comments and reruns `/plan`; the new planning Task reads the Issue description plus all comments. No `/plan-continue`-style aliases (considered and dropped): users repeat `/plan`//`/code`.
 27. `/retry` repeats the last failed Task of the Workflow as a new Run with a new Pi session; `attempt_number` is incremented by the Orchestrator. There are no admin HTTP endpoints for task management in V1 (amended by decision 65): `/retry` and task cancellation flow only through the GitHub command path.
 28. Automatic retries are limited: only transient infrastructure errors, only before the Run starts executing; defaults `max_automatic_retries = 1`, `initial_backoff = 30s`, configurable. Policy levels: `AgentProfileVersion.retry_policy` default → Repository override → effective policy pinned on the Task.
@@ -102,6 +102,31 @@ See [06-command-reference.md](06-command-reference.md) for the full command cont
 | `/help` | Publishes commands valid for the target type; no Task or container |
 | `/retry` | Repeats the last failed Task of the Workflow as a new Run with a new Pi session; no new Task |
 
+## V1 acceptance criteria
+
+V1 readiness is defined by an end-to-end acceptance suite verifying both happy paths and failure paths. It runs against a dedicated disposable GitHub repository, never against production repositories.
+
+| Scenario | Must verify |
+|---|---|
+| Repository onboarding | YAML registration, DB records created, initial sync |
+| Polling | Pagination, overlap window, deduplication, restart recovery, deleted-comment tombstones |
+| Command parser | Valid commands, malformed commands, bot-authored comments, quotes/code blocks, already-edited comments |
+| Authorization | Write permission, allowlist, revoked-PAT handling |
+| Planning | Plan questions, human answers, repeated `/plan`, plan Artifacts |
+| Approval | Latest eligible plan approved by `/code`; rejection without a plan Artifact |
+| Coding | Branch creation, commits, push, required GitHub publication |
+| Reviewing | Initial review, explicit `/review`, pinned SHA, Head-SHA drift cancellation |
+| Queue | Cross-Workflow concurrency under `max_concurrent_runs`, same-Workflow exclusion |
+| Stop | Active Run graceful termination and cancellation of all queued Tasks |
+| Retry | Automatic pre-execution retry, exhausted retries, `/retry` with a new Session |
+| Timeouts | `startup_timeout`, `idle_timeout`, `max_run_duration` outcomes |
+| Callbacks | Duplicate events, API outage, durable spool recovery |
+| Outbox | Delivery retries, duplicate prevention, dead-letter handling |
+| Restart recovery | PostgreSQL restart, Orchestrator restart, container reconciliation |
+| Cleanup | Root closure, merged PR, storage deletion, DB history retention |
+
+Each acceptance test records its preconditions, the performed action, the expected PostgreSQL states, the expected GitHub side effects, and the expected container/storage side effects. V1 readiness criterion: all main happy paths and error paths pass automatically. A flow is not considered successful merely because the agent finished its work — publications, persistence, and final system states must be verified.
+
 ## Explicitly out of scope for V1
 
 - GitHub Projects.
@@ -117,4 +142,4 @@ See [06-command-reference.md](06-command-reference.md) for the full command cont
 
 ## Open decisions
 
-None remain — all former open items are resolved (see decisions 45–54). Future enhancement candidates (not in V1): conversational mode via `/respond`//`/ask`, an explicit `/create-pr`, a `/reply`-style thread command, PR support for `/test-cases`, and a `/agent <command>` alias.
+None remain — all former open items are resolved (see decisions 26–80). Future enhancement candidates (not in V1): conversational mode via `/respond`//`/ask`, an explicit `/create-pr`, a `/reply`-style thread command, PR support for `/test-cases`, and a `/agent <command>` alias.

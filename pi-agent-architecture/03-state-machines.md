@@ -173,9 +173,10 @@ OutboxAction:
 - `processing`
 - `completed`
 - `failed`
+- `dead_letter`
 - `cancelled`
 
-External writes use retries and idempotency keys. A GitHub write is not marked completed until the API call succeeds or a defined terminal policy is applied.
+External writes use retries and idempotency keys. A GitHub write is not marked completed until the API call succeeds or a defined terminal policy is applied. Permanent failures (401/403/404/422) or exhausted retries move an action to the retained `dead_letter` state with operator-visible diagnostics (decision 67).
 
 ## 9. Heartbeat, stale Run, and recovery
 
