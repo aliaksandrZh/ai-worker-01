@@ -14,4 +14,6 @@
 - [ ] Denied tool operation → `permission_blocked` RunEvent + explicit denial; impossible mandatory operation → Run Failed `required_permission_denied` + notification
 - [ ] Host-Monitor telemetry stored in PostgreSQL with its own credential; the control plane never reads execution-host paths or process tables directly
 - [ ] Orphan candidates detected with the grace/quarantine timing; nothing deleted while the DB is unavailable
+- [ ] A container dies without emitting a terminal callback → reconciliation marks the Run Failed with a clear error and the notification path fires (never silent recovery — `01 §12`)
+- [ ] Komodo/Periphery outage: desired state is preserved, reconciler retries without corrupting state; recovery resumes cleanly when reachable (decision 22)
 - [ ] Acceptance scenario "Timeouts" (`05` matrix) passes

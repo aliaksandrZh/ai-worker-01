@@ -30,7 +30,7 @@ flowchart TD
 ### GitHub Integration / Poller
 
 - Polls configured repositories over the GitHub REST API; default interval 60 seconds per repository (configurable per deployment).
-- Synchronizes Issues, PRs, issue comments, PR conversation comments, inline review comments, reviews, review request additions/removals, comment edits/deletions, PR details (Head SHA, state, requested reviewers), and timeline events (`cross-referenced`, `closed`, `connected`, `disconnected` — used for Issue↔PR links). Full commit history is not synchronized in V1: PR head/base SHAs are stored, commit metadata is read from Git while preparing a workspace, and `pulls/{number}/commits` may be consulted ad hoc (decisions 64, 77).
+- Synchronizes Issues, PRs, issue comments, PR conversation comments, inline review comments, reviews, review request additions/removals, comment edits/deletions, PR details (Head SHA, state, requested reviewers), and timeline events (`cross-referenced` and `closed` — the Issue↔PR link sources per decision 51; `connected`/`disconnected` synced as raw timeline records without V1 link semantics, relations reserved per decision 79). Full commit history is not synchronized in V1: PR head/base SHAs are stored, commit metadata is read from Git while preparing a workspace, and `pulls/{number}/commits` may be consulted ad hoc (decisions 64, 77).
 - Comment edits update the stored body; deleted comments are tombstoned, not removed (see 02).
 - Persists normalized records/events and per-stream sync cursors in PostgreSQL.
 - Uses stable external IDs or deterministic fingerprints to deduplicate data.

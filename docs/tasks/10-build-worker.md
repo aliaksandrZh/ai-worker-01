@@ -12,4 +12,5 @@
 - [ ] The built image contains the pinned Pi version and the baked `/opt/pi-agent/profile` config directory
 - [ ] Only `ready` versions are selectable by the Orchestrator; a failed build does not flip version state
 - [ ] A changed `profile.yaml` always produces a new version (pinned SHA/snapshot changes)
+- [ ] The version row records `bridge_configuration` (Bridge version + heartbeat/event cadence) and the image bakes that Bridge version (decision 54, `02 §12`)
 - [ ] Build Worker exposes heartbeat health and never touches the control-plane database directly

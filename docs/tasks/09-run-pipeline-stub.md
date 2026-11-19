@@ -8,7 +8,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Start endpoint creates Run + one-shot AgentSession (1:1, `run_id` unique) + container + per-Run directory tree
+- [ ] Start endpoint provisions the physical resources for the Orchestrator-created rows: the Run + its one-shot AgentSession (1:1, `run_id` unique) + container + per-Run directory tree (decision 44 — the Orchestrator owns DB rows, the endpoint provisions only)
 - [ ] Stub completes → `completed` callback persisted idempotently (duplicate eventIds ignored); Run terminal state set; container stopped, data retained
 - [ ] Stub failure → `failed` callback → Run Failed with the reported error code
 - [ ] Manifest artifacts become Artifact rows; oversize artifact rejected without silent truncation

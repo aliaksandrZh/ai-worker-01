@@ -18,3 +18,4 @@
 - [ ] Komodo Core + Periphery deployed via their own single docker-compose (`01 §2`) and reachable by the Runtime API with API-key credentials
 - [ ] Health/metrics endpoints expose the §14 baseline: Poller lag/duration/errors/rate-limit-remaining; queue pending/oldest-job-age/claim-wait; Runs active/duration/startup/heartbeat-age/progress-age/timeout counts; reconciliation mismatch + orphan counts; Outbox pending/failed/dead-letter counts; DB size
 - [ ] Mandatory backups automated per decision 52/76: PostgreSQL dumps + profile/config repository snapshots on schedule; DB size monitoring in place
+- [ ] Managed-storage usage / free disk space exposed via metrics (Host Monitor's storage telemetry surfaced through the metrics endpoint)

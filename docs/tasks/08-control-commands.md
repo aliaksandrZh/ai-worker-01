@@ -8,7 +8,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] `/help` on an Issue lists only Issue-valid commands; phase-gated commands (e.g. `/code` without coder profile) omitted
+- [ ] `/help` on an Issue lists only Issue-valid commands; phase-gated, profile-gated, and invalid-for-current-Workflow-state commands omitted (`06 §9`)
 - [ ] `/status` on a WorkItem without a Workflow replies "no agent workflow started" and creates nothing
 - [ ] `/status` with an active/last Task renders the draft format incl. `Run attempt: #N` and queue position
 - [ ] Exactly one reply per triggering comment (dedupe by comment ID)
