@@ -11,6 +11,7 @@
 - [ ] Bot requested as reviewer on a ready PR → automatic initial review exactly once per Workflow lifetime
 - [ ] Request on a draft PR deferred; on Ready it starts under the three conditions; an explicit `/review` suppresses the duplicate automatic review
 - [ ] Explicit `/review` → new review Task with both SHAs pinned; fresh read-only workspace; review + inline comments submitted via MCP
+- [ ] The review report/Artifact explicitly records which SHA was reviewed (`target_head_sha`, `04 §5`)
 - [ ] Head-SHA drift before a queued Task starts → `review_head_changed_before_execution` cancel + system comment asking for `/review` again
 - [ ] Review-request removal before execution → `review_request_removed_before_execution` cancel; an executing review is not interrupted
 - [ ] Fork PR → read-only checkout at the pinned SHA; fork code never executed; unresolvable head → `review_source_unavailable`

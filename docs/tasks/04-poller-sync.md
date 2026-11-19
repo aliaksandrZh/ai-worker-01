@@ -14,4 +14,5 @@
 - [ ] 304 Not Modified responses skip primary-limit consumption; rate limits stop and resume the cycle
 - [ ] `review_requested` and `review_request_removed` events for the bot are detected (PR snapshot diff over `requested_reviewers` — one of the two detection sources, decision 31)
 - [ ] A PR Head-SHA change emits `pull_request_synchronized` (normalized naming, decision 78) and updates `head_sha`
+- [ ] Submitted/dismissed PR reviews → GitHubReview rows + `pull_request_review_submitted` / `pull_request_review_dismissed` events (decision 78)
 - [ ] Acceptance scenario "Polling" — pagination, overlap, deduplication, restart recovery (`05` matrix) passes

@@ -15,6 +15,8 @@
 - [ ] Per-Run callbacks rejected for other runIds (credential scoping); token revoked after terminal delivery
 - [ ] Runtime API restart mid-run → reconciler recovers desired/observed state from PostgreSQL; Bridge spool redelivered
 - [ ] `outcome = needs_human_input` from the stub → Run Succeeded, Task terminal `Blocked`, Workflow `waiting_for_human`
+- [ ] The Workspace DB record is created by the Orchestrator on the Run's first attempt and reused by retries; its statuses track `03 §6` (Provisioning → Ready → InUse → CleanupPending → Deleted) with runtime metadata written back
+- [ ] Orchestrator→Runtime API calls authenticate with a dedicated service credential (decision 65); the per-Run callback token cannot start/stop containers or access other runs (negative test)
 - [ ] Per-Run log trio written per decision 43 (`logs/{stdout.log, stderr.log, bridge.log}`), 50 MiB per-Run cap with rotation; Run log fields (`log_storage_reference`, `log_size_bytes`, `logs_completed_at`) populated; `log_reference` Artifact points at the directory without copying content into PostgreSQL
 - [ ] The agent container has no Docker socket, no host-shell tool, and no way to reach or manage neighboring containers (decision 37, `01 §13`) — verified during the stub run
 - [ ] Profile-required secrets mount read-only at `/run/secrets/<name>` per ticket 11b — never via env vars or image layers

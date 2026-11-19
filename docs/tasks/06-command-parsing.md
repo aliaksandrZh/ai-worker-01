@@ -16,4 +16,5 @@
 - [ ] `arguments` is always `{}`; trailing text stored as user context for the Context Assembler
 - [ ] Command on a paused repository (`is_enabled = false`) → rejected with a recorded reason, no Task (decision 75)
 - [ ] Revoked/expired PAT during authorization → surfaced as a system configuration error, no automatic fallback to another PAT (decisions 65, 66)
+- [ ] Every rejected command → Outbox notification enqueued → concise reply comment with the reason on GitHub (`06 §1` rule 10, `§13` table, `04 §2`) — wired end-to-end with ticket 03
 - [ ] Acceptance scenarios "Command parser" and "Authorization" (incl. revoked-PAT handling, `05` matrix) pass

@@ -14,4 +14,5 @@
 - [ ] The sweep has its own run state and does not advance incremental cursors
 - [ ] `review_request_removed` events are produced from the timeline (the event-based detection source for decision 31/`06 §11`)
 - [ ] Merged PR produces `work_item_closed` with `close_reason = merged` (no separate merged event)
+- [ ] The timeline stream has its own per-repository sync cursor (`issues/{n}/timeline` among the stream families, decision 53/`02 §8`)
 - [ ] Acceptance tie-in: deleted-comment checks and WorkItemLink rows are asserted end-to-end in ticket 21 (scenarios "Polling" and "Cleanup")

@@ -13,4 +13,5 @@
 - [ ] `routing.yaml` creates the seeded global rule set (`repository_id = NULL`) with per-repo override capability
 - [ ] `github.bot_login` mismatch with `GET /user` identity fails startup as a configuration error
 - [ ] Schema-invalid YAML fails startup with a diagnosable error and no partial DB rows
+- [ ] Cross-knob validation per `01 §16`: `poll_interval ≥ 30 s`, `heartbeat_interval < idle_timeout`, positive timeouts/windows, `per_page` within the GitHub API maximum, mandatory per-profile `max_context_tokens` — any violation fails startup with a diagnosable error
 - [ ] Acceptance scenario "Repository onboarding" (`05` matrix) passes
