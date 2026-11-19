@@ -188,7 +188,7 @@ See [Command Reference](06-command-reference.md) for complete preconditions and 
 
 ### Initial review
 
-- The first review is triggered when GitHub reports that the bot account has been requested as a reviewer on a PR.
+- The first review is triggered when GitHub reports that the bot account has been requested as a reviewer on a PR. A request recorded on a draft PR does not start the review; the automatic initial review starts when the PR becomes ready for review, under the conditions in 06 §11 (decision 74).
 - Poller persists the `review_requested` event and current PR snapshot.
 - Orchestrator creates one initial review Task for that request/PR state; exactly one automatic initial review Task exists per PR/Workflow lifetime, and removing the review request before execution starts cancels a not-yet-started Task.
 - Reviewer gets a fresh workspace at the PR Head SHA, separate from any coder workspace, and read-only where possible.

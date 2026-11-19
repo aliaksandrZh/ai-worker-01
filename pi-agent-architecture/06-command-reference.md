@@ -127,7 +127,7 @@ SHA handling: if the PR Head SHA changed before a queued review Task starts, the
 
 Each explicit `/review` comment is a distinct review request, even if the Head SHA has not changed. Duplicate delivery of the same GitHub comment must not create another review.
 
-Draft and fork PRs (decision 74): no automatic initial review is created while a PR is draft — when it becomes ready for review (bot still requested), the initial review Task is created; explicit `/review` is allowed on a draft PR and the result is marked as a draft review (marking mechanism in `open-questions.md`). Fork PRs are reviewable: checkout from the PR head ref of the base repository at the pinned `head_sha` in a fresh read-only workspace; fork code is untrusted, so its scripts/builds/tests are never executed automatically; if the head cannot be resolved, the Task fails with `review_source_unavailable`. The coder never works against forks.
+Draft and fork PRs (decision 74): no automatic initial review is created while a PR is draft — when it becomes ready for review (bot still requested), the initial review Task is created; explicit `/review` is allowed on a draft PR, and the result is marked as a draft review (marking mechanism — see `open-questions-2.md`). Fork PRs are reviewable: checkout from the PR head ref of the base repository at the pinned `head_sha` in a fresh read-only workspace; fork code is untrusted, so its scripts/builds/tests are never executed automatically; if the head cannot be resolved, the Task fails with `review_source_unavailable`. The coder never works against forks.
 
 ## 6. `/test-cases`
 
@@ -233,6 +233,7 @@ For a PR `/review`, the reviewer receives the current diff plus relevant PR conv
 
 Separate from comment commands:
 - When GitHub reports that the bot account has been requested as a reviewer on a PR, Poller persists a `review_requested` event.
+- A request recorded on a draft PR does not start the automatic initial review. When the PR transitions from draft to ready for review, the initial review Task starts only if: the bot request is still active, no automatic initial review was created yet, and no explicit `/review` was already executed for this PR — an explicit review suppresses the duplicate automatic review on the Ready transition (decision 74).
 - Orchestrator starts the initial review Task if none has been created yet: exactly one automatic initial review per PR/Workflow lifetime (`Workflow.initial_review_created_at` stays set even if the Task is later cancelled).
 - If the review request is removed before the Task starts, the Task is cancelled (`review_request_removed_before_execution`); a renewed request does not create a second automatic initial review — the user should run `/review` explicitly.
 - Each review Task pins the PR Head SHA at creation (`target_head_sha`); SHA drift before a queued Task starts cancels the Task with `review_head_changed_before_execution` and a system comment asks for a new `/review`.

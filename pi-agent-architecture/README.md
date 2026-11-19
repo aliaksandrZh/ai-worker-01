@@ -12,9 +12,8 @@ The current repository is a proof of concept only. Existing code, API shape, run
 - [API contracts](04-api-contracts.md)
 - [V1 scope and decisions](05-v1-decisions.md)
 - [Command reference](06-command-reference.md)
-- [Open questions](open-questions.md) — items awaiting owner confirmation
 
-`07-review-and-open-points.md` was retired (documentation-review history); its open decisions were resolved and folded into 05 (decisions 26–54). Interim Q&A files (`08`, `09`, `10`) were removed once their questions were answered. Items surfaced by the 2026-11-19 documentation review that are still awaiting confirmation live in [open-questions.md](open-questions.md).
+`07-review-and-open-points.md` was retired (documentation-review history); its open decisions were resolved and folded into 05 (decisions 26–54). Interim Q&A files (`08`, `09`, `10`) were removed once their questions were answered. Round-1 clarification items from the 2026-11-19 documentation review were answered and folded into decisions 55–80; items from further rounds awaiting confirmation live in [open-questions-2.md](open-questions-2.md).
 
 ## Main design principles
 
@@ -45,6 +44,6 @@ The current repository is a proof of concept only. Existing code, API shape, run
 
 ## Open decisions
 
-All former product/implementation choices are resolved and folded into `05-v1-decisions.md` (decisions 26–80) and the flow documents. A small set of items still awaiting owner confirmation is tracked in [open-questions.md](open-questions.md).
+All former product/implementation choices are resolved and folded into `05-v1-decisions.md` (decisions 26–80) and the flow documents. A small set of items still awaiting owner confirmation is tracked in [open-questions-2.md](open-questions-2.md).
 
 Future enhancement candidates (explicitly not in V1): conversational mode via `/respond`//`/ask`, an explicit `/create-pr` command, a `/reply`-style thread-reply command, PR support for `/test-cases`, and a `/agent <command>` alias.
