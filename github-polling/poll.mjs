@@ -4,6 +4,8 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { join, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ---------------- state files ----------------
 
@@ -51,6 +53,9 @@ export const writeState = (file, state) => writeFileSync(file, JSON.stringify(st
 // ---------------- pure helpers ----------------
 
 export const capRing = (arr, items, cap) => [...arr, ...items].slice(-cap);
+
+// store cursor ids without ever duplicating what is already stored
+export const absorbFresh = (arr, ids, cap) => capRing(arr, ids.filter((id) => !arr.includes(id)), cap);
 
 export const flatten = (text, max = 200) => {
   const s = String(text ?? "").replace(/\s+/g, " ").trim();
@@ -161,12 +166,171 @@ export const paged = async (path, params = {}, { stop, fetchImpl = fetch } = {})
   }
 };
 
-// ---------------- log line builders ----------------
+// ---------------- poll cycle ----------------
+
+const RING_CAP = 5000; // shortcut: keeps state.json bounded; a repo with >5000 events between polls loses the tail
+const STATE_FILE = process.env.GITHUB_STATE_FILE || join(dirname(fileURLToPath(import.meta.url)), "state.json");
+
+export const newRepoState = () => ({
+  base: false,
+  eventIds: [],
+  issueEventIds: [],
+  commitShas: [],
+  maxIssueCommentId: 0,
+  maxPullCommentId: 0,
+  issues: {},
+  pulls: {},
+});
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const snapExtra = (s) =>
+  [
+    s.labels.length ? `labels: ${s.labels.join(", ")}` : "",
+    s.assignees.length ? `assigned: ${s.assignees.join(", ")}` : "",
+    s.milestone ? `milestone: ${s.milestone}` : "",
+    s.requested_reviewers.length ? `review requested: ${s.requested_reviewers.join(", ")}` : "",
+    s.merged_at ? "merged" : "",
+    s.draft ? "draft" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+// logs each of the 7 sources; every line is the shared format, first cycle gets a [baseline] prefix.
+export const pollRepo = async (repo, st) => {
+  const bw = st.base ? "" : "[baseline] ";
+  const seen = (ids, items) => ids.includes(items.id);
+  const counts = [];
+  const bump = (what, n) => n && counts.push(`+${n} ${what}`);
+
+  // 1. repo event feed (empty on quiet repos — commits/issues lists below are the primary sources)
+  const evs = await paged(`/repos/${repo}/events`, {}, {});
+  const newEvs = evs.filter((e) => !seen(st.eventIds, e));
+  st.eventIds = absorbFresh(st.eventIds, newEvs.map((e) => e.id), RING_CAP);
+  for (const e of newEvs) {
+    const line = eventLine(e);
+    if (line) console.log(bw + line);
+  }
+  bump("events", newEvs.length);
+
+  // 2. repo-wide issue/PR events (assigned, labeled, milestoned, closed, reopened…)
+  const ies = await paged(`/repos/${repo}/issues/events`, {}, {});
+  const newIes = ies.filter((e) => !seen(st.issueEventIds, e));
+  st.issueEventIds = absorbFresh(st.issueEventIds, newIes.map((e) => e.id), RING_CAP);
+  for (const ie of newIes) {
+    const line = issueEventLine(ie);
+    if (line) console.log(bw + line);
+  }
+  bump("issue-events", newIes.length);
+
+  // 3+4. issues & PRs — snapshot diff by number
+  const itemLine = (kind, e, body, prefix) =>
+    console.log(`${prefix}[${kind}] ${repo} #${e.number} (${e.user?.login ?? "?"}) — ${body} — ${e.html_url}`);
+  for (const [path, kind, bucket, isPR] of [
+    ["issues", "issue", "issues", false],
+    ["pulls", "pull", "pulls", true],
+  ]) {
+    const entries = await paged(`/repos/${repo}/${path}?state=all`, { sort: "updated", direction: "desc" });
+    let changed = 0;
+    for (const e of entries) {
+      if (!isPR && e.pull_request != null) continue; // issues list also returns PRs; pulls list — only PRs
+      const snap = snapshot(e);
+      const prev = st[bucket][e.number] ?? null;
+      if (prev === null) {
+        if (st.base)
+          itemLine(kind, e, `opened: ${flatten(e.title)}`, bw);
+        else
+          itemLine(kind, e, `${snap.state}${snap.merged_at ? ", merged" : ""}: ${flatten(e.title)}${snapExtra(snap) ? ` — ${snapExtra(snap)}` : ""}`, bw);
+        changed++;
+      } else {
+        const records = diffEntry(prev, snap);
+        if (records.length) {
+          itemLine(kind, e, `${records.join(", ")} — ${flatten(e.title)}`, bw);
+          changed++;
+        }
+      }
+      st[bucket][e.number] = snap;
+    }
+    bump(kind, changed);
+  }
+
+  // 5+6. comments — conversation (issues incl. PR threads) and inline review comments
+  for (const [path, cursor] of [
+    ["issues/comments", "maxIssueCommentId"],
+    ["pulls/comments", "maxPullCommentId"],
+  ]) {
+    const cs = await paged(`/repos/${repo}/${path}?sort=created`, { direction: "desc" });
+    const fresh = cs.filter((c) => c.id > st[cursor]);
+    for (const c of fresh) {
+      const line = commentLine(c);
+      if (line) console.log(bw + line);
+    }
+    st[cursor] = Math.max(st[cursor], ...cs.map((c) => c.id), 0);
+    bump(path === "issues/comments" ? "comments" : "inline", fresh.length);
+  }
+
+  // 7. commits
+  const commits = await paged(`/repos/${repo}/commits`, {}, {});
+  const newCommits = commits.filter((c) => !st.commitShas.includes(c.sha));
+  st.commitShas = absorbFresh(st.commitShas, newCommits.map((c) => c.sha), RING_CAP);
+  for (const c of newCommits) console.log(bw + commitLine(c));
+  bump("commits", newCommits.length);
+
+  if (!st.base) {
+    st.base = true;
+    console.log(`[baseline] ${repo} done: ${counts.join(", ") || "nothing"}`);
+  }
+};
+
+export const pollOnce = async (repos, state) => {
+  for (const repo of repos) {
+    state.repos[repo] ??= newRepoState();
+    try {
+      await pollRepo(repo, state.repos[repo]);
+      writeState(STATE_FILE, state); // per-repo save: a crash keeps cursor progress up to the last good repo
+    } catch (err) {
+      if (err instanceof AuthError) {
+        console.error(`github-polling: ${err.message} — check \`gh auth status\` or set GITHUB_TOKEN`);
+        process.exit(1);
+      }
+      if (err instanceof RateLimitError) {
+        console.warn(`github-polling: rate limit hit at ${repo} — resuming after ${new Date(err.resetAt).toISOString()}`);
+        throw err;
+      }
+      if (err instanceof NotFoundError)
+        console.warn(`github-polling: ${repo} not found — check GITHUB_REPOS entry and token scopes`);
+      else
+        console.warn(`github-polling: ${repo}: ${err?.message ?? err}`);
+    }
+  }
+};
+
+export const main = async () => {
+  const repos = (process.env.GITHUB_REPOS || "aliaksandrZh/04")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const intervalMs = (Number(process.env.GITHUB_POLL_INTERVAL_SEC) || 60) * 1000;
+  const state = readState(STATE_FILE);
+  console.log(
+    `github-polling: ${repos.join(", ")} — every ${intervalMs / 1000}s — ${token() ? "authed via gh/GITHUB_TOKEN" : "anonymous (60 req/h)"}`,
+  );
+  while (true) {
+    const t0 = Date.now();
+    try {
+      await pollOnce(repos, state);
+    } catch (err) {
+      if (err instanceof RateLimitError) {
+        await sleep(Math.max(0, err.resetAt - Date.now()));
+        continue; // fresh cycle immediately; already-polled repos just dedup
+      }
+      throw err;
+    }
+    await sleep(Math.max(0, intervalMs - (Date.now() - t0)));
+  }
+};
 
 // {at} [{kind}] {repo}{ #n} ({author}) — {body} — {url}
-const fmtLine = (at, kind, repo, n, author, body, url) =>
-  `${at} [${kind}]${repo ? ` ${repo}` : ""}${n != null ? ` #${n}` : ""} (${author}) — ${body} — ${url}`;
-
 const numKind = (item) => (item.pull_request ? "PR" : "issue"); // issues-list / payload rows
 
 export const eventLine = (ev) => {
@@ -273,3 +437,5 @@ export const commentLine = (c) => {
     c.html_url ?? ""
   }`;
 };
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();

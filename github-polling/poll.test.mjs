@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  capRing, flatten, parseNextLink, snapshot, diffEntry,
+  capRing, flatten, parseNextLink, snapshot, diffEntry, absorbFresh,
   eventLine, issueEventLine, commitLine, commentLine,
   readState, writeState,
   RateLimitError, AuthError, NotFoundError, ApiError,
@@ -16,6 +16,15 @@ describe("capRing", () => {
     assert.deepEqual(capRing(["a", "b"], ["c"], 3), ["a", "b", "c"]);
     assert.deepEqual(capRing(["a", "b", "c"], ["d"], 3), ["b", "c", "d"]);
     assert.deepEqual(capRing([], ["1", "2"], 2), ["1", "2"]);
+  });
+});
+
+describe("absorbFresh", () => {
+  test("repeated absorption never duplicates", () => {
+    let a = absorbFresh([], ["x"], 5);
+    a = absorbFresh(a, ["x"], 5);
+    a = absorbFresh(a, ["x", "y"], 5);
+    assert.deepEqual(a, ["x", "y"]);
   });
 });
 
