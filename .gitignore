@@ -18,3 +18,4 @@ github-polling/state.json
 github-polling/*.pem
 github-polling/*.private-key.pem
 pi/.env
+.idea
