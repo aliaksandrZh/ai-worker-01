@@ -1,0 +1,172 @@
+name: pi-agent-control-plane
+
+# §13 default composition: one Compose project on the single execution host.
+# Startup order: postgres → migrator → build-worker / runtime-api / host-monitor → orchestrator / poller / outbox-worker.
+# Decision 65: PostgreSQL reachable only on the private network (no ports); only runtime-api publishes a host port.
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pi_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-pi_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in src/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: Migrator }
+    restart: "no"
+    environment:
+      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  runtime-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: RuntimeApi }
+    restart: unless-stopped
+    ports:
+      - "${RUNTIME_API_HOST_PORT:-8080}:8080"
+    environment:
+      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
+      ServiceTokens__HostMonitor: ${SERVICE_TOKEN_HOST_MONITOR}
+      ServiceTokens__BuildWorker: ${SERVICE_TOKEN_BUILD_WORKER}
+      Komodo__Url: ${KOMODO_URL:-http://komodo-core:9120}
+      Komodo__ApiKey: ${KOMODO_API_KEY:-}
+      Komodo__ApiSecret: ${KOMODO_API_SECRET:-}
+      WorkerLoop__IntervalSeconds: 5
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  host-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: HostMonitor }
+    restart: unless-stopped
+    environment:
+      Storage__ManagedRoot: /var/lib/pi-agent/workflows
+      WorkerLoop__IntervalSeconds: 5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${STORAGE_ROOT:-./storage}:/var/lib/pi-agent/workflows
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  build-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: BuildWorker }
+    restart: unless-stopped
+    environment:
+      WorkerLoop__IntervalSeconds: 5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: Orchestrator }
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
+      WorkerLoop__IntervalSeconds: 5
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+      runtime-api:
+        condition: service_started
+
+  poller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: Poller }
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      WorkerLoop__IntervalSeconds: 5
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: { SERVICE: OutboxWorker }
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      WorkerLoop__IntervalSeconds: 5
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  backups:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pi_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in src/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-pi_agent}
+      BACKUP_DB_HOST: postgres
+      BACKUPS_DIR: /backups
+      BACKUP_INTERVAL_MINUTES: ${BACKUP_INTERVAL_MINUTES:-60}
+    volumes:
+      - ./backup/backup-loop.sh:/scripts/backup-loop.sh:ro
+      - backups:/backups
+    entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  config-snapshot:
+    # alpine/git latest is acceptable for the dev snapshot loop; pin when this ships
+    image: alpine/git:latest
+    restart: unless-stopped
+    environment:
+      CONFIG_SNAPSHOT_REPO_URL: ${CONFIG_SNAPSHOT_REPO_URL:-}
+      CONFIG_SNAPSHOT_INTERVAL_MINUTES: ${CONFIG_SNAPSHOT_INTERVAL_MINUTES:-1440}
+      BACKUPS_DIR: /backups
+    volumes:
+      - ./backup/config-snapshot-loop.sh:/scripts/config-snapshot-loop.sh:ro
+      - backups:/backups
+    entrypoint: ["/bin/sh", "/scripts/config-snapshot-loop.sh"]
+
+volumes:
+  pgdata:
+  backups:
+
+networks:
+  default:
+    name: pi-agent-net
