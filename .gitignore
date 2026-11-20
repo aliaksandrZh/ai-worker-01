@@ -19,3 +19,18 @@ github-polling/*.pem
 github-polling/*.private-key.pem
 pi/.env
 .idea
+
+# pi-agent control plane (src/) — build artifacts
+src/**/bin/
+src/**/obj/
+src/**/TestResults/
+src/**/*.user
+
+# pi-agent control plane (src/) — local env with secrets (keep src/.env.example tracked)
+src/.env
+
+# pi-agent control plane (src/) — runtime: compose state, host-storage mounts, backups, logs
+src/storage/
+src/backups/
+src/state.json
+src/*.log
