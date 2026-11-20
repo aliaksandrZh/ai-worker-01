@@ -88,10 +88,11 @@ public class WorkerMetricKeyTests
     [Fact]
     public void OutboxMetrics_HaveOutboxKeys()
     {
-        var collect = new OutboxMetrics(State()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var collect = new OutboxMetrics(State(), new OutboxState()).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("outboxPending"));
         Assert.True(collect.ContainsKey("outboxFailed"));
         Assert.True(collect.ContainsKey("outboxDeadLetter"));
+        Assert.Equal(0L, collect["outboxPending"]);
     }
 
     [Fact]

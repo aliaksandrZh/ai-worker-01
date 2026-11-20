@@ -60,11 +60,12 @@ DB in one transaction at each startup; no hot reload, no admin API (decisions 55
   new immutable `AgentProfileVersion` (`draft`): normalized YAML + per-file sha256 + file contents
   + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata. Builds/dispatches are tickets 07/10.
 
-Before `task stack`: create the secrets file and align identities
+Before `task stack`: create the two secrets files and align identities
 
 ```sh
 mkdir -p src/secrets && printf '<your-pat>' > src/secrets/github-sync-pat.txt   # gitignored
 #   → the PAT's login (GET /user) must equal github.bot_login in src/config/system.yaml
+printf '<your-write-pat>' > src/secrets/github-write-pat.txt                    # task 03: outbox comments
 ```
 
 Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown
@@ -88,8 +89,9 @@ Host Monitor and Build Worker never touch PostgreSQL (day-one enforcement:
 
 Workers additionally expose `running`, `heartbeatUtc`, `lastSuccessfulCycleUtc`.
 Placeholder `null` keys become real as their features land: poller → task 04, queue → task 07-08,
-runs/reconciliation → task 13, outbox → task 03. Live now: `dbSizeBytes` (runtime-api),
-`storageFreeBytes` (host-monitor), worker heartbeats.
+runs/reconciliation → task 13. Live now: `outboxPending/outboxFailed/outboxDeadLetter`
+(outbox-worker, task 03), `dbSizeBytes` (runtime-api), `storageFreeBytes` (host-monitor),
+worker heartbeats.
 
 ## Observations — known non-critical debt
 

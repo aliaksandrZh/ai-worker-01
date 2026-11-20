@@ -231,6 +231,93 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("agent_profile_version", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ActionType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("comment")
+                        .HasColumnName("action_type");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTime>("AvailableAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("available_at");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<Guid?>("LockedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("locked_by");
+
+                    b.Property<DateTime?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_until");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<Guid>("RepositoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("repository_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("pending")
+                        .HasColumnName("status");
+
+                    b.Property<Guid?>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_outbox_action");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_outbox_action_idempotency_key");
+
+                    b.HasIndex("RepositoryId")
+                        .HasDatabaseName("ix_outbox_action_repository_id");
+
+                    b.HasIndex("Status", "AvailableAt")
+                        .HasDatabaseName("ix_outbox_action_status_available_at");
+
+                    b.ToTable("outbox_action", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Repository", b =>
                 {
                     b.Property<Guid>("Id")
@@ -357,6 +444,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_agent_profile_version_agent_profile_agent_profile_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outbox_action_repository_repository_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.SyncCursor", b =>

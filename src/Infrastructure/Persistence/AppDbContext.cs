@@ -10,6 +10,7 @@ namespace PiAgent.Infrastructure.Persistence;
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<Repository> Repositories => Set<Repository>();
+    public DbSet<OutboxAction> OutboxActions => Set<OutboxAction>();
     public DbSet<SyncCursor> SyncCursors => Set<SyncCursor>();
     public DbSet<AgentProfile> AgentProfiles => Set<AgentProfile>();
     public DbSet<AgentProfileVersion> AgentProfileVersions => Set<AgentProfileVersion>();
@@ -70,6 +71,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasOne<AgentProfileVersion>()
                 .WithMany()
                 .HasForeignKey(r => r.AgentProfileVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<OutboxAction>(entity =>
+        {
+            entity.ToTable("outbox_action");
+            entity.Property(a => a.Payload).HasColumnType("jsonb");
+            entity.Property(a => a.ActionType).HasDefaultValue(OutboxActionTypes.Comment);
+            entity.Property(a => a.Status).HasDefaultValue(OutboxStatuses.Pending);
+            entity.HasIndex(a => a.IdempotencyKey).IsUnique();
+            entity.HasIndex(a => new { a.Status, a.AvailableAt });
+            entity.HasOne<Repository>()
+                .WithMany()
+                .HasForeignKey(a => a.RepositoryId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }
