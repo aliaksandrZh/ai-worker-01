@@ -34,3 +34,4 @@ description: Start the task
 
 ## Verification
 - Once implementation and verification are complete, wait for the user's manual review.
+- Add to the task file a short description of what has been done and instructions on how to manually test it.
