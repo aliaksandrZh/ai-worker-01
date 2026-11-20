@@ -91,7 +91,10 @@ Workers additionally expose `running`, `heartbeatUtc`, `lastSuccessfulCycleUtc`.
 Placeholder `null` keys become real as their features land: poller → task 04, queue → task 07-08,
 runs/reconciliation → task 13. Live now: `outboxPending/outboxFailed/outboxDeadLetter`
 (outbox-worker, task 03), `dbSizeBytes` (runtime-api), `storageFreeBytes` (host-monitor),
-worker heartbeats.
+worker heartbeats, and the poller set `pollerLagSeconds/pollerLastSuccessUtc/
+pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining` (task 04: the poller
+synchronizes repositories read-only on the §16 knobs `poll_interval`/`poll_overlap`/`per_page`
+with one read-only PAT (decisions 50/65) — `github-sync-pat.txt`, same file as the Config Loader).
 
 ## Observations — known non-critical debt
 

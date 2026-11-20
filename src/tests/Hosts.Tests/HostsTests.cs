@@ -77,7 +77,7 @@ public class WorkerMetricKeyTests
     [Fact]
     public void PollerMetrics_HavePollerKeys()
     {
-        var collect = new PollerMetrics(State()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var collect = new PollerMetrics(State(), new PollerState()).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("pollerLagSeconds"));
         Assert.True(collect.ContainsKey("pollerLastSuccessUtc"));
         Assert.True(collect.ContainsKey("pollerLastCycleDurationSeconds"));

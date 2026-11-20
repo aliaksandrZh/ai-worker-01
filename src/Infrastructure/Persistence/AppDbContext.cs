@@ -15,6 +15,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AgentProfile> AgentProfiles => Set<AgentProfile>();
     public DbSet<AgentProfileVersion> AgentProfileVersions => Set<AgentProfileVersion>();
     public DbSet<AgentProfileRoutingRule> AgentProfileRoutingRules => Set<AgentProfileRoutingRule>();
+    public DbSet<WorkItem> WorkItems => Set<WorkItem>();
+    public DbSet<GitHubComment> GitHubComments => Set<GitHubComment>();
+    public DbSet<GitHubReview> GitHubReviews => Set<GitHubReview>();
+    public DbSet<GitHubEvent> GitHubEvents => Set<GitHubEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -85,6 +89,60 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(a => a.RepositoryId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<WorkItem>(entity =>
+        {
+            entity.ToTable("work_item");
+            entity.HasIndex(w => new { w.RepositoryId, w.Number }).IsUnique();
+            entity.HasIndex(w => w.GithubNodeId).IsUnique();
+            entity.Property(w => w.Assignees).HasColumnType("jsonb");
+            entity.Property(w => w.Labels).HasColumnType("jsonb");
+            entity.Property(w => w.RequestedReviewers).HasColumnType("jsonb");
+            entity.HasOne<Repository>()
+                .WithMany()
+                .HasForeignKey(w => w.RepositoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<GitHubComment>(entity =>
+        {
+            entity.ToTable("github_comment");
+            entity.HasIndex(c => new { c.Kind, c.GithubCommentId }).IsUnique();
+            entity.HasIndex(c => new { c.WorkItemId, c.CreatedAtGithub });
+            // github_review_id is an external ID only — no DB FK (02 §5)
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(c => c.WorkItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<GitHubReview>(entity =>
+        {
+            entity.ToTable("github_review");
+            entity.HasIndex(r => r.GithubReviewId).IsUnique();
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(r => r.WorkItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<GitHubEvent>(entity =>
+        {
+            entity.ToTable("github_event");
+            // (source, dedupe_key) unique, 02 §23 — PostgreSQL NULLs are distinct, so unkeyed events
+            // need no partial filter
+            entity.HasIndex(e => new { e.Source, e.DedupeKey }).IsUnique();
+            entity.HasIndex(e => new { e.RepositoryId, e.ProcessingStatus, e.ReceivedAt });
+            entity.Property(e => e.Payload).HasColumnType("jsonb");
+            entity.Property(e => e.ProcessingStatus).HasDefaultValue(GitHubEventStatuses.Pending);
+            entity.HasOne<Repository>()
+                .WithMany()
+                .HasForeignKey(e => e.RepositoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(e => e.WorkItemId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

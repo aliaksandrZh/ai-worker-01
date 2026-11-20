@@ -2,7 +2,7 @@ name: pi-agent-control-plane
 
 # §13 default composition: one Compose project on the single execution host.
 # Startup order: postgres → migrator → build-worker / runtime-api / host-monitor → orchestrator / poller / outbox-worker.
-# Decision 65: PostgreSQL reachable only on the private network (no ports); only runtime-api publishes a host port.
+# Decision 65 amended: PostgreSQL additionally published on 127.0.0.1 only, for local pgAdmin access.
 
 services:
   postgres:
@@ -128,8 +128,16 @@ services:
       args: { SERVICE: Poller }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
     restart: unless-stopped
+    volumes:
+      # §16 polling knobs (decision 53: poll_interval / poll_overlap / per_page from system.yaml).
+      - ./config:/etc/pi-agent/config:ro
+      # The one read-only polling PAT for ALL configured repositories (decisions 50/65) —
+      # the same github-sync-pat.txt the Config Loader uses.
+      - ./secrets:/etc/pi-agent/secrets:ro
     environment:
       ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
+      PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
       WorkerLoop__IntervalSeconds: 5
     depends_on:
       migrator:

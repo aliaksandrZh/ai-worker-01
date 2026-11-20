@@ -231,6 +231,220 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("agent_profile_version", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubComment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AuthorLogin")
+                        .HasColumnType("text")
+                        .HasColumnName("author_login");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<string>("CommitSha")
+                        .HasColumnType("text")
+                        .HasColumnName("commit_sha");
+
+                    b.Property<DateTime>("CreatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_github");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<int?>("DiffPosition")
+                        .HasColumnType("integer")
+                        .HasColumnName("diff_position");
+
+                    b.Property<long>("GithubCommentId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("github_comment_id");
+
+                    b.Property<long?>("GithubReviewId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("github_review_id");
+
+                    b.Property<long?>("InReplyToCommentId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("in_reply_to_comment_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTime>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_synced_at");
+
+                    b.Property<string>("Path")
+                        .HasColumnType("text")
+                        .HasColumnName("path");
+
+                    b.Property<DateTime>("UpdatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_github");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_github_comment");
+
+                    b.HasIndex("Kind", "GithubCommentId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_github_comment_kind_github_comment_id");
+
+                    b.HasIndex("WorkItemId", "CreatedAtGithub")
+                        .HasDatabaseName("ix_github_comment_work_item_id_created_at_github");
+
+                    b.ToTable("github_comment", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("DedupeKey")
+                        .HasColumnType("text")
+                        .HasColumnName("dedupe_key");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("ExternalEventId")
+                        .HasColumnType("text")
+                        .HasColumnName("external_event_id");
+
+                    b.Property<DateTime?>("OccurredAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at_github");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTime?>("ProcessedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("processed_at");
+
+                    b.Property<string>("ProcessingError")
+                        .HasColumnType("text")
+                        .HasColumnName("processing_error");
+
+                    b.Property<string>("ProcessingStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("pending")
+                        .HasColumnName("processing_status");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid>("RepositoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("repository_id");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source");
+
+                    b.Property<Guid?>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_github_event");
+
+                    b.HasIndex("WorkItemId")
+                        .HasDatabaseName("ix_github_event_work_item_id");
+
+                    b.HasIndex("Source", "DedupeKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_github_event_source_dedupe_key");
+
+                    b.HasIndex("RepositoryId", "ProcessingStatus", "ReceivedAt")
+                        .HasDatabaseName("ix_github_event_repository_id_processing_status_received_at");
+
+                    b.ToTable("github_event", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AuthorLogin")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("author_login");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<string>("CommitSha")
+                        .HasColumnType("text")
+                        .HasColumnName("commit_sha");
+
+                    b.Property<long>("GithubReviewId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("github_review_id");
+
+                    b.Property<DateTime>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_synced_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<DateTime?>("SubmittedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("submitted_at_github");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_github_review");
+
+                    b.HasIndex("GithubReviewId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_github_review_github_review_id");
+
+                    b.HasIndex("WorkItemId")
+                        .HasDatabaseName("ix_github_review_work_item_id");
+
+                    b.ToTable("github_review", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -426,6 +640,118 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("sync_cursor", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Assignees")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("assignees");
+
+                    b.Property<string>("AuthorLogin")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("author_login");
+
+                    b.Property<string>("BaseSha")
+                        .HasColumnType("text")
+                        .HasColumnName("base_sha");
+
+                    b.Property<string>("Body")
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<string>("CleanupStatus")
+                        .HasColumnType("text")
+                        .HasColumnName("cleanup_status");
+
+                    b.Property<DateTime?>("ClosedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at_github");
+
+                    b.Property<DateTime?>("ClosedAtLocal")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at_local");
+
+                    b.Property<DateTime>("CreatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_github");
+
+                    b.Property<bool?>("Draft")
+                        .HasColumnType("boolean")
+                        .HasColumnName("draft");
+
+                    b.Property<string>("GithubNodeId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("github_node_id");
+
+                    b.Property<string>("HeadSha")
+                        .HasColumnType("text")
+                        .HasColumnName("head_sha");
+
+                    b.Property<string>("Labels")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("labels");
+
+                    b.Property<DateTime>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_synced_at");
+
+                    b.Property<DateTime?>("MergedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("merged_at");
+
+                    b.Property<long>("Number")
+                        .HasColumnType("bigint")
+                        .HasColumnName("number");
+
+                    b.Property<Guid>("RepositoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("repository_id");
+
+                    b.Property<string>("RequestedReviewers")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("requested_reviewers");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("type");
+
+                    b.Property<DateTime>("UpdatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_github");
+
+                    b.HasKey("Id")
+                        .HasName("pk_work_item");
+
+                    b.HasIndex("GithubNodeId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_work_item_github_node_id");
+
+                    b.HasIndex("RepositoryId", "Number")
+                        .IsUnique()
+                        .HasDatabaseName("ix_work_item_repository_id_number");
+
+                    b.ToTable("work_item", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentProfileRoutingRule", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.AgentProfileVersion", null)
@@ -446,6 +772,42 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_agent_profile_version_agent_profile_agent_profile_id");
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubComment", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_github_comment_work_item_work_item_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubEvent", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_github_event_repository_repository_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_github_event_work_item_work_item_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubReview", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_github_review_work_item_work_item_id");
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
@@ -464,6 +826,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_sync_cursor_repository_repository_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItem", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_work_item_repository_repository_id");
                 });
 #pragma warning restore 612, 618
         }

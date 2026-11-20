@@ -27,17 +27,20 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
-    public AppDbContext NewDbContext() => new(
+    public AppDbContext NewDbContext(Microsoft.EntityFrameworkCore.Diagnostics.ISaveChangesInterceptor? interceptor = null) => new(
         new DbContextOptionsBuilder<AppDbContext>()
             .UseNpgsql(ConnectionString)
             .UseSnakeCaseNamingConvention()
+            .AddInterceptors(interceptor is null
+                ? []
+                : [interceptor])
             .Options);
 
     public async Task ResetAsync(CancellationToken cancellationToken = default)
     {
         await using var dbContext = NewDbContext();
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE agent_profile_routing_rule, agent_profile_version, agent_profile, sync_cursor, outbox_action, repository CASCADE",
+            "TRUNCATE agent_profile_routing_rule, agent_profile_version, agent_profile, sync_cursor, outbox_action, repository, work_item, github_comment, github_review, github_event CASCADE",
             cancellationToken);
     }
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure;
 using PiAgent.Poller;
 using PiAgent.Platform.Http;
@@ -10,6 +11,23 @@ builder.Logging.AddPiJsonLogging("poller");
 builder.Services.AddPiData(builder.Configuration);
 builder.Services.AddPiWorkerLoop();
 builder.Services.AddSingleton<IWorkerMetrics, PollerMetrics>();
+
+// Startup configuration (same stance as the Outbox Worker / Config Loader): §16 polling knobs + the
+// one read-only sync PAT (decisions 50/65, config plane 01 §2) are read ONCE — missing/malformed
+// values fail host startup with a diagnosable error.
+builder.Services.AddSingleton(Options.Create(PollerConfig.Read(
+    builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config")));
+builder.Services.AddSingleton(new GitHubReadClient(
+    new HttpClient { BaseAddress = new Uri("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30) },
+    PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_PAT_FILE"], "PI_AGENT_GITHUB_PAT_FILE")));
+
+builder.Services.AddSingleton(new PollerState());
+builder.Services.AddSingleton<IRepositoryStream, IssuesStream>();
+builder.Services.AddSingleton<IRepositoryStream, PullRequestsStream>();
+builder.Services.AddSingleton<IRepositoryStream, PrReviewsStream>();
+builder.Services.AddSingleton<IRepositoryStream, IssueCommentsStream>();
+builder.Services.AddSingleton<IRepositoryStream, PrReviewCommentsStream>();
+builder.Services.AddSingleton<IWorkerCycle, PollerCycle>();
 
 var app = builder.Build();
 app.MapPiEndpoints();
