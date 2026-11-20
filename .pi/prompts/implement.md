@@ -1,8 +1,11 @@
 ---
 description: Start the task
+argument-hint: "[task]"
 ---
 
 # Implementation Instructions
+
+Task ${1:-tasknumber}
 
 ## Scope
 - Read the requirements and relevant documentation, then provide a list of proposed changes before implementation. Wait for explicit user approval.
@@ -39,9 +42,8 @@ description: Start the task
 
 ## Implementation
 
-- Follow `azh-dotnet`.
-- Follow `executing-plans`.
-- Follow `ponytail`.
+- [REQUIRED] Follow `superpowers` skills set
+- [REQUIRED] Follow `ponytail` skill
 - If you need to run a long-lived process (e.g., run the project, Docker), ask for permission first.
 - When finished, stop everything you started, then verify it: nothing you started may still be
   running — confirm with a status check and report its output. A stop command issued is not a
