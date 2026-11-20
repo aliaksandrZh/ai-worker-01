@@ -31,3 +31,8 @@
 - **Effect:** NuGet restore re-runs on every image build (any source change invalidates the layer). Speed issue only, not correctness — negligible at current size, noticeable as packages/files grow.
 - **Revisit trigger:** build times become annoying, or the package set grows.
 - **Fix sketch:** standard layered pattern — copy `*.props` + `*.csproj` → `dotnet restore` → copy sources → `dotnet publish`.
+
+## OBS-5 GitHub polls
+- An unparseable issue_url/pull_request_url tail (issue_number 0) pins a stream's cursor at that comment
+   permanently — data-safe, unrealizable from real GitHub payloads.
+- per_page > 100 silently capped by GitHub REST (pagination still correct via Link headers).
