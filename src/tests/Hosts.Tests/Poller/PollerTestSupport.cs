@@ -73,6 +73,8 @@ public static class PollerTestSupport
 
         public void EnqueueResponse(HttpResponseMessage response) => _scheduled.Enqueue(_ => response);
 
+        public void EnqueueThrow(Exception exception) => _scheduled.Enqueue(_ => throw exception);
+
         public void Enqueue(HttpStatusCode status, string body = """{"message": "boom"}""") =>
             EnqueueResponse(new HttpResponseMessage(status) { Content = new StringContent(body) });
 
@@ -163,6 +165,81 @@ public static class PollerTestSupport
           "pull_request_url": "https://api.github.com/repos/octo-org/example/pulls/{{prNumber}}"
         }
         """;
+
+    /// <summary>Minimal GitHubComment row for resolution tests and the deleted-comment sweep's
+    /// tombstone tests (task 05).</summary>
+    public static GitHubComment SeedComment(AppDbContext db, WorkItem workItem, string kind, long commentId,
+        string body = "seeded", string author = "bob", string created = "2026-11-18T08:00:00Z")
+    {
+        var row = new GitHubComment
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItem.Id,
+            GithubCommentId = commentId,
+            Kind = kind,
+            AuthorLogin = author,
+            Body = body,
+            CreatedAtGithub = DateTime.Parse(created).ToUniversalTime(),
+            UpdatedAtGithub = DateTime.Parse(created).ToUniversalTime(),
+            LastSyncedAt = DateTime.UtcNow,
+        };
+        db.GitHubComments.Add(row);
+        db.SaveChanges();
+        return row;
+    }
+
+    // ---- timeline + introducer payload builders (task 05) ----
+
+    public static string TimelineJson(params string[] events) => ArrayJson(events);
+
+    public static string CrossReferencedJson(long id, long sourceNumber, bool sourceIsPr = true,
+        string repo = "octo-org/example", string created = "2026-11-19T12:00:00Z")
+    {
+        var repositoryUrl = $"https://api.github.com/repos/{repo}";
+        var marker = sourceIsPr
+            ? $"\"pull_request\": {{\"url\": \"https://api.github.com/repos/{repo}/pulls/{sourceNumber}\"}}, "
+            : "";
+        var source = $"{{\"issue\": {{\"number\": {sourceNumber}, \"repository_url\": \"{repositoryUrl}\", {marker}\"title\": \"source item\"}}}}";
+        return $$"""
+        {
+          "id": {{id}}, "event": "cross-referenced", "created_at": "{{created}}",
+          "source": {{source}}
+        }
+        """;
+    }
+
+    public static string ClosedTimelineJson(long id, string? commitId = null, string? commitMessage = null,
+        string created = "2026-11-19T13:00:00Z") =>
+        $$"""
+        {
+          "id": {{id}}, "event": "closed", "created_at": "{{created}}",
+          "commit_id": {{QuotedDate(commitId)}}, "commit_message": {{QuotedDate(commitMessage)}}
+        }
+        """;
+
+    public static string ReviewRequestTimelineJson(long id, bool removed, string created = "2026-11-19T14:00:00Z",
+        string? reviewer = "pi-bot", string? team = null)
+    {
+        var reviewerJson = reviewer is null ? "null" : $"{{\"login\": \"{reviewer}\"}}";
+        var teamJson = team is null ? "null" : $"{{\"name\": \"{team}\"}}";
+        var eventType = removed ? "review_request_removed" : "review_requested";
+        return $$"""
+        {
+          "id": {{id}}, "event": "{{eventType}}", "created_at": "{{created}}",
+          "requested_reviewer": {{reviewerJson}}, "requested_team": {{teamJson}}
+        }
+        """;
+    }
+
+    public static string TimelineEventJson(long id, string eventType, string created = "2026-11-19T15:00:00Z") =>
+        $$"""
+        {"id": {{id}}, "event": "{{eventType}}", "created_at": "{{created}}"}
+        """;
+
+    public static string IntroducersJson(params (long Number, string? MergedAt)[] pulls) =>
+        ArrayJson(pulls.Select(p =>
+            $"{{\"number\": {p.Number}, \"state\": \"closed\", \"title\": \"pr {p.Number}\", \"merged_at\": {QuotedDate(p.MergedAt)}}}")
+            .ToArray());
 
     /// <summary>Minimal WorkItem row for resolution tests (the streams never create one).</summary>
     public static WorkItem SeedWorkItem(AppDbContext db, Repository repository, long number, string type,

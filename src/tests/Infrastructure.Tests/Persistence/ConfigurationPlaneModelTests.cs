@@ -45,7 +45,7 @@ public class ConfigurationPlaneModelTests
             .OrderBy(n => n)
             .ToList();
         Assert.Equal(
-            new[] { "agent_profile", "agent_profile_routing_rule", "agent_profile_version", "github_comment", "github_event", "github_review", "outbox_action", "repository", "sync_cursor", "work_item" },
+            new[] { "agent_profile", "agent_profile_routing_rule", "agent_profile_version", "github_comment", "github_event", "github_review", "outbox_action", "repository", "sync_cursor", "work_item", "work_item_link" },
             tables);
     }
 

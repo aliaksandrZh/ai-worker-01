@@ -752,6 +752,48 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("work_item", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItemLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("IssueWorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("issue_work_item_id");
+
+                    b.Property<Guid>("PrWorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pr_work_item_id");
+
+                    b.Property<string>("RelationType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("relation_type");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source");
+
+                    b.HasKey("Id")
+                        .HasName("pk_work_item_link");
+
+                    b.HasIndex("PrWorkItemId")
+                        .HasDatabaseName("ix_work_item_link_pr_work_item_id");
+
+                    b.HasIndex("IssueWorkItemId", "PrWorkItemId", "RelationType")
+                        .IsUnique()
+                        .HasDatabaseName("ix_work_item_link_issue_work_item_id_pr_work_item_id_relation_");
+
+                    b.ToTable("work_item_link", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentProfileRoutingRule", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.AgentProfileVersion", null)
@@ -836,6 +878,23 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_work_item_repository_repository_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItemLink", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("IssueWorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_work_item_link_work_item_issue_work_item_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("PrWorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_work_item_link_work_item_pr_work_item_id");
                 });
 #pragma warning restore 612, 618
         }

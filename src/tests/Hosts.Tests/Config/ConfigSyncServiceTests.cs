@@ -74,7 +74,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         var result = await new ConfigSyncService(db).SyncAsync(sync);
 
         Assert.Equal(1, result.RepositoriesCreated);
-        Assert.Equal(6, result.CursorsCreated);
+        Assert.Equal(7, result.CursorsCreated); // six decision-53 stream families + the deleted-comment sweep row
         Assert.Equal(1, result.VersionsAdded);
         Assert.Equal(1, result.RoutingRulesUpserted);
 
@@ -95,7 +95,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         }
 
         var cursors = await db.SyncCursors.AsNoTracking().Where(c => c.RepositoryId == repository.Id).ToListAsync();
-        Assert.Equal(6, cursors.Count);
+        Assert.Equal(7, cursors.Count);
         Assert.Equal(
             SyncCursorStreams.All.ToHashSet(),
             cursors.Select(c => c.Stream).ToHashSet());
@@ -178,7 +178,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(0, second.RepositoriesCreated);
         Assert.Equal(1, await db.AgentProfileVersions.AsNoTracking().CountAsync());
         Assert.Equal(1, await db.AgentProfileRoutingRules.AsNoTracking().CountAsync());
-        Assert.Equal(6, await db.SyncCursors.AsNoTracking().CountAsync());
+        Assert.Equal(7, await db.SyncCursors.AsNoTracking().CountAsync());
         Assert.Equal(firstSync.Id, (await db.AgentProfileVersions.AsNoTracking().SingleAsync()).Id);
     }
 

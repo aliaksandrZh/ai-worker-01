@@ -77,6 +77,31 @@ public static class GitHubMappers
         CommitSha: String(review, "commit_id"),
         SubmittedAt: Timestamp(review, "submitted_at"));
 
+    /// <summary>One raw issue-timeline event (task 05): event name, stable id (null → fingerprint key
+    /// downstream), commit fields for `closed`, the referencing item for `cross-referenced` (with the
+    /// source issue's repository_url for the same-repository guard), and the reviewer login for
+    /// `review_requested`/`review_request_removed` (team requests have no login and are skipped upstream).</summary>
+    public static TimelineEventSnapshot MapTimelineEvent(JsonElement timelineEvent) => new(
+        Id: Int64(timelineEvent, "id"),
+        EventType: String(timelineEvent, "event"),
+        CreatedAt: Timestamp(timelineEvent, "created_at"),
+        CommitId: String(timelineEvent, "commit_id"),
+        CommitMessage: String(timelineEvent, "commit_message"),
+        SourceIssueNumber: Int64(timelineEvent, "source", "issue", "number"),
+        SourceIsPullRequest: timelineEvent.TryGetProperty("source", out var source)
+            && source.TryGetProperty("issue", out var sourceIssue)
+            && sourceIssue.TryGetProperty("pull_request", out _),
+        SourceIssueRepositoryUrl: String(timelineEvent, "source", "issue", "repository_url"),
+        RequestedReviewerLogin: String(timelineEvent, "requested_reviewer", "login"),
+        RequestedTeamName: String(timelineEvent, "requested_team", "name"),
+        ActorLogin: String(timelineEvent, "actor", "login"));
+
+    /// <summary>Pull request summary from the ad-hoc `commits/{sha}/pulls` read (task 05 D2) — the
+    /// merged PR that introduced a closing commit; merged_at null means referencing/unmerged, skipped.</summary>
+    public static IntroducerPullRequestSnapshot MapIntroducerPullRequest(JsonElement pull) => new(
+        Number: pull.GetProperty("number").GetInt64(),
+        MergedAt: Timestamp(pull, "merged_at"));
+
     /// <summary>Last '/'-segment of a GitHub API URL when numeric (`.../issues/12` → 12).</summary>
     public static long? NumberFromApiUrl(string? apiUrl)
     {
@@ -109,22 +134,39 @@ public static class GitHubMappers
         return current.ValueKind == JsonValueKind.String ? current.GetString() : null;
     }
 
-    private static int? Int32(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            ? value.GetInt32()
-            : null;
-
-    private static long? Int64(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
-            ? value.GetInt64()
-            : null;
-
-    private static DateTime? Timestamp(JsonElement element, string name)
+    private static int? Int32(JsonElement element, params string[] path)
     {
-        var raw = String(element, name);
-        return DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
+        var current = Navigate(element, path);
+        return current.HasValue && current.Value.ValueKind == JsonValueKind.Number ? current.Value.GetInt32() : null;
+    }
+
+    private static long? Int64(JsonElement element, params string[] path)
+    {
+        var current = Navigate(element, path);
+        return current.HasValue && current.Value.ValueKind == JsonValueKind.Number ? current.Value.GetInt64() : null;
+    }
+
+    private static DateTime? Timestamp(JsonElement element, params string[] path)
+    {
+        var current = Navigate(element, path);
+        return current.HasValue && current.Value.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(current.Value.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
             ? parsed
+            : null;
+    }
+
+    private static JsonElement? Navigate(JsonElement element, string[] path)
+    {
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+                return null;
+        }
+        return current.ValueKind == JsonValueKind.Object || current.ValueKind == JsonValueKind.String
+            || current.ValueKind == JsonValueKind.Number
+            ? current
             : null;
     }
 

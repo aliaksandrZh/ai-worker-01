@@ -70,3 +70,52 @@ public sealed record ReviewDismissedEventPayload(
     [property: JsonPropertyName("pr_number")] long PrNumber,
     [property: JsonPropertyName("state")] string State,
     [property: JsonPropertyName("author")] string? Author);
+
+// ---- timeline + deleted-comment sweep payloads (task 05, decisions 51/77/78/79) ----
+
+/// <summary>`cross-referenced` timeline event (raw record; feeds `related_to` links). `source_type` is
+/// the referencing item's type — links form only from Issue↔PR pairs (typed columns, task 05 D1).</summary>
+public sealed record TimelineCrossReferencePayload(
+    [property: JsonPropertyName("number")] long Number,
+    [property: JsonPropertyName("source_number")] long SourceNumber,
+    [property: JsonPropertyName("source_type")] string SourceType);
+
+/// <summary>`closed` timeline event (raw record; feeds `closes` links via commit closing keywords).
+/// Null commit fields when the issue was closed manually.</summary>
+public sealed record TimelineClosedPayload(
+    [property: JsonPropertyName("number")] long Number,
+    [property: JsonPropertyName("commit_id")] string? CommitId,
+    [property: JsonPropertyName("commit_message")] string? CommitMessage);
+
+/// <summary>Raw timeline record for `connected`/`disconnected` (decision 79: synced without V1 link
+/// semantics — the type lives in the event_type column, the payload names the owner only).</summary>
+public sealed record TimelineRecordPayload(
+    [property: JsonPropertyName("number")] long Number);
+
+/// <summary>`issue_comment_deleted` / `review_comment_deleted` from the daily sweep (decision 77);
+/// `author` is the stored author of the tombstoned comment.</summary>
+public sealed record CommentDeletedEventPayload(
+    [property: JsonPropertyName("comment_id")] long CommentId,
+    [property: JsonPropertyName("issue_number")] long IssueNumber,
+    [property: JsonPropertyName("author")] string? Author);
+
+/// <summary>One pull request summary from the ad-hoc `commits/{sha}/pulls` read (decision 51/D2):
+/// the merged PR that introduced a closing commit.</summary>
+public sealed record IntroducerPullRequestSnapshot(long Number, DateTime? MergedAt);
+
+/// <summary>One raw issue-timeline event mapped from the REST payload (task 05). `Id` is the stable
+/// external event id when GitHub reports one (null → deterministic fingerprint key downstream);
+/// `SourceIssueX` describe the referencing item of a `cross-referenced` event; `RequestedX` the
+/// reviewer of `review_requested`/`review_request_removed` events.</summary>
+public sealed record TimelineEventSnapshot(
+    long? Id,
+    string? EventType,
+    DateTime? CreatedAt,
+    string? CommitId,
+    string? CommitMessage,
+    long? SourceIssueNumber,
+    bool? SourceIsPullRequest,
+    string? SourceIssueRepositoryUrl,
+    string? RequestedReviewerLogin,
+    string? RequestedTeamName,
+    string? ActorLogin);

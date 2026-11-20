@@ -9,8 +9,12 @@ public static class SyncCursorStreams
     public const string PrReviews = "pr_reviews";
     public const string PrReviewComments = "pr_review_comments";
     public const string Timeline = "timeline";
+    /// <summary>Deleted-comment daily sweep run state (decision 77) — not a decision-53 endpoint
+    /// family, but per-repository run state lives in the same sync_cursor table.</summary>
+    public const string DeletedCommentSweep = "deleted_comment_sweep";
 
-    public static readonly string[] All = [Issues, Pulls, IssueComments, PrReviews, PrReviewComments, Timeline];
+    public static readonly string[] All =
+        [Issues, Pulls, IssueComments, PrReviews, PrReviewComments, Timeline, DeletedCommentSweep];
 }
 
 /// <summary>Per-repository/per-stream sync cursor (02 §8); stream values from decision 53 endpoint families.</summary>

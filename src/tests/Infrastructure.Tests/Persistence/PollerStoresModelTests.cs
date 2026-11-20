@@ -182,6 +182,49 @@ public class PollerStoresModelTests
         Assert.Equal(DeleteBehavior.Cascade, repositoryFk.DeleteBehavior);
     }
 
+    // ---- WorkItemLink (02 §4, task 05 — typed role columns per D1) ----
+
+    [Fact]
+    public void WorkItemLink_TableName_Columns_UniqueIndex()
+    {
+        using var dbContext = NewDbContext();
+        var entity = Entity(dbContext, typeof(WorkItemLink));
+        Assert.Equal("work_item_link", entity.GetTableName());
+
+        var properties = entity.GetProperties().ToDictionary(p => p.Name);
+        foreach (var required in new[] { nameof(WorkItemLink.Id), nameof(WorkItemLink.IssueWorkItemId),
+                     nameof(WorkItemLink.PrWorkItemId), nameof(WorkItemLink.RelationType),
+                     nameof(WorkItemLink.Source), nameof(WorkItemLink.CreatedAt) })
+            Assert.False(properties[required].IsNullable, $"{required} must be required");
+
+        // unique (issue, pr, relation) — 02 §4/§23 source/target uniqueness in typed-role shape
+        Assert.Contains(entity.GetIndexes(), i => i.IsUnique
+            && i.Properties.Select(p => p.Name).SequenceEqual(
+                [nameof(WorkItemLink.IssueWorkItemId), nameof(WorkItemLink.PrWorkItemId), nameof(WorkItemLink.RelationType)]));
+
+        // both sides reference work_item with cascade (mirrors github_comment/github_review)
+        Assert.Equal(2, entity.GetForeignKeys().Count());
+        Assert.All(entity.GetForeignKeys(), fk =>
+        {
+            Assert.Equal(typeof(WorkItem), fk.PrincipalEntityType.ClrType);
+            Assert.Equal(DeleteBehavior.Cascade, fk.DeleteBehavior);
+        });
+    }
+
+    [Fact]
+    public void WorkItemLink_V1Enums()
+    {
+        Assert.Equal("closes", WorkItemLinkRelations.Closes);
+        Assert.Equal("related_to", WorkItemLinkRelations.RelatedTo);
+        Assert.Equal("github_closing_reference", WorkItemLinkSources.GithubClosingReference);
+        Assert.Equal("github_cross_reference", WorkItemLinkSources.GithubCrossReference);
+        // raw GitHub timeline names (task 05, decision 79) — ticket 07 dispatches by (source, event_type)
+        Assert.Equal("cross-referenced", GitHubTimelineEvents.CrossReferenced);
+        Assert.Equal("closed", GitHubTimelineEvents.Closed);
+        Assert.Equal("connected", GitHubTimelineEvents.Connected);
+        Assert.Equal("disconnected", GitHubTimelineEvents.Disconnected);
+    }
+
     // ---- Decision-78 taxonomy constants (02 §7) ----
 
     [Fact]

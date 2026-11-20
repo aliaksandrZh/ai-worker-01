@@ -39,6 +39,35 @@ public sealed record TimestampCursor(DateTime? Position, string? Etag = null)
     }
 }
 
+/// <summary>Cursor shard for one work item's `issues/{n}/timeline` (decision 53 families): `last_visit`
+/// = the `updated_at_github` observed at the last successfully-processed visit — the visit gate is
+/// `item.UpdatedAtGithub > last_visit` (closure/cross-reference/review-request/connected-disconnected
+/// bumps revisit the item); `position` = the highest timeline event id durably saved (timeline lists
+/// ascend by event id, so a page whose max id ≤ position is client-side-skipped). An unresolved link
+/// event holds back BOTH values by not writing the entry (next cycle revisits; dedupe keeps it idempotent).</summary>
+public sealed record TimelineItemCursor(DateTime LastVisit, long? Position);
+
+/// <summary>Cursor for the `timeline` stream (decision 53): per-work-item entries keyed by number.</summary>
+public sealed record TimelineCursor(IReadOnlyDictionary<long, TimelineItemCursor> Items)
+{
+    public string Serialize() => JsonSerializer.Serialize(this, PollerCursorJson.Options);
+
+    public static TimelineCursor? TryParse(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<TimelineCursor>(raw, PollerCursorJson.Options);
+            return parsed is null ? null : parsed;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+}
+
 /// <summary>Cursor for the `pr_reviews` stream (decision 53): per-PR etags from conditional
 /// `pulls/{n}/reviews` requests; 304s skip without consuming the primary limit (GitHub-side).</summary>
 public sealed record PrReviewCursor(IReadOnlyDictionary<long, string> Etags)

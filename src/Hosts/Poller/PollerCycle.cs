@@ -11,7 +11,8 @@ namespace PiAgent.Poller;
 /// <summary>
 /// One IWorkerCycle tick (decision 4/53): every enabled-or-paused repository (decision 75 — pause stops
 /// task-producing commands, never polling) is polled when its in-memory next-due gate has elapsed,
-/// streams in fixed order `issues → pulls → pr_reviews → issue_comments → pr_review_comments`. A failing
+/// streams in fixed order `issues → pulls → pr_reviews → issue_comments → pr_review_comments →
+/// timeline → deleted_comment_sweep` (the last runs on its own daily last-success gate, decision 77). A failing
 /// stream records its own cursor error and the remaining streams still run; a rate-limited one aborts the
 /// repository AND the whole cycle (nothing else attempted, cursors untouched) with an in-memory pause
 /// honoring Retry-After/X-RateLimit-Reset — primary limits — or bounded exponential backoff for 429s
@@ -32,6 +33,8 @@ public sealed class PollerCycle(
         SyncCursorStreams.PrReviews,
         SyncCursorStreams.IssueComments,
         SyncCursorStreams.PrReviewComments,
+        SyncCursorStreams.Timeline,
+        SyncCursorStreams.DeletedCommentSweep,
     ];
 
     private static readonly TimeSpan MaxPause = TimeSpan.FromHours(1);

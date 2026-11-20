@@ -39,6 +39,21 @@ public static class GitHubEventStatuses
 }
 
 /// <summary>
+/// Raw GitHub timeline event names (task 05, decision 79). NOT decision-78 normalized types: rows with
+/// these event_type values are the raw timeline records (audit trail + decision-79 reservation —
+/// `connected`/`disconnected` create no WorkItemLink rows). Ticket 07's event processor must treat
+ 
+/// unknown/raw types as recorded no-ops (dispatch by (source, event_type)).
+/// </summary>
+public static class GitHubTimelineEvents
+{
+    public const string CrossReferenced = "cross-referenced";
+    public const string Closed = "closed";
+    public const string Connected = "connected";
+    public const string Disconnected = "disconnected";
+}
+
+/// <summary>
 /// A change the Poller detected (02 §7): one row per detection with a decision-78 normalized event_type,
 /// a JSONB payload describing the change, and a `dedupe_key` — stable external ID or deterministic
 /// fingerprint — unique per (source, dedupe_key). WorkItemId is nullable until resolved; FK SetNull.

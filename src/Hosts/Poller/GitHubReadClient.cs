@@ -4,6 +4,10 @@ using System.Text.Json;
 
 namespace PiAgent.Poller;
 
+/// <summary>Result of the deleted-comment sweep's direct re-check (decision 77): GitHub reports the
+/// resource with `Found=false` exactly on a confirmed 404 — every other outcome is an exception.</summary>
+public sealed record GitHubSingle(bool Found, JsonElement? Item);
+
 /// <summary>One GitHub REST list page (decision 53): parsed items, `Link` rel="next" target, and the
 /// rate-limit/conditional-response headers. A 304 (If-None-Match hit) yields NotModified=true with no
 /// items — GitHub reports it before counting against the primary limit.</summary>
@@ -63,6 +67,34 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
                 items.Add(item.Clone());
             return new GitHubPage(false, items, NextPage(response), Etag(response), Remaining(response),
                 ResetAt(response), RetryAfter(response));
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new GitHubReadException(null, $"{relativePath}: network failure: {Redact(exception.Message)}");
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GitHubReadException(null, $"{relativePath}: request timed out: {Redact(exception.Message)}");
+        }
+    }
+
+    /// <summary>Single-object GET for direct re-checks (deleted-comment sweep, decision 77): `Found=false`
+    /// exactly on a confirmed 404; 200 yields the parsed object. Any other status keeps the shared
+    /// classification — rate-limit exceptions propagate to the cycle, other failures throw
+    /// GitHubReadException so ambiguous outcomes can never mean deletion.</summary>
+    public async Task<GitHubSingle> GetSingleAsync(string relativePath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync(relativePath, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return new GitHubSingle(false, null);
+            if (!response.IsSuccessStatusCode)
+                throw await FailureAsync(relativePath, response, cancellationToken, Remaining(response),
+                    ResetAt(response), RetryAfter(response));
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            return new GitHubSingle(true, document.RootElement.Clone());
         }
         catch (HttpRequestException exception)
         {

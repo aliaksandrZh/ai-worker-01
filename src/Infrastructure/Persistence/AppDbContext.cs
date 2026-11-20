@@ -16,6 +16,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AgentProfileVersion> AgentProfileVersions => Set<AgentProfileVersion>();
     public DbSet<AgentProfileRoutingRule> AgentProfileRoutingRules => Set<AgentProfileRoutingRule>();
     public DbSet<WorkItem> WorkItems => Set<WorkItem>();
+    public DbSet<WorkItemLink> WorkItemLinks => Set<WorkItemLink>();
     public DbSet<GitHubComment> GitHubComments => Set<GitHubComment>();
     public DbSet<GitHubReview> GitHubReviews => Set<GitHubReview>();
     public DbSet<GitHubEvent> GitHubEvents => Set<GitHubEvent>();
@@ -101,6 +102,21 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasOne<Repository>()
                 .WithMany()
                 .HasForeignKey(w => w.RepositoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<WorkItemLink>(entity =>
+        {
+            entity.ToTable("work_item_link");
+            // (issue, pr, relation) unique — 02 §4/§23 source/target uniqueness in typed-role shape
+            entity.HasIndex(l => new { l.IssueWorkItemId, l.PrWorkItemId, l.RelationType }).IsUnique();
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(l => l.IssueWorkItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(l => l.PrWorkItemId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

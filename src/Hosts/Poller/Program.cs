@@ -27,7 +27,9 @@ builder.Services.AddSingleton<IRepositoryStream, PullRequestsStream>();
 builder.Services.AddSingleton<IRepositoryStream, PrReviewsStream>();
 builder.Services.AddSingleton<IRepositoryStream, IssueCommentsStream>();
 builder.Services.AddSingleton<IRepositoryStream, PrReviewCommentsStream>();
-builder.Services.AddSingleton<IWorkerCycle, PollerCycle>();
+builder.Services.AddSingleton<IRepositoryStream, TimelineStream>();
+builder.Services.AddSingleton<IRepositoryStream, DeletedCommentSweepStream>();
+builder.Services.AddSingleton<IWorkerCycle, PollerCycle>(); 
 
 var app = builder.Build();
 app.MapPiEndpoints();
