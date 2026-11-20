@@ -28,6 +28,7 @@ public static class CommandTestSupport
 {
     private static long _nextId = 4200;
     private static int _nextNumber = 100;
+    private static int _profileCounter;
 
     private static long NextCommentId() => Interlocked.Increment(ref _nextId);
 
@@ -138,7 +139,7 @@ public static class CommandTestSupport
             .UseSnakeCaseNamingConvention());
 
         var configuration = configurationState ?? new ConfigurationState();
-        configuration.MarkSynchronized("jsxhuz");
+        configuration.MarkSynchronized("jsxhuz", 10);
 
         var handler = new PollerTestSupport.StubHandler();
         var gate = new CollaboratorPermissionGate(
@@ -158,5 +159,54 @@ public static class CommandTestSupport
             metrics,
             provider.GetRequiredService<ILogger<CommentCommandProcessor>>());
         return new ProcessorHarness(provider, processor, handler, configuration, metrics);
+    }
+
+    /// <summary>Profile + version (given state, ticket-02 shape) + routing rule for admission tests (task 07).</summary>
+    public static async Task<(AgentProfile Profile, AgentProfileVersion Version, AgentProfileRoutingRule Rule)> SeedProfileAsync(
+        AppDbContext db,
+        string taskType,
+        string versionState = ProfileVersionStates.Ready,
+        bool profileEnabled = true,
+        Guid? repositoryId = null,
+        int priority = 1,
+        string? retryJson = null)
+    {
+        var profile = new AgentProfile
+        {
+            Id = Guid.NewGuid(),
+            Name = $"profile-{Interlocked.Increment(ref _profileCounter)}",
+            IsEnabled = profileEnabled,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var version = new AgentProfileVersion
+        {
+            Id = Guid.NewGuid(),
+            AgentProfileId = profile.Id,
+            Version = 1,
+            SourceDirectory = "config/agents/planner",
+            ConfigSnapshot = "{}",
+            ConfigHash = Guid.NewGuid().ToString("N"),
+            RuntimeType = "pi",
+            MaxContextTokens = 200000,
+            State = versionState,
+            RetryPolicy = retryJson,
+        };
+        var rule = new AgentProfileRoutingRule
+        {
+            Id = Guid.NewGuid(),
+            RepositoryId = repositoryId,
+            TaskType = taskType,
+            AgentProfileVersionId = version.Id,
+            Priority = priority,
+            IsEnabled = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        db.AgentProfiles.Add(profile);
+        db.AgentProfileVersions.Add(version);
+        db.AgentProfileRoutingRules.Add(rule);
+        await db.SaveChangesAsync();
+        return (profile, version, rule);
     }
 }

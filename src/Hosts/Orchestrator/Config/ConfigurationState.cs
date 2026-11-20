@@ -5,11 +5,14 @@ namespace PiAgent.Orchestrator.Config;
 /// <summary>
 /// Cold-start gate (01 §13): until configuration synchronization completes successfully the
 /// Orchestrator accepts no task-producing commands; /status, /help and health endpoints stay available.
-/// The synchronized `github.bot_login` travels with the gate state — startup-only sync, no hot reload
-/// (comment-processor runtime identity, task 06).
+/// The synchronized `github.bot_login` and the execution cap (`max_concurrent_runs`, decision 10) travel
+/// with the gate state — startup-only sync, no hot reload (comment processor + job-queue runtime).
 /// </summary>
 public sealed class ConfigurationState
 {
+    /// <summary>The global execution cap from system.yaml (`max_concurrent_runs`, decision 10); default matches the parsed-config default.</summary>
+    public int MaxConcurrentRuns { get; private set; } = 10;
+
     public bool Synchronized { get; private set; }
     public DateTime? SynchronizedAtUtc { get; private set; }
     /// <summary>Exact-case bot login from system.yaml (`github.bot_login`); set when synchronization succeeds.</summary>
@@ -17,11 +20,12 @@ public sealed class ConfigurationState
     /// <summary>First failure message (diagnosable configuration error); also surfaced via /readyz.</summary>
     public string? Error { get; private set; }
 
-    public void MarkSynchronized(string botLogin)
+    public void MarkSynchronized(string botLogin, int maxConcurrentRuns)
     {
         Synchronized = true;
         SynchronizedAtUtc = DateTime.UtcNow;
         BotLogin = botLogin;
+        MaxConcurrentRuns = maxConcurrentRuns;
         Error = null;
     }
 

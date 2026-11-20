@@ -306,6 +306,199 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("agent_profile_version", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentProfileVersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_profile_version_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("FileDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("file_deleted_at");
+
+                    b.Property<DateTime?>("LastActivityAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_activity_at");
+
+                    b.Property<DateTime?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_heartbeat_at");
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("RuntimeSessionId")
+                        .HasColumnType("text")
+                        .HasColumnName("runtime_session_id");
+
+                    b.Property<string>("SessionFilePath")
+                        .HasColumnType("text")
+                        .HasColumnName("session_file_path");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StorageStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("available")
+                        .HasColumnName("storage_status");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_agent_session");
+
+                    b.HasIndex("AgentProfileVersionId")
+                        .HasDatabaseName("ix_agent_session_agent_profile_version_id");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_agent_session_run_id");
+
+                    b.HasIndex("TaskId")
+                        .HasDatabaseName("ix_agent_session_task_id");
+
+                    b.ToTable("agent_session", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Artifact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Content")
+                        .HasColumnType("text")
+                        .HasColumnName("content");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("format");
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("type");
+
+                    b.Property<Guid>("WorkflowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workflow_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_artifact");
+
+                    b.HasIndex("TaskId")
+                        .HasDatabaseName("ix_artifact_task_id");
+
+                    b.HasIndex("WorkflowId")
+                        .HasDatabaseName("ix_artifact_workflow_id");
+
+                    b.ToTable("artifact", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ContainerInstance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_session_id");
+
+                    b.Property<string>("ContainerImage")
+                        .HasColumnType("text")
+                        .HasColumnName("container_image");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DeploymentName")
+                        .HasColumnType("text")
+                        .HasColumnName("deployment_name");
+
+                    b.Property<string>("DesiredState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("desired_state");
+
+                    b.Property<string>("HostId")
+                        .HasColumnType("text")
+                        .HasColumnName("host_id");
+
+                    b.Property<string>("KomodoDeploymentId")
+                        .HasColumnType("text")
+                        .HasColumnName("komodo_deployment_id");
+
+                    b.Property<DateTime?>("LastStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_started_at");
+
+                    b.Property<DateTime?>("LastStoppedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_stopped_at");
+
+                    b.Property<string>("ObservedState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("observed_state");
+
+                    b.Property<DateTime?>("RemovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("removed_at");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_container_instance");
+
+                    b.HasIndex("AgentSessionId")
+                        .HasDatabaseName("ix_container_instance_agent_session_id");
+
+                    b.HasIndex("RunId")
+                        .HasDatabaseName("ix_container_instance_run_id");
+
+                    b.ToTable("container_instance", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubComment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -520,6 +713,167 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("github_review", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrchestrationJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTime>("AvailableAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("available_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("JobType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("job_type");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("LockedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("locked_by");
+
+                    b.Property<DateTime?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_until");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
+                        .HasColumnName("priority");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_orchestration_job");
+
+                    b.HasIndex("TaskId")
+                        .HasDatabaseName("ix_orchestration_job_task_id");
+
+                    b.HasIndex("Status", "AvailableAt", "Priority")
+                        .HasDatabaseName("ix_orchestration_job_status_available_at_priority");
+
+                    b.ToTable("orchestration_job", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrchestrationTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentProfileVersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_profile_version_id");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<DateTime?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text")
+                        .HasColumnName("failure_reason");
+
+                    b.Property<string>("RetryPolicy")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("retry_policy");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("integer")
+                        .HasColumnName("sequence");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetBaseSha")
+                        .HasColumnType("text")
+                        .HasColumnName("target_base_sha");
+
+                    b.Property<string>("TargetHeadSha")
+                        .HasColumnType("text")
+                        .HasColumnName("target_head_sha");
+
+                    b.Property<Guid?>("TriggerCommandId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("trigger_command_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("type");
+
+                    b.Property<Guid>("WorkflowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workflow_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_task");
+
+                    b.HasIndex("AgentProfileVersionId")
+                        .HasDatabaseName("ix_task_agent_profile_version_id");
+
+                    b.HasIndex("TriggerCommandId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_task_trigger_command_id")
+                        .HasFilter("trigger_command_id IS NOT NULL");
+
+                    b.HasIndex("WorkflowId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_task_one_unfinished_per_workflow")
+                        .HasFilter("status IN ('queued', 'claimed', 'starting', 'running')");
+
+                    b.HasIndex("Status", "CreatedAt")
+                        .HasDatabaseName("ix_task_status_created_at");
+
+                    b.HasIndex("WorkflowId", "Sequence")
+                        .IsUnique()
+                        .HasDatabaseName("ix_task_workflow_id_sequence");
+
+                    b.ToTable("task", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -669,6 +1023,84 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("repository", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Run", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_number");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<string>("ErrorCode")
+                        .HasColumnType("text")
+                        .HasColumnName("error_code");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("error_message");
+
+                    b.Property<int?>("ExitCode")
+                        .HasColumnType("integer")
+                        .HasColumnName("exit_code");
+
+                    b.Property<DateTime?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_heartbeat_at");
+
+                    b.Property<DateTime?>("LastProgressAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_progress_at");
+
+                    b.Property<long?>("LogSizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("log_size_bytes");
+
+                    b.Property<string>("LogStorageReference")
+                        .HasColumnType("text")
+                        .HasColumnName("log_storage_reference");
+
+                    b.Property<DateTime?>("LogsCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("logs_completed_at");
+
+                    b.Property<DateTime?>("LogsDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("logs_deleted_at");
+
+                    b.Property<string>("ResultSummary")
+                        .HasColumnType("text")
+                        .HasColumnName("result_summary");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run");
+
+                    b.HasIndex("TaskId", "AttemptNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ix_run_task_id_attempt_number");
+
+                    b.ToTable("run", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.SyncCursor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -713,6 +1145,43 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_sync_cursor_repository_id_stream");
 
                     b.ToTable("sync_cursor", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.TaskArtifactInput", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ArtifactId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("artifact_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("purpose");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_task_artifact_input");
+
+                    b.HasIndex("ArtifactId")
+                        .HasDatabaseName("ix_task_artifact_input_artifact_id");
+
+                    b.HasIndex("TaskId", "ArtifactId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_task_artifact_input_task_id_artifact_id");
+
+                    b.ToTable("task_artifact_input", (string)null);
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItem", b =>
@@ -869,6 +1338,63 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("work_item_link", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Workflow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CurrentTaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("current_task_id");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text")
+                        .HasColumnName("failure_reason");
+
+                    b.Property<DateTime?>("InitialReviewCreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("initial_review_created_at");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_workflow");
+
+                    b.HasIndex("WorkItemId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_workflow_work_item_id");
+
+                    b.HasIndex("Status", "UpdatedAt")
+                        .HasDatabaseName("ix_workflow_status_updated_at");
+
+                    b.ToTable("workflow", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentCommand", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
@@ -897,6 +1423,63 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_agent_profile_version_agent_profile_agent_profile_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentSession", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.AgentProfileVersion", null)
+                        .WithMany()
+                        .HasForeignKey("AgentProfileVersionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_session_agent_profile_version_agent_profile_version_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_session_run_run_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_session_task_task_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Artifact", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_artifact_task_task_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Workflow", null)
+                        .WithMany()
+                        .HasForeignKey("WorkflowId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_artifact_workflow_workflow_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ContainerInstance", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.AgentSession", null)
+                        .WithMany()
+                        .HasForeignKey("AgentSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_container_instance_agent_session_agent_session_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .HasConstraintName("fk_container_instance_run_run_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.GitHubComment", b =>
@@ -935,6 +1518,39 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_github_review_work_item_work_item_id");
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrchestrationJob", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_orchestration_job_task_task_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrchestrationTask", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.AgentProfileVersion", null)
+                        .WithMany()
+                        .HasForeignKey("AgentProfileVersionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_task_agent_profile_version_agent_profile_version_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.AgentCommand", null)
+                        .WithMany()
+                        .HasForeignKey("TriggerCommandId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_task_agent_command_trigger_command_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Workflow", null)
+                        .WithMany()
+                        .HasForeignKey("WorkflowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_task_workflow_workflow_id");
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
@@ -945,6 +1561,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_outbox_action_repository_repository_id");
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Run", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_task_task_id");
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.SyncCursor", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
@@ -953,6 +1579,23 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_sync_cursor_repository_repository_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.TaskArtifactInput", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Artifact", null)
+                        .WithMany()
+                        .HasForeignKey("ArtifactId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_task_artifact_input_artifacts_artifact_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_task_artifact_input_task_task_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.WorkItem", b =>
@@ -980,6 +1623,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_work_item_link_work_item_pr_work_item_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Workflow", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_workflow_work_item_work_item_id");
                 });
 #pragma warning restore 612, 618
         }

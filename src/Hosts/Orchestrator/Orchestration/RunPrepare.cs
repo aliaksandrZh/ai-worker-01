@@ -1,0 +1,70 @@
+using Microsoft.EntityFrameworkCore;
+
+using PiAgent.Infrastructure.Persistence;
+
+namespace PiAgent.Orchestrator.Orchestration;
+
+/// <summary>
+/// Run preparation at claim (decision 44, 03 §3/§4): creates the `pending` Run (next attempt number),
+/// the one-shot `provisioning` AgentSession (1:1, run_id unique — decision 57) and the
+/// `desired=running`/`observed=unknown` ContainerInstance — all inside the caller's change set.
+/// Workflow-scoped serialization (decision 60): refuses to prepare when the Workflow still has a
+/// non-terminal Run (`pending|starting|running|stopping`) — the next Run of a Workflow, of any Task
+/// type, never starts before the previous Run's terminal callback fixed its state. Returns null when
+/// the hook refuses; the claim is then released, a Run is never created for a busy Workflow.
+/// </summary>
+public static class RunPrepare
+{
+    public static async Task<RunPreparation?> PrepareAsync(
+        AppDbContext db, OrchestrationTask task, AgentProfileVersion version, CancellationToken cancellationToken)
+    {
+        var activeRuns = await (
+            from previous in db.Runs
+            join workflowTask in db.OrchestrationTasks on previous.TaskId equals workflowTask.Id
+            where workflowTask.WorkflowId == task.WorkflowId
+                && (previous.Status == RunStatuses.Pending
+                    || previous.Status == RunStatuses.Starting
+                    || previous.Status == RunStatuses.Running
+                    || previous.Status == RunStatuses.Stopping)
+            select previous.Id).CountAsync(cancellationToken);
+        if (activeRuns > 0)
+            return null;
+
+        var now = DateTime.UtcNow;
+        var attemptNumber = ((await db.Runs
+            .Where(r => r.TaskId == task.Id)
+            .MaxAsync(r => (int?)r.AttemptNumber, cancellationToken)) ?? 0) + 1;
+
+        var run = new Run
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            AttemptNumber = attemptNumber,
+            Status = RunStatuses.Pending,
+        };
+        var session = new AgentSession
+        {
+            Id = Guid.NewGuid(),
+            RunId = run.Id,
+            TaskId = task.Id,
+            AgentProfileVersionId = task.AgentProfileVersionId,
+            Status = AgentSessionStatuses.Provisioning,
+            CreatedAt = now,
+        };
+        var container = new ContainerInstance
+        {
+            Id = Guid.NewGuid(),
+            AgentSessionId = session.Id,
+            RunId = run.Id,
+            ContainerImage = version.ContainerImage,
+            DesiredState = ContainerDesiredStates.Running,
+            ObservedState = ContainerObservedStates.Unknown,
+            CreatedAt = now,
+        };
+        db.Runs.Add(run);
+        db.AgentSessions.Add(session);
+        db.ContainerInstances.Add(container);
+        await db.SaveChangesAsync(cancellationToken);
+        return new RunPreparation(run, session, container, task, version);
+    }
+}

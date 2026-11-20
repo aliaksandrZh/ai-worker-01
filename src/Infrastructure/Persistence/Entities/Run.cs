@@ -1,0 +1,45 @@
+namespace PiAgent.Infrastructure.Persistence;
+
+/// <summary>Run machine states (03 §3). `stopping` is decision 75/61's awaiting-confirmed-stop state
+/// (driven by ticket 14); `timed_out` is the `max_run_duration` terminal (ticket 13).</summary>
+public static class RunStatuses
+{
+    public const string Pending = "pending";
+    public const string Starting = "starting";
+    public const string Running = "running";
+    public const string Stopping = "stopping";
+    public const string Succeeded = "succeeded";
+    public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
+    public const string TimedOut = "timed_out";
+}
+
+/// <summary>
+/// One execution attempt of a Task (02 §14); a retry creates a new attempt with `attempt_number + 1`.
+/// The Run↔AgentSession and Run↔Container links live on AgentSession.RunId (unique) and
+/// ContainerInstance.RunId respectively (design doc: no circular FK pairs). Terminated only via the
+/// Runtime callbacks — terminal Run state + confirmed stop release the capacity slot (decision 75).
+/// </summary>
+public class Run
+{
+    public Guid Id { get; set; }
+    public Guid TaskId { get; set; }
+    /// <summary>Assigned by the Orchestrator; agents never change it (02 §14).</summary>
+    public int AttemptNumber { get; set; }
+    public string Status { get; set; } = null!;
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public DateTime? LastHeartbeatAt { get; set; }
+    public DateTime? LastProgressAt { get; set; }
+    public int? ExitCode { get; set; }
+    /// <summary>Canonical error codes from 04 §7 (e.g. `startup_timeout`, `github_publication_failed`).</summary>
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    /// <summary>Short per-attempt diagnostic for /status and notifications; full results live in Artifacts (decision 79).</summary>
+    public string? ResultSummary { get; set; }
+    /// <summary>Points at the per-Run log directory on host storage (decision 43); content never in PostgreSQL.</summary>
+    public string? LogStorageReference { get; set; }
+    public long? LogSizeBytes { get; set; }
+    public DateTime? LogsCompletedAt { get; set; }
+    public DateTime? LogsDeletedAt { get; set; }
+}

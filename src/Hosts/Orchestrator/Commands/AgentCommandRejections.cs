@@ -21,6 +21,16 @@ public static class AgentCommandRejectionReasons
     public const string NotInAllowlist = "not_in_allowlist";
     public const string UserNotCollaborator = "user_not_collaborator";
     public const string InsufficientPermission = "insufficient_permission";
+
+    // task 07 admission/admission-time reasons (04 §2, 06 §12, decisions 35/71/80)
+    public const string UnfinishedTaskExists = "unfinished_task_exists";
+    public const string WorkflowFailed = "workflow_failed";
+    public const string WorkItemClosed = "work_item_closed";
+    public const string AgentProfileNotConfigured = "agent_profile_not_configured";
+    public const string AgentImageNotReady = "agent_image_not_ready";
+    public const string PlanNotAvailable = "plan_not_available";
+    /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued (decision 31, 04 §7).</summary>
+    public const string ReviewHeadChanged = "review_head_changed_before_execution";
 }
 
 public static class AgentCommandRejectionReplies
@@ -54,6 +64,20 @@ public static class AgentCommandRejectionReplies
             "Command rejected: your account is not a collaborator with write access to this repository.",
         AgentCommandRejectionReasons.InsufficientPermission =>
             "Command rejected: your account does not have write permission in this repository (write or above is required).",
+        AgentCommandRejectionReasons.UnfinishedTaskExists =>
+            "Command rejected: a task is already queued or running for this work item — only one task can run at a time. "
+            + "Wait for it to finish (or use /stop), then run the command again.",
+        AgentCommandRejectionReasons.WorkflowFailed =>
+            "Command rejected: this workflow has failed unrecoverably and needs operator intervention; "
+            + "only /status and /help remain available.",
+        AgentCommandRejectionReasons.WorkItemClosed =>
+            "Command rejected: this issue or pull request is closed — no new agent work can be requested.",
+        AgentCommandRejectionReasons.AgentProfileNotConfigured =>
+            "Command rejected: no agent profile is configured (or it is disabled) for this operation.",
+        AgentCommandRejectionReasons.AgentImageNotReady =>
+            "Command rejected: the agent image for this operation is not ready (still building or failed to build). Try again later.",
+        AgentCommandRejectionReasons.PlanNotAvailable =>
+            "Command rejected: there is no completed plan to approve — run /plan first.",
         _ => "Command rejected.",
     };
 

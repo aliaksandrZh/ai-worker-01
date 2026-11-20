@@ -4,8 +4,8 @@ namespace PiAgent.Infrastructure.Persistence;
 
 /// <summary>
 /// Control-plane orchestration state (spec decision 19). Task 01 shipped the initial (near-empty)
-/// migration; task 02 adds the configuration-plane entities: Repository, SyncCursor, AgentProfile,
-/// AgentProfileVersion, AgentProfileRoutingRule (02 §2/§8/§12/§12a).
+/// migration; task 02 adds the configuration-plane entities; task 07 adds the orchestration core
+/// (Workflow, Task, Run, AgentSession, OrchestrationJob, ContainerInstance, TaskArtifactInput, Artifact).
 /// </summary>
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
@@ -21,6 +21,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<GitHubReview> GitHubReviews => Set<GitHubReview>();
     public DbSet<GitHubEvent> GitHubEvents => Set<GitHubEvent>();
     public DbSet<AgentCommand> AgentCommands => Set<AgentCommand>();
+    public DbSet<Workflow> Workflows => Set<Workflow>();
+    public DbSet<OrchestrationTask> OrchestrationTasks => Set<OrchestrationTask>();
+    public DbSet<Run> Runs => Set<Run>();
+    public DbSet<AgentSession> AgentSessions => Set<AgentSession>();
+    public DbSet<OrchestrationJob> OrchestrationJobs => Set<OrchestrationJob>();
+    public DbSet<ContainerInstance> ContainerInstances => Set<ContainerInstance>();
+    public DbSet<TaskArtifactInput> TaskArtifactInputs => Set<TaskArtifactInput>();
+    public DbSet<Artifact> Artifacts => Set<Artifact>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -172,6 +180,132 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasOne<WorkItem>()
                 .WithMany()
                 .HasForeignKey(c => c.WorkItemId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- orchestration core (task 07, 02 §9/§10/§10a/§13/§14/§15/§19) ----
+
+        modelBuilder.Entity<Workflow>(entity =>
+        {
+            entity.ToTable("workflow");
+            // One long-lived Workflow per root WorkItem in V1; reopen never resurrects a closed one (decisions 9/73)
+            entity.HasIndex(w => w.WorkItemId).IsUnique();
+            entity.HasIndex(w => new { w.Status, w.UpdatedAt });
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(w => w.WorkItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OrchestrationTask>(entity =>
+        {
+            entity.ToTable("task");
+            entity.HasIndex(t => new { t.WorkflowId, t.Sequence }).IsUnique();
+            entity.HasIndex(t => new { t.Status, t.CreatedAt });
+            // One command creates at most one Task (02 §23)
+            entity.HasIndex(t => t.TriggerCommandId)
+                .IsUnique()
+                .HasFilter("trigger_command_id IS NOT NULL");
+            // The one-unfinished-Task-per-Workflow invariant (02 §23, decision 79) — admission applies
+            // the lock + recheck; this index is the backstop. Snake_case names match the shipped schema.
+            entity.HasIndex(t => t.WorkflowId)
+                .IsUnique()
+                .HasFilter("status IN ('queued', 'claimed', 'starting', 'running')")
+                .HasDatabaseName("ux_task_one_unfinished_per_workflow");
+            entity.Property(t => t.RetryPolicy).HasColumnType("jsonb");
+            entity.HasOne<Workflow>()
+                .WithMany()
+                .HasForeignKey(t => t.WorkflowId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AgentProfileVersion>()
+                .WithMany()
+                .HasForeignKey(t => t.AgentProfileVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<AgentCommand>()
+                .WithMany()
+                .HasForeignKey(t => t.TriggerCommandId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Run>(entity =>
+        {
+            entity.ToTable("run");
+            entity.HasIndex(r => new { r.TaskId, r.AttemptNumber }).IsUnique();
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(r => r.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentSession>(entity =>
+        {
+            entity.ToTable("agent_session");
+            // One-shot 1:1 with Run (decision 57)
+            entity.HasIndex(s => s.RunId).IsUnique();
+            entity.Property(s => s.Metadata).HasColumnType("jsonb");
+            entity.Property(s => s.StorageStatus).HasDefaultValue(AgentSessionStorageStatuses.Available);
+            entity.HasOne<Run>()
+                .WithMany()
+                .HasForeignKey(s => s.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(s => s.TaskId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<AgentProfileVersion>()
+                .WithMany()
+                .HasForeignKey(s => s.AgentProfileVersionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OrchestrationJob>(entity =>
+        {
+            entity.ToTable("orchestration_job");
+            entity.HasIndex(j => new { j.Status, j.AvailableAt, j.Priority });
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(j => j.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ContainerInstance>(entity =>
+        {
+            entity.ToTable("container_instance");
+            entity.HasOne<AgentSession>()
+                .WithMany()
+                .HasForeignKey(c => c.AgentSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Run>()
+                .WithMany()
+                .HasForeignKey(c => c.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TaskArtifactInput>(entity =>
+        {
+            entity.ToTable("task_artifact_input");
+            entity.HasIndex(i => new { i.TaskId, i.ArtifactId }).IsUnique();
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(i => i.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Artifact>()
+                .WithMany()
+                .HasForeignKey(i => i.ArtifactId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Artifact>(entity =>
+        {
+            entity.ToTable("artifact");
+            entity.Property(a => a.Metadata).HasColumnType("jsonb");
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(a => a.TaskId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Workflow>()
+                .WithMany()
+                .HasForeignKey(a => a.WorkflowId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

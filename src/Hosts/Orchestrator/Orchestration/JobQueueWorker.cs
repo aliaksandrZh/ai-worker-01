@@ -1,0 +1,271 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using PiAgent.Orchestrator.Commands;
+using PiAgent.Orchestrator.Config;
+using PiAgent.Platform.Workers;
+using PiAgent.Infrastructure.Persistence;
+
+namespace PiAgent.Orchestrator.Orchestration;
+
+/// <summary>
+/// The durable job queue consumer (02 §19, 03 §8, task 07). Per tick: sweep expired claim leases (job
+/// `pending`, Task `claimed → queued`, never-dispatched `pending` Run rows deleted), then claim a FIFO
+/// batch (`available_at`, then `priority`, higher priority first) up to the global
+/// `max_concurrent_runs` cap — the claim transaction locks job rows `FOR UPDATE SKIP LOCKED` so
+/// concurrent workers never double-claim. Queued Tasks and `pending` Jobs occupy no slot; the slot
+/// math counts Claims (`task.claimed`) plus Runs in `starting|running|stopping` (decision 75; the
+/// terminal-Run-with-unconfirmed-stop release half activates with tickets 09/14). Outside the claim
+/// transaction each claim revalidates its preconditions (04 §2, 06 §12): Workflow not failed/closed,
+/// repository not paused (skip, not cancel), WorkItem open, pinned version still ready, plan input
+/// present for implement Tasks, pinned review SHA unchanged, permission recheck — an invalid claim is
+/// cancelled with a recorded reason (TaskLifecycle), a transient check releases it; a valid claim is
+/// prepared (RunPrepare) and handed to the dispatch stub (ticket 09 replaces the no-op).
+/// </summary>
+public sealed class JobQueueWorker(
+    IServiceScopeFactory scopeFactory,
+    ConfigurationState configurationState,
+    CollaboratorPermissionGate permissionGate,
+    IOptions<JobQueueOptions> options,
+    IRunDispatcher dispatcher,
+    JobQueueMetrics metrics,
+    ILogger<JobQueueWorker> logger) : IWorkerCycle
+{
+    /// <summary>Worker identity for `locked_by`; per-process (single-instance V1, lease-recovered).</summary>
+    private readonly string _workerId = $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
+    private readonly JobQueueOptions _options = options.Value;
+
+    public async Task RunCycleAsync(CancellationToken cancellationToken)
+    {
+        // cold-start gate (01 §13): no claim, no sweep, until configuration synchronization succeeded
+        if (!configurationState.Synchronized)
+            return;
+
+        var skipped = new HashSet<Guid>();
+        await SweepExpiredLeasesAsync(skipped, cancellationToken);
+        var claimed = await ClaimBatchAsync(skipped, cancellationToken);
+        foreach (var claim in claimed)
+            await processClaimAsync(claim, skipped, cancellationToken);
+        await RefreshGaugesAsync(cancellationToken);
+    }
+
+    private async Task SweepExpiredLeasesAsync(HashSet<Guid> skipped, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var now = DateTime.UtcNow;
+        var expired = await db.OrchestrationJobs
+            .Where(j => j.Status == OrchestrationJobStatuses.Processing
+                && (j.LockedUntil == null || j.LockedUntil < now))
+            .ToListAsync(cancellationToken);
+        if (expired.Count == 0)
+            return;
+
+        foreach (var job in expired)
+        {
+            var task = await db.OrchestrationTasks.SingleAsync(t => t.Id == job.TaskId, cancellationToken);
+            await db.Runs
+                .Where(r => r.TaskId == task.Id && r.Status == RunStatuses.Pending)
+                .ExecuteDeleteAsync(cancellationToken); // DB cascades session + container rows
+            if (task.Status == OrchestrationTaskStatuses.Claimed)
+            {
+                // the only spec edge back from `claimed` (03 §2: claim lease expires)
+                task.Status = OrchestrationTaskStatuses.Queued;
+                task.ClaimedAt = null;
+            }
+            job.Status = OrchestrationJobStatuses.Pending;
+            job.LockedUntil = null;
+            job.LockedBy = null;
+            job.UpdatedAt = now;
+            job.LastError = "claim lease expired";
+            skipped.Add(job.Id); // no same-tick re-claim of a swept job
+            metrics.RecordLeaseExpiration();
+        }
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>Claims up to `min(free, BatchLimit)` jobs atomically. Returns the claimed (job, task) ids;
+    /// the actual rechecks/prepare/dispatch run outside this transaction (lease guarantees recovery).</summary>
+    private async Task<List<(Guid JobId, Guid TaskId)>> ClaimBatchAsync(IReadOnlySet<Guid> skipped, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var free = configurationState.MaxConcurrentRuns - await CountOccupiedSlotsAsync(db, cancellationToken);
+        if (free <= 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return [];
+        }
+
+        var now = DateTime.UtcNow;
+        var limit = Math.Min(free, _options.BatchLimit);
+        var skip = skipped.ToArray();
+        // Paused repositories are skipped in the claim query itself (decision 75: queued Tasks stay
+        // unclaimed, never claimed-and-released); `skipped` keeps jobs released/swept earlier this tick
+        // from being instantly re-claimed.
+        var candidates = await db.OrchestrationJobs
+            .FromSqlInterpolated($"SELECT j.* FROM orchestration_job j JOIN task t ON t.id = j.task_id JOIN workflow w ON w.id = t.workflow_id JOIN work_item wi ON wi.id = w.work_item_id JOIN repository r ON r.id = wi.repository_id WHERE j.status = {OrchestrationJobStatuses.Pending} AND r.is_enabled AND NOT (j.id = ANY({skip})) ORDER BY j.available_at, j.priority DESC LIMIT {limit} FOR UPDATE SKIP LOCKED")
+            .ToListAsync(cancellationToken);
+
+        var claimed = new List<(Guid, Guid)>();
+        foreach (var job in candidates)
+        {
+            var task = await db.OrchestrationTasks.SingleAsync(t => t.Id == job.TaskId, cancellationToken);
+            if (task.Status != OrchestrationTaskStatuses.Queued)
+            {
+                // never execute inconsistent work; /retry (ticket 15) creates the fresh job instead
+                job.Status = OrchestrationJobStatuses.Failed;
+                job.LastError = $"task not in queued state ('{task.Status}')";
+                job.UpdatedAt = now;
+                continue;
+            }
+            job.Status = OrchestrationJobStatuses.Processing;
+            job.Attempts++;
+            job.LockedUntil = now + TimeSpan.FromSeconds(_options.LeaseSeconds);
+            job.LockedBy = _workerId;
+            job.LastError = null;
+            job.UpdatedAt = now;
+            task.Status = OrchestrationTaskStatuses.Claimed;
+            task.ClaimedAt = now;
+            metrics.RecordClaim();
+            claimed.Add((job.Id, task.Id));
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return claimed;
+    }
+
+    private async Task<int> CountOccupiedSlotsAsync(AppDbContext db, CancellationToken cancellationToken)
+    {
+        var claimedTasks = await db.OrchestrationTasks
+            .CountAsync(t => t.Status == OrchestrationTaskStatuses.Claimed, cancellationToken);
+        var activeRuns = await db.Runs
+            .CountAsync(r => r.Status == RunStatuses.Starting
+                || r.Status == RunStatuses.Running
+                || r.Status == RunStatuses.Stopping, cancellationToken);
+        return claimedTasks + activeRuns;
+    }
+
+    private async Task processClaimAsync((Guid JobId, Guid TaskId) claim, ISet<Guid> skipped, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var job = await db.OrchestrationJobs
+            .SingleOrDefaultAsync(j => j.Id == claim.JobId && j.Status == OrchestrationJobStatuses.Processing, cancellationToken);
+        if (job is null)
+            return; // swept/terminal between claim and processing (single instance: recovery only)
+        var task = await db.OrchestrationTasks.SingleAsync(t => t.Id == claim.TaskId, cancellationToken);
+        var workflow = await db.Workflows.SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
+        var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
+        var repository = await db.Repositories.AsNoTracking().SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
+        var version = await db.AgentProfileVersions.SingleAsync(v => v.Id == task.AgentProfileVersionId, cancellationToken);
+        var profile = await db.AgentProfiles.AsNoTracking().SingleAsync(p => p.Id == version.AgentProfileId, cancellationToken);
+        var command = task.TriggerCommandId is { } commandId
+            ? await db.AgentCommands.SingleAsync(c => c.Id == commandId, cancellationToken)
+            : null;
+
+        async Task CancelAsync(string reason) =>
+            await TaskLifecycle.CancelTaskAtClaimAsync(db, task, job, repository, workItem, reason, metrics, cancellationToken);
+        async Task ReleaseAsync()
+        {
+            var now = DateTime.UtcNow;
+            await db.Runs
+                .Where(r => r.TaskId == task.Id && r.Status == RunStatuses.Pending)
+                .ExecuteDeleteAsync(cancellationToken);
+            job.Status = OrchestrationJobStatuses.Pending;
+            job.LockedUntil = null;
+            job.LockedBy = null;
+            job.UpdatedAt = now;
+            task.Status = OrchestrationTaskStatuses.Queued;
+            await db.SaveChangesAsync(cancellationToken);
+            skipped.Add(job.Id); // released this tick: never reclaimed within the same cycle
+        }
+
+        // ---- claim-time rechecks (order per 04 §2/06 §12 + design doc) ----
+        if (workflow.Status == WorkflowStatuses.Failed)
+        {
+            await CancelAsync(AgentCommandRejectionReasons.WorkflowFailed);
+            return; // decision 71
+        }
+        if (workflow.Status == WorkflowStatuses.Closed)
+        {
+            await CancelAsync(AgentCommandRejectionReasons.WorkItemClosed);
+            return; // root closed while queued
+        }
+        if (!repository.IsEnabled)
+        {
+            // decision 75: pause — queued work stays unclaimed (not cancelled), resumes on re-enable
+            await ReleaseAsync();
+            return;
+        }
+        if (workItem.State != "open")
+        {
+            await CancelAsync(AgentCommandRejectionReasons.WorkItemClosed);
+            return;
+        }
+        if (!profile.IsEnabled || version.State == ProfileVersionStates.Disabled)
+        {
+            await CancelAsync(AgentCommandRejectionReasons.AgentProfileNotConfigured);
+            return;
+        }
+        if (version.State != ProfileVersionStates.Ready)
+        {
+            await CancelAsync(AgentCommandRejectionReasons.AgentImageNotReady); // decision 35
+            return;
+        }
+        if (task.Type == OrchestrationTaskTypes.Implement
+            && !await db.TaskArtifactInputs.AnyAsync(i => i.TaskId == task.Id, cancellationToken))
+        {
+            await CancelAsync(AgentCommandRejectionReasons.PlanNotAvailable); // decision 80
+            return;
+        }
+        if (task.Type == OrchestrationTaskTypes.Review
+            && !string.Equals(workItem.HeadSha, task.TargetHeadSha, StringComparison.Ordinal))
+        {
+            await CancelAsync(AgentCommandRejectionReasons.ReviewHeadChanged); // decision 31
+            return;
+        }
+        var permission = await ClaimPermissionCheck.RecheckAsync(db, permissionGate, repository, command, cancellationToken);
+        if (permission is { Transient: true })
+        {
+            logger.LogInformation("claim authorization recheck deferred for task {taskId} (transient GitHub state) — claim released", task.Id);
+            await ReleaseAsync();
+            return;
+        }
+        if (permission is { Denied: true, RejectionReason: { } denialReason })
+        {
+            await CancelAsync(denialReason);
+            return;
+        }
+
+        var preparation = await RunPrepare.PrepareAsync(db, task, version, cancellationToken);
+        if (preparation is null)
+        {
+            // serialization hook refused (a previous Run of this Workflow is still non-terminal)
+            await ReleaseAsync();
+            return;
+        }
+        var dispatched = await dispatcher.DispatchAsync(db, preparation, cancellationToken);
+        if (!dispatched)
+            await ReleaseAsync(); // the dispatcher contract: false = nothing started
+    }
+
+    private async Task RefreshGaugesAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var now = DateTime.UtcNow;
+        var pendingJobs = await db.OrchestrationJobs
+            .CountAsync(j => j.Status == OrchestrationJobStatuses.Pending, cancellationToken);
+        var oldest = await db.OrchestrationJobs
+            .Where(j => j.Status == OrchestrationJobStatuses.Pending)
+            .OrderBy(j => j.AvailableAt)
+            .Select(j => (DateTime?)j.AvailableAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        var oldestAge = oldest is { } availableAt ? (now - availableAt).TotalSeconds : 0;
+        var slots = await CountOccupiedSlotsAsync(db, cancellationToken);
+        metrics.UpdateGauges(pendingJobs, oldestAge, oldestAge, slots);
+    }
+}

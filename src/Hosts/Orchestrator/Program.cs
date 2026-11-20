@@ -5,6 +5,7 @@ using PiAgent.Infrastructure;
 using PiAgent.Orchestrator;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
+using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Platform.Http;
 using PiAgent.Platform.Logging;
 using PiAgent.Platform.Workers;
@@ -28,6 +29,11 @@ builder.Services.AddSingleton(sp =>
     return new CollaboratorPermissionGate(httpClient, pat);
 });
 builder.Services.AddSingleton<IWorkerCycle, CommentCommandProcessor>();
+// Durable job queue (task 07): admission hands commands to Task+Job rows; this worker claims and prepares.
+builder.Services.AddOptions<JobQueueOptions>().BindConfiguration("JobQueue");
+builder.Services.AddSingleton<JobQueueMetrics>();
+builder.Services.AddSingleton<IRunDispatcher, NullRunDispatcher>();
+builder.Services.AddSingleton<IWorkerCycle, JobQueueWorker>();
 
 var app = builder.Build();
 app.MapPiEndpoints();

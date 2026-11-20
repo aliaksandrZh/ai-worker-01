@@ -4,6 +4,7 @@ using PiAgent.BuildWorker;
 using PiAgent.HostMonitor;
 using PiAgent.Orchestrator;
 using PiAgent.Orchestrator.Commands;
+using PiAgent.Orchestrator.Orchestration;
 using PiAgent.OutboxWorker;
 using PiAgent.Poller;
 using PiAgent.Platform.Workers;
@@ -68,12 +69,17 @@ public class WorkerMetricKeyTests
     [Fact]
     public void OrchestratorMetrics_HaveQueueKeys()
     {
-        var collect = new OrchestratorMetrics(State(), new CommandMetrics()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var collect = new OrchestratorMetrics(State(), new CommandMetrics(), new JobQueueMetrics()).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("queuePendingJobs"));
         Assert.True(collect.ContainsKey("queueOldestJobAgeSeconds"));
         Assert.True(collect.ContainsKey("queueClaimWaitSeconds"));
-        Assert.Null(collect["queuePendingJobs"]);
+        // task 07: the placeholders are real gauges now (zero-valued by default)
+        Assert.Equal(0L, collect["queuePendingJobs"]);
         Assert.Equal(0L, collect["commandsRejectedTotal"]);
+        Assert.Equal(0L, collect["activeRuns"]);
+        Assert.True(collect.ContainsKey("jobsClaimedTotal"));
+        Assert.True(collect.ContainsKey("leaseExpirationsTotal"));
+        Assert.True(collect.ContainsKey("claimCancellationsTotal"));
     }
 
     [Fact]

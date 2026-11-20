@@ -1,10 +1,10 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator.Config;
+using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Platform.Workers;
 
 namespace PiAgent.Orchestrator.Commands;
@@ -22,8 +22,8 @@ namespace PiAgent.Orchestrator.Commands;
 /// per-user rejection, no PAT fallback — decisions 65/66). The loop only claims
 /// `issue_comment_created`: edits never retrigger (decision 39) and review comments are context only
 /// (06 §1). Cold-start gate: nothing is claimed or persisted until configuration synchronization
-/// completes. Single-instance V1: claim + orphan recovery rely on the Orchestrator being one process
-/// (durable-job leases arrive with ticket 07).
+/// completes. Single-instance V1: claim + orphan recovery rely on the Orchestrator being one process;
+/// the durable-job leases + queue consumer arrived with task 07 and serialize work the same way.
 /// </summary>
 public sealed class CommentCommandProcessor(
     IServiceScopeFactory scopeFactory,
@@ -33,33 +33,9 @@ public sealed class CommentCommandProcessor(
     ILogger<CommentCommandProcessor> logger) : IWorkerCycle
 {
     private const int BatchSize = 32;
-    private static readonly JsonSerializerOptions ConfigJsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan MaxPause = TimeSpan.FromHours(1);
-
     /// <summary>In-memory pause after a rate-limited permission check (Retry-After honored, capped 1 h).</summary>
     private DateTime _pauseUntilUtc = DateTime.MinValue;
-
-    /// <summary>Resolved per-repository command policy (02 §21) with the ticket-02 defaults applied
-    /// (all V1 commands, both types).</summary>
-    private sealed record RepoCommandConfig(
-        IReadOnlyList<string> PermittedCommands,
-        IReadOnlyList<string> PermittedWorkItemTypes,
-        string? MinimumPermission)
-    {
-        public static RepoCommandConfig Defaults() => new(AllCommands(), [WorkItemTypes.Issue, WorkItemTypes.PullRequest], null);
-    }
-
-    private sealed class RepoCommandConfigDto
-    {
-        [JsonPropertyName("permitted_commands")] public List<string>? PermittedCommands { get; set; }
-        [JsonPropertyName("permitted_work_item_types")] public List<string>? PermittedWorkItemTypes { get; set; }
-        [JsonPropertyName("authorization")] public AuthorizationConfigDto? Authorization { get; set; }
-
-        internal sealed class AuthorizationConfigDto
-        {
-            [JsonPropertyName("minimum_permission")] public string? MinimumPermission { get; set; }
-        }
-    }
 
     /// <summary>Valid WorkItem types per command (06 §2 table).</summary>
     private static readonly Dictionary<string, string[]> ValidTargetTypes = new()
@@ -221,6 +197,15 @@ public sealed class CommentCommandProcessor(
                 return;
             }
 
+            // Admission (task 07): gate + Workflow/Task/Job creation for a command we just authorized,
+            // in this same transaction; non-null outcome → existing rejection path (reason + Outbox reply).
+            // Commands rejected by the authorization gate keep their reason — never re-admitted here.
+            var outcome = command.Status == AgentCommandStatuses.Authorized
+                ? await CommandAdmission.AdmitAsync(db, command, workItem, repository, cancellationToken)
+                : null;
+            if (outcome is { } rejection)
+                await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);
+
             MarkProcessed(githubEvent);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -254,7 +239,7 @@ public sealed class CommentCommandProcessor(
                 AgentCommandRejectionReasons.CommandEdited, "already edited when first seen",
                 commandName: null, cancellationToken);
 
-        var config = ParseRepoConfig(repository.Configuration);
+        var config = RepoCommandConfigParser.Parse(repository);
         var parsed = CommandParser.Parse(comment.Body, configurationState.BotLogin!);
         switch (parsed)
         {
@@ -340,7 +325,7 @@ public sealed class CommentCommandProcessor(
             return null;
         }
 
-        var config = ParseRepoConfig(repository.Configuration);
+        var config = RepoCommandConfigParser.Parse(repository);
         var outcome = await permissionGate.CheckAsync(
             repository.Owner, repository.Name, comment.AuthorLogin ?? "", config.MinimumPermission, cancellationToken);
 
@@ -372,34 +357,6 @@ public sealed class CommentCommandProcessor(
                     : DateTime.UtcNow;
         }
     }
-
-    private static RepoCommandConfig ParseRepoConfig(string? configurationJson)
-    {
-        try
-        {
-            var dto = JsonSerializer.Deserialize<RepoCommandConfigDto>(
-                string.IsNullOrWhiteSpace(configurationJson) ? "{}" : configurationJson, ConfigJsonOptions);
-            if (dto is null)
-                return RepoCommandConfig.Defaults();
-            return new RepoCommandConfig(
-                dto.PermittedCommands ?? AllCommands(),
-                dto.PermittedWorkItemTypes ?? new List<string> { WorkItemTypes.Issue, WorkItemTypes.PullRequest },
-                dto.Authorization?.MinimumPermission);
-        }
-        catch (JsonException)
-        {
-            // The configuration plane syncs validated JSON; a data bug here fails open to the defaults
-            // for command lists (never silently rejects commands). The gate's own malformed-config
-            // handling fails the allowlist closed (denied) — a security config stays deny-by-default.
-            return RepoCommandConfig.Defaults();
-        }
-    }
-
-    private static List<string> AllCommands() =>
-    [
-        AgentCommandNames.Plan, AgentCommandNames.Code, AgentCommandNames.Review, AgentCommandNames.TestCases,
-        AgentCommandNames.Status, AgentCommandNames.Stop, AgentCommandNames.Help, AgentCommandNames.Retry,
-    ];
 
     /// <summary>Persists a fresh rejected row + exactly one Outbox reply in the caller's transaction.</summary>
     private async Task<AgentCommand> PersistRejectedAsync(

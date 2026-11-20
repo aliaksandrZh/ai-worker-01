@@ -28,10 +28,13 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     {
         var (db, harness, comment, workItem) = await NewCaseAsync("@jsxhuz /plan extra context");
         AuthStub200(harness.Handler);
+        // task 07: routing must exist for /plan to pass admission
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Authorized, command.Status);
+        // task 07: the accepted command continues past authorization into admission → queued (02 §11)
+        Assert.Equal(AgentCommandStatuses.Queued, command.Status);
         Assert.Equal(AgentCommandNames.Plan, command.CommandName);
         Assert.Equal("@jsxhuz /plan extra context", command.SourceBodySnapshot);
         Assert.Equal("{}", command.Arguments);
@@ -179,6 +182,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     public async Task EditAfterCommandReceived_NeverReprocessedOrReinterpreted()
     {
         var (db, harness, comment, _) = await NewCaseAsync("@jsxhuz /plan extra context");
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
         // first cycle: transient auth — command stays received
         harness.Handler.EnqueueResponse(new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("{}") });
         await RunAsync(db, harness);
@@ -197,7 +201,8 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Authorized, command.Status);
+        // task 07: admitted after successful authorization → queued; original parse still the frozen one
+        Assert.Equal(AgentCommandStatuses.Queued, command.Status);
         Assert.Equal(AgentCommandNames.Plan, command.CommandName);
         Assert.Equal("@jsxhuz /plan extra context", command.SourceBodySnapshot);
     }
@@ -317,13 +322,15 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     public async Task TransientError_CommandStaysReceived_EventRetries()
     {
         var (db, harness, comment, _) = await NewCaseAsync();
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
         harness.Handler.EnqueueResponse(new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("{}") });
         await RunAsync(db, harness);
         harness.Handler.EnqueueResponse(PermissionResponse("write", "write"));
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Authorized, command.Status);
+        // task 07: the retried authorization succeeds and admission admits → queued
+        Assert.Equal(AgentCommandStatuses.Queued, command.Status);
         Assert.Equal(GitHubEventStatuses.Processed, (await EventAsync(db, comment)).ProcessingStatus);
     }
 
@@ -385,6 +392,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     public async Task OrphanProcessingRowsRecovered()
     {
         var (db, harness, comment, _) = await NewCaseAsync();
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
         var githubEvent = await EventAsync(db, comment);
         var rawEvent = await db.GitHubEvents.SingleAsync(e => e.Id == githubEvent.Id);
         rawEvent.ProcessingStatus = GitHubEventStatuses.Processing; // crashed mid-batch leftover
@@ -396,7 +404,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
 
         Assert.Equal(GitHubEventStatuses.Processed,
             (await db.GitHubEvents.AsNoTracking().SingleAsync(e => e.Id == rawEvent.Id)).ProcessingStatus);
-        Assert.Equal(AgentCommandStatuses.Authorized,
+        Assert.Equal(AgentCommandStatuses.Queued,
             (await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId)).Status);
     }
 

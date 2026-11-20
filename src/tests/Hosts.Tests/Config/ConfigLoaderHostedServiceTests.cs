@@ -195,7 +195,7 @@ public class ConfigLoaderHostedServiceTests(PostgresFixture postgres) : IClassFi
         Assert.False(before.Ok);
         Assert.Equal("config-sync", check.Name);
 
-        state.MarkSynchronized("test-bot");
+        state.MarkSynchronized("test-bot", 10);
         Assert.True((await check.CheckAsync(CancellationToken.None)).Ok);
     }
 
