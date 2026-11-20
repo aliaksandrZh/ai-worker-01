@@ -6,7 +6,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent → **done, awaiting owner review** (implementation on branch `task-1-stack-and-skeleton`, uncommitted pending owner review)
+**Status:** done
 
 - [x] Stack chosen and recorded as an amendment to spec decision 1 → recorded in `src/README.md` (spec docs are frozen): .NET 10 · ASP.NET Core minimal APIs · EF Core 10 + Npgsql · EF Core Migrations · xUnit; TLS + no-CI notes travel with the record
 - [x] Compose project starts the full service set; health checks pass; startup order matches the spec (`src/compose.yaml`: postgres → migrator → build-worker / runtime-api / host-monitor → orchestrator / poller / outbox-worker; verified live via `task stack` with `--wait`)
