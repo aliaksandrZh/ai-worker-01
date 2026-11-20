@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>PiAgent.Hosts.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Hosts\RuntimeApi\PiAgent.RuntimeApi.csproj" />
+    <ProjectReference Include="..\..\Hosts\Orchestrator\PiAgent.Orchestrator.csproj" />
+    <ProjectReference Include="..\..\Hosts\Poller\PiAgent.Poller.csproj" />
+    <ProjectReference Include="..\..\Hosts\OutboxWorker\PiAgent.OutboxWorker.csproj" />
+    <ProjectReference Include="..\..\Hosts\HostMonitor\PiAgent.HostMonitor.csproj" />
+    <ProjectReference Include="..\..\Hosts\BuildWorker\PiAgent.BuildWorker.csproj" />
+  </ItemGroup>
+
+</Project>
