@@ -34,3 +34,5 @@ src/storage/
 src/backups/
 src/state.json
 src/*.log
+# pi-agent control plane (src/) — host-managed secrets (read-only sync PAT etc., decisions 50/54)
+src/secrets/

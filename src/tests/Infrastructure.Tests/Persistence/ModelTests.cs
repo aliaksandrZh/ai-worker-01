@@ -12,13 +12,6 @@ public class ModelTests
             .Options);
 
     [Fact]
-    public void ModelBuilds_NearEmpty_NoEntityTypes()
-    {
-        using var dbContext = NewDbContext();
-        Assert.Empty(dbContext.Model.GetEntityTypes());
-    }
-
-    [Fact]
     public void InitialMigrationExists()
     {
         using var dbContext = NewDbContext();

@@ -9,11 +9,13 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Hosts\RuntimeApi\PiAgent.RuntimeApi.csproj" />
     <ProjectReference Include="..\..\Hosts\Orchestrator\PiAgent.Orchestrator.csproj" />
     <ProjectReference Include="..\..\Hosts\Poller\PiAgent.Poller.csproj" />

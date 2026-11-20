@@ -22,7 +22,8 @@ material; everything in this directory is the new system.
 | `Infrastructure/` | EF Core AppDbContext, `Persistence/Migrations/`, `AddPiData` (postgres readiness) |
 | `Hosts/` | one executable per service: `RuntimeApi`, `Orchestrator`, `Poller`, `OutboxWorker`, `HostMonitor`, `BuildWorker` |
 | `Migrator/` | one-shot EF migration host (§13's `migrations` step) |
-| `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` |
+| `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` (Hosts.Tests spins a Testcontainers postgres — Docker required for `dotnet test`) |
+| `config/` | configuration plane (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml`, `agents/<name>/profile.yaml` — mounted read-only into the orchestrator, synced only at startup |
 | `backup/` | scheduled `pg_dump` + config-plane Git snapshot scripts (compose: `backups`, `config-snapshot`) |
 | `komodo/` | Komodo Deployment for this system (vendor duplicate; own compose, port 9120) |
 | `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) |
@@ -34,6 +35,7 @@ material; everything in this directory is the new system.
 task agent-komodo         # Komodo Core UI at localhost:9120 (admin/changeme per compose.env)
                           # → create an API key: Config → API Keys (read+write+execute)
 task stack                # postgres → migrator → the rest; --wait gates a green, ordered start
+                          # after any src/ change: task stack-rebuild first (rebuilds images), then task stack
 curl localhost:8080/healthz && curl localhost:8080/readyz && curl localhost:8080/metrics
 task stack-logs           # each service logs §14 JSON lines
 task stack-down
@@ -41,6 +43,33 @@ task stack-down
 
 `task stack` copies `src/.env.example` → `src/.env` on first run; fill `KOMODO_API_KEY/SECRET`
 before starting so the runtime-api readiness probe validates Komodo reachability with intents.
+
+## Configuration plane (ticket 02)
+
+YAML in `config/` is the desired configuration; PostgreSQL holds the runtime state. The
+Config Loader — a startup component of the Orchestrator — validates everything and syncs the
+DB in one transaction at each startup; no hot reload, no admin API (decisions 55–56, 81).
+
+- `system.yaml` — `github.bot_login` + every §16 operational knob (unit strings: `60s`, `50MiB`).
+- `repositories.yaml` — registered repositories; allowlist semantics per decision 49 (absent =
+  enabled + seeded with the owner; explicit `[]` = filtering disabled), permitted commands/types,
+  authorization policy.
+- `routing.yaml` — global routing rules (`repository_id = NULL`) with per-repo overrides; the
+  referenced version is pinned on the Task at creation (02 §12a).
+- `config/agents/<name>/profile.yaml` — profile definition; each configuration change creates a
+  new immutable `AgentProfileVersion` (`draft`): normalized YAML + per-file sha256 + file contents
+  + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata. Builds/dispatches are tickets 07/10.
+
+Before `task stack`: create the secrets file and align identities
+
+```sh
+mkdir -p src/secrets && printf '<your-pat>' > src/secrets/github-sync-pat.txt   # gitignored
+#   → the PAT's login (GET /user) must equal github.bot_login in src/config/system.yaml
+```
+
+Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown
+repository (404), schema-invalid YAML or a §16 constraint violation all abort Orchestrator
+startup with a diagnosable log line; the compose `--wait` gate shows it red.
 
 ## Ports and exposure (decision-65 contour from day one)
 

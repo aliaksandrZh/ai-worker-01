@@ -10,6 +10,7 @@ public sealed class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbConte
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseNpgsql("Host=localhost;Database=design-time;Username=design-time")
+            .UseSnakeCaseNamingConvention()
             .Options;
         return new AppDbContext(options);
     }

@@ -18,7 +18,9 @@ public static class DataServiceCollectionExtensions
         var connectionString = configuration.GetConnectionString("DefaultDb")
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured");
 
-        services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+        services.AddDbContext<AppDbContext>(options => options
+            .UseNpgsql(connectionString)
+            .UseSnakeCaseNamingConvention());
         services.AddNpgsqlDataSource(connectionString);
         services.AddSingleton<IReadinessCheck, DbReadinessCheck>();
         return services;

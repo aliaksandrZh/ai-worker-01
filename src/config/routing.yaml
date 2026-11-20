@@ -1,0 +1,13 @@
+# Global default rules (repository_id = NULL); per-repo overrides win, the version is
+# pinned on the Task at creation (02 §12a). Phase 1 ships the planner profile only,
+# so only the plan rule is seeded (decision 36).
+rules:
+  - task_type: plan
+    profile: planner
+    priority: 1
+    enabled: true
+# Per-repo override example (repository must exist in repositories.yaml):
+# rules:
+#   - task_type: plan
+#     repository: example-org/example-repo
+#     profile: planner

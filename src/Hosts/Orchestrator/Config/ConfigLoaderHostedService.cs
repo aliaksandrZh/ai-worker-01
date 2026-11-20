@@ -1,0 +1,109 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace PiAgent.Orchestrator.Config;
+
+/// <summary>
+/// The Config Loader — a startup component of the Orchestrator (01 §2, decisions 55/66): validates the
+/// YAML configuration plane, checks `github.bot_login` against the PAT identity (`GET /user`), looks up
+/// configured repositories (`GET /repos/{owner}/{repo}`), and persists Repository rows + sync cursors,
+/// AgentProfile/AgentProfileVersion rows (state `draft`) and the seeded routing rules in one transaction.
+/// Schema-invalid YAML fails before any DB work; every failure is a diagnosable startup configuration
+/// error. The loader never builds or dispatches image builds (decision 81).
+/// </summary>
+public sealed class ConfigLoaderHostedService(
+    IServiceScopeFactory scopeFactory,
+    ConfigurationState state,
+    IOptions<ConfigLoaderOptions> options,
+    Func<string, GitHubClient> githubClientFactory,
+    ILogger<ConfigLoaderHostedService> logger,
+    Action<int> processExit) : IHostedService
+{
+    /// <summary>
+    /// Owner incident 2026-11-20: throwing from StartAsync left the container alive spinning at 100%
+    /// CPU (host abort kept the process alive), so compose's restart policy never fired. On failure
+    /// the loader logs the diagnosable error, then asks for a hard process exit before rethrowing.
+    /// </summary>
+    private readonly Action<int> _processExit = processExit;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var configRoot = options.Value.ConfigRoot;
+            var parsed = ConfigParser.Parse(configRoot);
+
+            var violations = ConfigValidator.Validate(parsed);
+            if (violations.Count > 0)
+                throw new ConfigException(
+                    $"configuration validation failed with {violations.Count} violation(s):\n{string.Join("\n", violations)}");
+
+            var pat = ReadPat(options.Value.PatFile);
+            var client = githubClientFactory(pat);
+
+            var identity = await client.GetAuthenticatedLoginAsync(cancellationToken);
+            if (!string.Equals(identity, parsed.System.BotLogin, StringComparison.Ordinal))
+                throw new ConfigException(
+                    $"configuration error: github.bot_login '{parsed.System.BotLogin}' does not match the PAT identity '{identity}' (GET /user, decision 66)");
+
+            var repositoryInfos = new Dictionary<string, GitHubRepoInfo>();
+            foreach (var entry in parsed.Repositories)
+            {
+                var fullName = $"{entry.Owner}/{entry.Name}";
+                try
+                {
+                    repositoryInfos[fullName.ToLowerInvariant()] = await client.GetRepositoryAsync(entry.Owner, entry.Name, cancellationToken);
+                }
+                catch (ConfigException exception)
+                {
+                    throw new ConfigException($"configuration error for repository {fullName}: {exception.Message}");
+                }
+            }
+
+            var snapshots = parsed.Profiles
+                .Select(profile => ConfigSnapshotBuilder.Build(profile, Path.Combine(configRoot, "agents", profile.Name), options.Value.SourceCommitSha))
+                .ToList();
+
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<Infrastructure.Persistence.AppDbContext>();
+            var result = await new ConfigSyncService(db).SyncAsync(
+                new ConfigSynchronization(parsed, repositoryInfos, snapshots, options.Value.SourceCommitSha), cancellationToken);
+
+            state.MarkSynchronized();
+            logger.LogInformation(
+                "configuration synchronized from {root}: repositories created {created} (cursors {cursors}), {versions} new agent profile version(s), {rules} routing rule(s) upserted, {deleted} deleted",
+                configRoot, result.RepositoriesCreated, result.CursorsCreated, result.VersionsAdded, result.RoutingRulesUpserted, result.RoutingRulesDeleted);
+        }
+        catch (Exception exception)
+        {
+            state.MarkFailed(exception.Message);
+            logger.LogError(exception, "configuration synchronization failed — startup aborted (01 §13 cold-start gate stays closed)");
+            _processExit(1);
+            throw;
+        }
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private static string ReadPat(string? patFile)
+    {
+        if (string.IsNullOrWhiteSpace(patFile))
+            throw new ConfigException(
+                "configuration error: PI_AGENT_GITHUB_PAT_FILE is not set — the Config Loader must verify the bot identity against GET /user (decision 66)");
+        if (!File.Exists(patFile))
+            throw new ConfigException($"configuration error: the PAT file '{patFile}' does not exist (host-managed secret, decisions 50/54)");
+        try
+        {
+            var pat = File.ReadAllText(patFile).Trim();
+            if (pat.Length == 0)
+                throw new ConfigException($"configuration error: the PAT file '{patFile}' is empty");
+            return pat;
+        }
+        catch (IOException exception)
+        {
+            throw new ConfigException($"configuration error: cannot read the PAT file '{patFile}' ({exception.Message})");
+        }
+    }
+}

@@ -50,6 +50,12 @@ tasks:
       - test -f src/.env || cp src/.env.example src/.env
       - docker compose --env-file src/.env -f src/compose.yaml up -d --wait
 
+  stack-rebuild:
+    desc: Rebuild all control-plane images from current src/ (build only — starts nothing; run `task stack` after)
+    cmds:
+      - test -f src/.env || cp src/.env.example src/.env
+      - docker compose --env-file src/.env -f src/compose.yaml build
+
   stack-logs:
     desc: Follow control-plane logs
     cmds:
