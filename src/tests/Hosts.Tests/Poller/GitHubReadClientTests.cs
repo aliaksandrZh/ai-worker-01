@@ -1,6 +1,7 @@
 using System.Net;
 using PiAgent.Poller;
 using Xunit;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Hosts.Tests.Poller;
 

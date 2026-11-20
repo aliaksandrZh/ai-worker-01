@@ -5,19 +5,23 @@ namespace PiAgent.Orchestrator.Config;
 /// <summary>
 /// Cold-start gate (01 §13): until configuration synchronization completes successfully the
 /// Orchestrator accepts no task-producing commands; /status, /help and health endpoints stay available.
-/// Nothing consumes commands until ticket 06 — the gate state is what that admission logic will read.
+/// The synchronized `github.bot_login` travels with the gate state — startup-only sync, no hot reload
+/// (comment-processor runtime identity, task 06).
 /// </summary>
 public sealed class ConfigurationState
 {
     public bool Synchronized { get; private set; }
     public DateTime? SynchronizedAtUtc { get; private set; }
+    /// <summary>Exact-case bot login from system.yaml (`github.bot_login`); set when synchronization succeeds.</summary>
+    public string? BotLogin { get; private set; }
     /// <summary>First failure message (diagnosable configuration error); also surfaced via /readyz.</summary>
     public string? Error { get; private set; }
 
-    public void MarkSynchronized()
+    public void MarkSynchronized(string botLogin)
     {
         Synchronized = true;
         SynchronizedAtUtc = DateTime.UtcNow;
+        BotLogin = botLogin;
         Error = null;
     }
 

@@ -30,10 +30,13 @@ public static class GitHubEventSources
     public const string FullReconciliation = "full_reconciliation";
 }
 
-/// <summary>Orchestrator-driven lifecycle (ticket 07+); the Poller always writes `pending`.</summary>
+/// <summary>Orchestrator-driven lifecycle (03 §7): the Poller always writes `pending`; the command
+/// processor (ticket 06) transitions comment events pending → processing → processed/failed (or back
+/// to pending when the authorization check defers). The event consumer (ticket 07) extends the set.</summary>
 public static class GitHubEventStatuses
 {
     public const string Pending = "pending";
+    public const string Processing = "processing";
     public const string Processed = "processed";
     public const string Failed = "failed";
 }

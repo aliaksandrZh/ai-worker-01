@@ -1,0 +1,86 @@
+using PiAgent.Infrastructure.Persistence;
+
+namespace PiAgent.Orchestrator.Commands;
+
+/// <summary>
+/// The persisted `AgentCommand.rejection_reason` vocabulary plus the one-line GitHub reply text for
+/// each (06 §1 rule 10, §13 "Command rejected … → Yes (concise reason)"). Every rejection persists its
+/// reason in `agent_command` and enqueues exactly one reply through the Outbox (ticket 03).
+/// </summary>
+public static class AgentCommandRejectionReasons
+{
+    public const string UnknownCommand = "unknown_command";
+    public const string AmbiguousCommand = "ambiguous_command";
+    public const string MalformedCommand = "malformed_command";
+    public const string CommandInQuoteOrCodeBlock = "command_in_quote_or_code_block";
+    public const string CommandEdited = "command_edited";
+    public const string NotPermittedCommand = "not_permitted_command";
+    public const string WrongTargetType = "wrong_target_type";
+    public const string WorkItemTypeNotPermitted = "work_item_type_not_permitted";
+    public const string RepositoryPaused = "repository_paused";
+    public const string NotInAllowlist = "not_in_allowlist";
+    public const string UserNotCollaborator = "user_not_collaborator";
+    public const string InsufficientPermission = "insufficient_permission";
+}
+
+public static class AgentCommandRejectionReplies
+{
+    /// <summary>Concise reply for the Outbox comment; `detail` carries parse diagnostics (raw token).
+    /// `permittedCommands` (when known) scopes the supported-commands line to what the rejecting
+    /// repository allows — owner decision B: the line is always derived, never hand-maintained.</summary>
+    public static string Text(string reason, string detail, IReadOnlyList<string>? permittedCommands = null) => reason switch
+    {
+        AgentCommandRejectionReasons.UnknownCommand =>
+            $"Command rejected: `/{detail}` is not a supported command.\n{SupportedCommandsLine(permittedCommands)}",
+        AgentCommandRejectionReasons.AmbiguousCommand =>
+            "Command rejected: the comment contains more than one command directive — post exactly one `@<bot> /command` per comment.",
+        AgentCommandRejectionReasons.MalformedCommand =>
+            "Command rejected: the command must be on the first non-empty line in the form `@<bot> /command` (only whitespace before the mention).",
+        AgentCommandRejectionReasons.CommandInQuoteOrCodeBlock =>
+            "Command rejected: the command was inside a blockquote or code block — post it as plain text, not inside quotes/code.",
+        AgentCommandRejectionReasons.CommandEdited =>
+            "Command rejected: the comment was already edited when first seen; edits are never parsed as commands. Post the command as a new comment.",
+        AgentCommandRejectionReasons.NotPermittedCommand =>
+            $"Command rejected: `{detail}` is not a permitted command in this repository (permitted: {CommandList(permittedCommands)}).",
+        AgentCommandRejectionReasons.WrongTargetType =>
+            $"Command rejected: `{detail}` is not valid for this target (Issue/PR) type.",
+        AgentCommandRejectionReasons.WorkItemTypeNotPermitted =>
+            $"Command rejected: {detail} work items are not permitted in this repository.",
+        AgentCommandRejectionReasons.RepositoryPaused =>
+            "Command rejected: the repository is paused (disabled) — task-producing commands resume when it is re-enabled.",
+        AgentCommandRejectionReasons.NotInAllowlist =>
+            "Command rejected: your account is not in this repository's allowlist.",
+        AgentCommandRejectionReasons.UserNotCollaborator =>
+            "Command rejected: your account is not a collaborator with write access to this repository.",
+        AgentCommandRejectionReasons.InsufficientPermission =>
+            "Command rejected: your account does not have write permission in this repository (write or above is required).",
+        _ => "Command rejected.",
+    };
+
+    /// <summary>"Supported commands: `/plan`, …" — the repository's permitted commands when supplied,
+    /// otherwise the full V1 table (`AgentCommandNames.All`); a config permitting no known command
+    /// falls back to the full table rather than an empty list. Canonical `test_cases` renders as its
+    /// `/test-cases` token by the shared `_`→`-` rule.</summary>
+    private static string SupportedCommandsLine(IReadOnlyList<string>? permittedCommands)
+    {
+        var names = KnownPermittedOrDefault(permittedCommands);
+        var tokens = names.Select(name => "`/" + name.Replace('_', '-') + "`");
+        return "Supported commands: " + string.Join(", ", tokens);
+    }
+
+    /// <summary>Token list for any per-reason command mention (e.g. `not_permitted_command`).</summary>
+    private static string CommandList(IReadOnlyList<string>? permittedCommands)
+    {
+        var names = KnownPermittedOrDefault(permittedCommands);
+        var tokens = names.Select(name => "`/" + name.Replace('_', '-') + "`");
+        return string.Join(", ", tokens);
+    }
+
+    private static IReadOnlyList<string> KnownPermittedOrDefault(IReadOnlyList<string>? permittedCommands)
+    {
+        if (permittedCommands is not { Count: > 0 })
+            return AgentCommandNames.All;
+        var known = AgentCommandNames.All.Where(permittedCommands.Contains).ToArray();
+        return known.Length > 0 ? known : AgentCommandNames.All;
+    }
+}

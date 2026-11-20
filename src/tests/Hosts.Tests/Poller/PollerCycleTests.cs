@@ -10,6 +10,7 @@ using PiAgent.Infrastructure.Persistence;
 using PiAgent.Poller;
 using PiAgent.Platform.Workers;
 using Xunit;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Hosts.Tests.Poller;
 

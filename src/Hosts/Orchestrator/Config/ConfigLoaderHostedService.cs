@@ -71,7 +71,7 @@ public sealed class ConfigLoaderHostedService(
             var result = await new ConfigSyncService(db).SyncAsync(
                 new ConfigSynchronization(parsed, repositoryInfos, snapshots, options.Value.SourceCommitSha), cancellationToken);
 
-            state.MarkSynchronized();
+            state.MarkSynchronized(parsed.System.BotLogin);
             logger.LogInformation(
                 "configuration synchronized from {root}: repositories created {created} (cursors {cursors}), {versions} new agent profile version(s), {rules} routing rule(s) upserted, {deleted} deleted",
                 configRoot, result.RepositoriesCreated, result.CursorsCreated, result.VersionsAdded, result.RoutingRulesUpserted, result.RoutingRulesDeleted);
@@ -87,7 +87,18 @@ public sealed class ConfigLoaderHostedService(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private static string ReadPat(string? patFile)
+    private static string ReadPat(string? patFile) => SyncPat.Read(patFile);
+}
+
+/// <summary>
+/// The single read-only GitHub PAT (decision 65) read once per host start: the Config Loader validates
+/// the bot identity with it at startup and the comment-authorization gate performs the collaborator
+/// permission checks with it (task 06). Rotation = host restart with a replaced secret file; failure
+/// is a diagnosable startup configuration error, token content never appears in messages (§14).
+/// </summary>
+internal static class SyncPat
+{
+    public static string Read(string? patFile)
     {
         if (string.IsNullOrWhiteSpace(patFile))
             throw new ConfigException(

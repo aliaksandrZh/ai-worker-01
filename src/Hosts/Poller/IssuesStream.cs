@@ -1,4 +1,5 @@
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller;
 

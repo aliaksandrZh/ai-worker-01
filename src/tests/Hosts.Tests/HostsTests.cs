@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using PiAgent.BuildWorker;
 using PiAgent.HostMonitor;
 using PiAgent.Orchestrator;
+using PiAgent.Orchestrator.Commands;
 using PiAgent.OutboxWorker;
 using PiAgent.Poller;
 using PiAgent.Platform.Workers;
@@ -67,11 +68,12 @@ public class WorkerMetricKeyTests
     [Fact]
     public void OrchestratorMetrics_HaveQueueKeys()
     {
-        var collect = new OrchestratorMetrics(State()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var collect = new OrchestratorMetrics(State(), new CommandMetrics()).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("queuePendingJobs"));
         Assert.True(collect.ContainsKey("queueOldestJobAgeSeconds"));
         Assert.True(collect.ContainsKey("queueClaimWaitSeconds"));
         Assert.Null(collect["queuePendingJobs"]);
+        Assert.Equal(0L, collect["commandsRejectedTotal"]);
     }
 
     [Fact]

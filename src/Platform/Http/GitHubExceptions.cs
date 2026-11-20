@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace PiAgent.Poller;
+namespace PiAgent.Platform.Http;
 
 /// <summary>A rate-limited GitHub response: 403 with `X-RateLimit-Remaining: 0` (primary) or 429
 /// (secondary). Carries `Retry-After` and `X-RateLimit-Reset` for pause scheduling (decision 53).</summary>

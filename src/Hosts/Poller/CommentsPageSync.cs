@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller;
 

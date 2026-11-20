@@ -20,6 +20,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<GitHubComment> GitHubComments => Set<GitHubComment>();
     public DbSet<GitHubReview> GitHubReviews => Set<GitHubReview>();
     public DbSet<GitHubEvent> GitHubEvents => Set<GitHubEvent>();
+    public DbSet<AgentCommand> AgentCommands => Set<AgentCommand>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -159,6 +160,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(e => e.WorkItemId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AgentCommand>(entity =>
+        {
+            entity.ToTable("agent_command");
+            // The command idempotency key (02 §11/§23): one comment ever produces one AgentCommand
+            entity.HasIndex(c => c.GithubCommentId).IsUnique();
+            entity.HasIndex(c => new { c.Status, c.CreatedAt });
+            entity.Property(c => c.Arguments).HasColumnType("jsonb");
+            entity.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(c => c.WorkItemId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

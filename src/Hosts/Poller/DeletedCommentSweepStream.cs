@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Platform.Workers;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller;
 

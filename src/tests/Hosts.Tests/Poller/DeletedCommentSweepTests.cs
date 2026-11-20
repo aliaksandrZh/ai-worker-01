@@ -5,6 +5,7 @@ using PiAgent.Hosts.Tests.Config;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Poller;
 using Xunit;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Hosts.Tests.Poller;
 

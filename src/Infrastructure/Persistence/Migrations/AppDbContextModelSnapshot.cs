@@ -22,6 +22,81 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentCommand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Arguments")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("arguments");
+
+                    b.Property<string>("AuthorLogin")
+                        .HasColumnType("text")
+                        .HasColumnName("author_login");
+
+                    b.Property<string>("CommandName")
+                        .HasColumnType("text")
+                        .HasColumnName("command_name");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("GithubCommentId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("github_comment_id");
+
+                    b.Property<DateTime?>("ParsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("parsed_at");
+
+                    b.Property<string>("ParserVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("parser_version");
+
+                    b.Property<DateTime?>("ProcessedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("processed_at");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("text")
+                        .HasColumnName("rejection_reason");
+
+                    b.Property<string>("SourceBodySnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source_body_snapshot");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_agent_command");
+
+                    b.HasIndex("GithubCommentId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_agent_command_github_comment_id");
+
+                    b.HasIndex("WorkItemId")
+                        .HasDatabaseName("ix_agent_command_work_item_id");
+
+                    b.HasIndex("Status", "CreatedAt")
+                        .HasDatabaseName("ix_agent_command_status_created_at");
+
+                    b.ToTable("agent_command", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentProfile", b =>
                 {
                     b.Property<Guid>("Id")
@@ -792,6 +867,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_work_item_link_issue_work_item_id_pr_work_item_id_relation_");
 
                     b.ToTable("work_item_link", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentCommand", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_command_work_item_work_item_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentProfileRoutingRule", b =>
