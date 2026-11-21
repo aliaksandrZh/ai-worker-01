@@ -31,6 +31,8 @@ public static class AgentCommandRejectionReasons
     public const string PlanNotAvailable = "plan_not_available";
     /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued (decision 31, 04 §7).</summary>
     public const string ReviewHeadChanged = "review_head_changed_before_execution";
+    /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx, ticket 09).</summary>
+    public const string RuntimeDispatchFailed = "runtime_dispatch_failed";
 }
 
 public static class AgentCommandRejectionReplies

@@ -104,6 +104,9 @@ public static class ConfigValidator
                 Check(profile.BridgeEventCadence is null || profile.BridgeEventCadence.Value > TimeSpan.Zero,
                     $"{file}: bridge.event_cadence must be positive");
             }
+            if (profile.BridgeBehavior is { } behavior)
+                Check(behavior is "succeed" or "fail" or "needs_human" or "hang",
+                    $"{file}: bridge.behavior '{behavior}' must be succeed|fail|needs_human|hang (stub scenario lever, ticket 09)");
         }
 
         var ruleScopes = new HashSet<(string? Repo, string TaskType, int Priority)>();

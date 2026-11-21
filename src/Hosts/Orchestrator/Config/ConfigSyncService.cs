@@ -289,12 +289,13 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
                     () => new RetryPolicyDto { MaxAutomaticRetries = profile.MaxAutomaticRetries, InitialBackoff = profile.InitialBackoff }),
                 PermissionPolicy = profile.Permissions is null ? null : JsonSerializer.Serialize(profile.Permissions, JsonOptions),
                 BridgeConfiguration = SerializeOrNull(
-                    profile.BridgeVersion is not null || profile.BridgeHeartbeatInterval is not null || profile.BridgeEventCadence is not null,
+                    profile.BridgeVersion is not null || profile.BridgeHeartbeatInterval is not null || profile.BridgeEventCadence is not null || profile.BridgeBehavior is not null,
                     () => new BridgeConfigurationDto
                     {
                         Version = profile.BridgeVersion,
                         HeartbeatInterval = profile.BridgeHeartbeatInterval,
                         EventCadence = profile.BridgeEventCadence,
+                        Behavior = profile.BridgeBehavior,
                     }),
                 StartupTimeout = profile.StartupTimeout,
                 IdleTimeout = profile.IdleTimeout,
@@ -370,6 +371,7 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
         [JsonPropertyName("version")] public string? Version { get; set; }
         [JsonPropertyName("heartbeat_interval")] public TimeSpan? HeartbeatInterval { get; set; }
         [JsonPropertyName("event_cadence")] public TimeSpan? EventCadence { get; set; }
+        [JsonPropertyName("behavior")] public string? Behavior { get; set; }
     }
 
     private async Task<(int Upserted, int Deleted)> SyncRoutingAsync(

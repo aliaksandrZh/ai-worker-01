@@ -29,6 +29,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ContainerInstance> ContainerInstances => Set<ContainerInstance>();
     public DbSet<TaskArtifactInput> TaskArtifactInputs => Set<TaskArtifactInput>();
     public DbSet<Artifact> Artifacts => Set<Artifact>();
+    public DbSet<RunEvent> RunEvents => Set<RunEvent>();
+    public DbSet<RunCredential> RunCredentials => Set<RunCredential>();
+    public DbSet<Workspace> Workspaces => Set<Workspace>();
+    public DbSet<RunContextSnapshot> RunContextSnapshots => Set<RunContextSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -306,6 +310,62 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasOne<Workflow>()
                 .WithMany()
                 .HasForeignKey(a => a.WorkflowId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- run pipeline (task 09, 02 §14a/§16/§18) ----
+
+        modelBuilder.Entity<RunEvent>(entity =>
+        {
+            entity.ToTable("run_event");
+            // The callback idempotency key (02 §18, 04 §8)
+            entity.HasIndex(e => new { e.RunId, e.EventId }).IsUnique();
+            entity.HasIndex(e => new { e.RunId, e.ReceivedAt });
+            entity.Property(e => e.Payload).HasColumnType("jsonb");
+            entity.HasOne<Run>()
+                .WithMany()
+                .HasForeignKey(e => e.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RunCredential>(entity =>
+        {
+            entity.ToTable("run_credential");
+            // One credential per Run, scoped to it (decision 60)
+            entity.HasIndex(c => c.RunId).IsUnique();
+            entity.Property(c => c.TokenHash).HasColumnType("varchar(64)");
+            entity.HasOne<Run>()
+                .WithMany()
+                .HasForeignKey(c => c.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Workspace>(entity =>
+        {
+            entity.ToTable("workspace");
+            // One Workspace per Task (02 §16/§23)
+            entity.HasIndex(w => w.TaskId).IsUnique();
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(w => w.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RunContextSnapshot>(entity =>
+        {
+            entity.ToTable("run_context_snapshot");
+            // Immutable, one per Run (02 §14a/§23)
+            entity.HasIndex(s => s.RunId).IsUnique();
+            entity.Property(s => s.IncludedSources).HasColumnType("jsonb");
+            entity.Property(s => s.ExcludedSources).HasColumnType("jsonb");
+            entity.Property(s => s.Content).HasColumnType("jsonb");
+            entity.HasOne<Run>()
+                .WithMany()
+                .HasForeignKey(s => s.RunId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<OrchestrationTask>()
+                .WithMany()
+                .HasForeignKey(s => s.TaskId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

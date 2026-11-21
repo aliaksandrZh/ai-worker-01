@@ -1,0 +1,27 @@
+# The stub agent profile (ticket 09): a fake headless CLI speaking a tiny pi-RPC-shaped JSON protocol,
+# plus the reference Runtime Bridge baked into the image (decision 33). Proves the run pipeline end to
+# end until ticket 10 builds real profile images; the profile must stay otherwise ordinary — ticket 12
+# replaces it by routing /plan back to the planner.
+description: Stub agent proving the run pipeline (pi-RPC-shaped JSON protocol) until ticket 10
+enabled: true
+runtime_type: pi
+max_context_tokens: 200000
+execution_limits:
+  startup_timeout: 10m
+  idle_timeout: 60m
+  max_run_duration: 4h
+resources:
+  cpu: 1.0
+  memory: 512MiB
+retry_policy:
+  max_automatic_retries: 1
+  initial_backoff: 30s
+bridge:
+  version: "1.0.0"
+  heartbeat_interval: 15s
+  event_cadence: 5s
+  behavior: succeed   # stub-only scenario lever: succeed | fail | needs_human | hang
+system_prompt: |
+  Stub agent: emits the mapped pi event set, writes the result manifest, and settles.
+secrets: []
+capabilities: []

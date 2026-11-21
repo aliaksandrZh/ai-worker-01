@@ -25,6 +25,14 @@ public sealed record AdmittedTaskWork(
     Workflow Workflow,
     Run? Run);
 
+/// <summary>Task-07 legacy test dispatcher: reports `HandedOff` without any side effects (the claim
+/// "stays" as the task-07 tests expect). The real `RuntimeApiRunDispatcher` has its own suite.</summary>
+public sealed class NoOpTestDispatcher : IRunDispatcher
+{
+    public Task<DispatchOutcome> DispatchAsync(AppDbContext db, RunPreparation preparation, CancellationToken cancellationToken) =>
+        Task.FromResult(DispatchOutcome.HandedOff);
+}
+
 /// <summary>
 /// Seeds for the job-queue tests (task 07): an admitted Task+Job directly (bypassing admission) with
 /// optional prepared Run/Session/Container rows, and a JobQueueWorker wired against the Postgres
@@ -202,13 +210,16 @@ public static class OrchestrationTestSupport
         AppDbContext db, Repository? existingRepository = null) =>
         CommandTestSupport.SeedAsync(db, existingRepository: existingRepository);
 
-    /// <summary>A worker against the real Postgres fixture with a stubbed GitHub permission gate.</summary>
+    /// <summary>A worker against the real Postgres fixture with a stubbed GitHub permission gate and a
+    /// no-op test dispatcher (task-07 legacy semantics: `HandedOff` without side effects — task-09's real
+    /// dispatcher carries its own tests; a custom outcome can be passed for release/cancel tests).</summary>
     public static WorkerHarness NewWorker(
         PostgresFixture fixture,
         int maxConcurrentRuns = 10,
         int leaseSeconds = 300,
         PollerTestSupport.StubHandler? handler = null,
-        bool synchronized = true)
+        bool synchronized = true,
+        IRunDispatcher? testDispatcher = null)
     {
         var stub = handler ?? new PollerTestSupport.StubHandler();
         var configuration = new ConfigurationState();
@@ -235,7 +246,7 @@ public static class OrchestrationTestSupport
             configuration,
             provider.GetRequiredService<CollaboratorPermissionGate>(),
             Microsoft.Extensions.Options.Options.Create(new JobQueueOptions { LeaseSeconds = leaseSeconds }),
-            new NullRunDispatcher(),
+            testDispatcher ?? new NoOpTestDispatcher(),
             metrics,
             provider.GetRequiredService<ILogger<JobQueueWorker>>());
         return new WorkerHarness(provider, worker, stub, metrics, configuration);

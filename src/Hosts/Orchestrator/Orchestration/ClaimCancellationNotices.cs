@@ -29,6 +29,8 @@ public static class ClaimCancellationNotices
             "A queued task was cancelled: the requesting account is no longer a collaborator with write access to this repository.",
         AgentCommandRejectionReasons.InsufficientPermission =>
             "A queued task was cancelled: the requesting account no longer has write permission in this repository.",
+        AgentCommandRejectionReasons.RuntimeDispatchFailed =>
+            "A queued task was cancelled: the agent runtime rejected the dispatch request (invalid target state or parameters). Run the command again.",
         _ => "A queued task was cancelled.",
     };
 }

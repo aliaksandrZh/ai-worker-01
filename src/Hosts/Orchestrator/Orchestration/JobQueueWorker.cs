@@ -247,9 +247,18 @@ public sealed class JobQueueWorker(
             await ReleaseAsync();
             return;
         }
-        var dispatched = await dispatcher.DispatchAsync(db, preparation, cancellationToken);
-        if (!dispatched)
-            await ReleaseAsync(); // the dispatcher contract: false = nothing started
+        var outcome = await dispatcher.DispatchAsync(db, preparation, cancellationToken);
+        switch (outcome)
+        {
+            case DispatchOutcome.HandedOff:
+                break; // run started; the terminal-Run consumer takes over at Run terminal state
+            case DispatchOutcome.Transient:
+                await ReleaseAsync(); // the dispatcher contract: nothing was started, retry next tick
+                break;
+            case DispatchOutcome.Permanent:
+                await CancelAsync(AgentCommandRejectionReasons.RuntimeDispatchFailed);
+                break;
+        }
     }
 
     private async Task RefreshGaugesAsync(CancellationToken cancellationToken)

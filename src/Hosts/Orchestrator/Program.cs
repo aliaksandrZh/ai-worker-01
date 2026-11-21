@@ -36,7 +36,11 @@ builder.Services.AddSingleton<IWorkerCycle, CommentCommandProcessor>();
 // Durable job queue (task 07): admission hands commands to Task+Job rows; this worker claims and prepares.
 builder.Services.AddOptions<JobQueueOptions>().BindConfiguration("JobQueue");
 builder.Services.AddSingleton<JobQueueMetrics>();
-builder.Services.AddSingleton<IRunDispatcher, NullRunDispatcher>();
+// Runtime dispatch (ticket 09): decision-65 service credential + the terminal-Run consumer.
+builder.Services.Configure<RuntimeApiOptions>(builder.Configuration.GetSection("RuntimeApi"));
+builder.Services.AddHttpClient<RuntimeApiClient>(client => client.Timeout = TimeSpan.FromSeconds(200));
+builder.Services.AddSingleton<IRunDispatcher, RuntimeApiRunDispatcher>();
+builder.Services.AddSingleton<IWorkerCycle, RunTerminalConsumer>();
 builder.Services.AddSingleton<IWorkerCycle, JobQueueWorker>();
 
 var app = builder.Build();

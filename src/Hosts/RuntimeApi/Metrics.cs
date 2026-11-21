@@ -26,10 +26,13 @@ public sealed class DbSizeCycle(NpgsqlDataSource dataSource, ILogger<DbSizeCycle
 }
 
 /// <summary>§14 baseline metrics owned by the Runtime API.</summary>
-public sealed class RuntimeApiMetrics(WorkerLoopState state, DbSizeCycle dbSizeCycle) : WorkerMetricsBase(state)
+public sealed class RuntimeApiMetrics(WorkerLoopState state, DbSizeCycle dbSizeCycle, RunPipelineMetrics runMetrics)
+    : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()
     {
         yield return new KeyValuePair<string, object?>("dbSizeBytes", dbSizeCycle.DbSizeBytes);
+        foreach (var pair in runMetrics.Collect().Where(p => p.Key != "running" && p.Key != "heartbeatUtc" && p.Key != "lastSuccessfulCycleUtc"))
+            yield return pair;
     }
 }

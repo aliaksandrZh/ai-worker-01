@@ -75,6 +75,7 @@ public static class ConfigSnapshotBuilder
                 BridgeVersion = profile.BridgeVersion,
                 BridgeHeartbeatInterval = profile.BridgeHeartbeatInterval,
                 BridgeEventCadence = profile.BridgeEventCadence,
+                BridgeBehavior = profile.BridgeBehavior,
                 SystemPrompt = profile.SystemPrompt,
                 Skills = profile.Skills,
                 Secrets = profile.Secrets,
@@ -124,6 +125,7 @@ public static class ConfigSnapshotBuilder
         [JsonPropertyName("bridge_version")] public string? BridgeVersion { get; set; }
         [JsonPropertyName("heartbeat_interval")] public TimeSpan? BridgeHeartbeatInterval { get; set; }
         [JsonPropertyName("event_cadence")] public TimeSpan? BridgeEventCadence { get; set; }
+        [JsonPropertyName("behavior")] public string? BridgeBehavior { get; set; }
         [JsonPropertyName("system_prompt")] public string? SystemPrompt { get; set; }
         [JsonPropertyName("skills")] public List<string>? Skills { get; set; }
         [JsonPropertyName("secrets")] public List<string>? Secrets { get; set; }

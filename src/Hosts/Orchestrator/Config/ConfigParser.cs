@@ -281,6 +281,7 @@ public static class ConfigParser
         [YamlMember(Alias = "version")] public string? Version { get; set; }
         [YamlMember(Alias = "heartbeat_interval")] public string? HeartbeatInterval { get; set; }
         [YamlMember(Alias = "event_cadence")] public string? EventCadence { get; set; }
+        [YamlMember(Alias = "behavior")] public string? Behavior { get; set; }
     }
 
     private static List<ProfileConfig> ParseProfiles(string agentsPath)
@@ -329,6 +330,7 @@ public static class ConfigParser
                 BridgeEventCadence = dto.Bridge?.EventCadence is { } cadence
                     ? ParseValue(relativeName, "bridge.event_cadence", cadence, DurationValue.Parse)
                     : null,
+                BridgeBehavior = dto.Bridge?.Behavior,
                 Skills = dto.Skills,
                 Secrets = dto.Secrets,
                 Capabilities = dto.Capabilities,

@@ -1101,6 +1101,138 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("run", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunContextSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("content");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_hash");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ExcludedSources")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("excluded_sources");
+
+                    b.Property<string>("IncludedSources")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("included_sources");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_context_snapshot");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_run_context_snapshot_run_id");
+
+                    b.HasIndex("TaskId")
+                        .HasDatabaseName("ix_run_context_snapshot_task_id");
+
+                    b.ToTable("run_context_snapshot", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_credential");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_run_credential_run_id");
+
+                    b.ToTable("run_credential", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("EventId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("type");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_event");
+
+                    b.HasIndex("RunId", "EventId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_run_event_run_id_event_id");
+
+                    b.HasIndex("RunId", "ReceivedAt")
+                        .HasDatabaseName("ix_run_event_run_id_received_at");
+
+                    b.ToTable("run_event", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.SyncCursor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1395,6 +1527,83 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("workflow", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Workspace", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AccessMode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("access_mode");
+
+                    b.Property<string>("BaseSha")
+                        .HasColumnType("text")
+                        .HasColumnName("base_sha");
+
+                    b.Property<string>("BranchName")
+                        .HasColumnType("text")
+                        .HasColumnName("branch_name");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CurrentSha")
+                        .HasColumnType("text")
+                        .HasColumnName("current_sha");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_used_at");
+
+                    b.Property<Guid>("RepositoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("repository_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StorageKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("storage_kind");
+
+                    b.Property<string>("StorageReference")
+                        .HasColumnType("text")
+                        .HasColumnName("storage_reference");
+
+                    b.Property<string>("StorageStatus")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("storage_status");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("task_id");
+
+                    b.Property<Guid>("WorkItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("work_item_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_workspace");
+
+                    b.HasIndex("TaskId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_workspace_task_id");
+
+                    b.ToTable("workspace", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.AgentCommand", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.WorkItem", null)
@@ -1571,6 +1780,43 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_run_task_task_id");
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunContextSnapshot", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_context_snapshot_run_run_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_context_snapshot_task_task_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunCredential", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_credential_run_run_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.RunEvent", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Run", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_event_run_run_id");
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.SyncCursor", b =>
                 {
                     b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
@@ -1633,6 +1879,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_workflow_work_item_work_item_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Workspace", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.OrchestrationTask", null)
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_workspace_task_task_id");
                 });
 #pragma warning restore 612, 618
         }
