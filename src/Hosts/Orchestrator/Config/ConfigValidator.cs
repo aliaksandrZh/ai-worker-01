@@ -1,4 +1,5 @@
 using PiAgent.Orchestrator.Config;
+using PiAgent.Platform.Secrets;
 
 namespace PiAgent.Orchestrator.Config;
 
@@ -107,6 +108,16 @@ public static class ConfigValidator
             if (profile.BridgeBehavior is { } behavior)
                 Check(behavior is "succeed" or "fail" or "needs_human" or "hang",
                     $"{file}: bridge.behavior '{behavior}' must be succeed|fail|needs_human|hang (stub scenario lever, ticket 09)");
+
+            // decision 54: secrets are name-only references to host-managed files; the grammar is also
+            // enforced by the Runtime API at plan build (frozen rows) — this is the early check.
+            var secretNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var secret in profile.Secrets ?? [])
+            {
+                var secretError = ProfileSecretName.Validate(secret);
+                Check(secretError is null, $"{file}: secrets: {secretError}");
+                Check(secretNames.Add(secret), $"{file}: secrets: duplicate reference '{secret}'");
+            }
         }
 
         var ruleScopes = new HashSet<(string? Repo, string TaskType, int Priority)>();

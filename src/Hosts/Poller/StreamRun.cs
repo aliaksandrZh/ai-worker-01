@@ -16,7 +16,7 @@ public enum StreamResultKind
     Failed,
 }
 
-public sealed record StreamResult(StreamResultKind Kind, string? Error = null);
+public sealed record StreamResult(StreamResultKind Kind, string? Error = null, System.Net.HttpStatusCode? Status = null);
 
 /// <summary>One decision-53 endpoint family (issues, pulls, issue_comments, pr_reviews, pr_review_comments),
 /// each owning its per-repository sync cursor.</summary>

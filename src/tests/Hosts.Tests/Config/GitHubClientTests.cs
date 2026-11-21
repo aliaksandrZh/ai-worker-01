@@ -59,6 +59,9 @@ public class GitHubClientTests
             () => FromStub(handler).GetAuthenticatedLoginAsync(CancellationToken.None));
         Assert.Contains("GET /user", exception.Message);
         Assert.Contains("401", exception.Message);
+        // decision 65 (ticket 11b): the proper error names the PAT problem — no fallback exists
+        Assert.Contains("revoked, expired, or invalid", exception.Message);
+        Assert.Contains("no automatic fallback", exception.Message);
     }
 
     [Fact]

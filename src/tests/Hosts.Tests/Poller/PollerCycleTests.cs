@@ -186,6 +186,31 @@ public class PollerCycleTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
+    public async Task RevokedPat401_SyncFailsWithProperError_NoFallback() // decisions 50/65 (ticket 11b)
+    {
+        var (db, repo) = await NewDbAndRepoAsync();
+        var handler = new PollerTestSupport.StubHandler();
+        handler.Enqueue(HttpStatusCode.Unauthorized,
+            """{"message": "Bad credentials", "documentation_url": "https://docs.github.com"}""");
+
+        var logs = new CapturingLogger();
+        var (cycle, state, _) = NewCycle(handler, logs); // remaining streams hit the OK [] fallback
+        await cycle.RunCycleAsync(CancellationToken.None);
+
+        var issuesCursor = await CursorAsync(db, repo, SyncCursorStreams.Issues);
+        Assert.NotNull(issuesCursor.LastAttemptAt); // the failed stream recorded its cursor failure
+        Assert.Contains("401", issuesCursor.LastError ?? ""); // message names the status, never the PAT
+        Assert.DoesNotContain(Pat, issuesCursor.LastError ?? "");
+        Assert.True(state.ErrorsTotal >= 1);
+
+        // exactly one proper (Error-level) line stating the PAT is rejected — no fallback, no PAT bytes
+        var authErrors = logs.Lines.Where(l => l.StartsWith("Error:") && l.Contains("polling PAT is revoked, expired, or invalid")).ToList();
+        Assert.Single(authErrors);
+        Assert.Contains("no automatic fallback", authErrors[0]);
+        Assert.DoesNotContain(logs.Lines, l => l.Contains(Pat));
+    }
+
+    [Fact]
     public async Task StreamFailure_Recorded_OtherStreamsContinue()
     {
         var (db, repo) = await NewDbAndRepoAsync();

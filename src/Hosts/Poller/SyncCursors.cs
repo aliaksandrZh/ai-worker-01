@@ -1,5 +1,7 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller;
 
@@ -74,6 +76,9 @@ public static class SyncCursors
         var cursor = await GetOrCreateAsync(db, repositoryId, stream, cancellationToken);
         RecordFailure(cursor, exception.Message);
         await TrySaveFailure(db, cancellationToken);
-        return new StreamResult(StreamResultKind.Failed, exception.Message);
+        // HTTP status travels to the cycle so a revoked/expired PAT (401) can surface as the proper
+        // decision-65 system configuration error instead of a generic stream-failure warning.
+        var status = exception is GitHubReadException read ? read.Status : null;
+        return new StreamResult(StreamResultKind.Failed, exception.Message, status);
     }
 }

@@ -206,6 +206,54 @@ rules:
         Assert.Equal(2, violations.Count);
     }
 
+    // ---- profile secret references (decision 54; ticket 11b) ----
+
+    [Fact]
+    public void ProfileSecret_ReservedName_Fails() // collision with the per-Run callback credential (decision 60)
+    {
+        var violations = ValidateSample(plannerProfile: ReplaceLine(
+            ConfigSamples.PlannerProfile, "secrets", "secrets: ['callback-token']"));
+        var violation = Assert.Single(violations);
+        Assert.Contains("agents/planner/profile.yaml", violation);
+        Assert.Contains("callback-token", violation);
+        Assert.Contains("reserved for the per-Run callback credential", violation);
+    }
+
+    [Fact]
+    public void ProfileSecret_TraversalName_Fails()
+    {
+        var violations = ValidateSample(plannerProfile: ReplaceLine(
+            ConfigSamples.PlannerProfile, "secrets", "secrets: ['../github-sync-pat.txt']"));
+        var violation = Assert.Single(violations);
+        Assert.Contains("must match [A-Za-z0-9][A-Za-z0-9._-]*", violation);
+    }
+
+    [Fact]
+    public void ProfileSecret_EmptyName_Fails()
+    {
+        var violations = ValidateSample(plannerProfile: ReplaceLine(
+            ConfigSamples.PlannerProfile, "secrets", "secrets: ['   ']"));
+        var violation = Assert.Single(violations);
+        Assert.Contains("non-empty", violation);
+    }
+
+    [Fact]
+    public void ProfileSecret_DuplicateReference_Fails()
+    {
+        var violations = ValidateSample(plannerProfile: ReplaceLine(
+            ConfigSamples.PlannerProfile, "secrets", "secrets: ['github_agent_pat', 'github_agent_pat']"));
+        var violation = Assert.Single(violations);
+        Assert.Contains("duplicate reference 'github_agent_pat'", violation);
+    }
+
+    [Fact]
+    public void ProfileSecret_ValidNames_Pass()
+    {
+        var violations = ValidateSample(plannerProfile: ReplaceLine(
+            ConfigSamples.PlannerProfile, "secrets", "secrets: ['github_agent_pat', 'mcp-github.token-v2']"));
+        Assert.Empty(violations);
+    }
+
     private static string ReplaceLine(string text, string key, string replacement)
     {
         var lines = text.Split('\n');

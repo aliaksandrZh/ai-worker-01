@@ -49,7 +49,11 @@ public sealed class GitHubClient(HttpClient httpClient, string? pat = null)
         if (!response.IsSuccessStatusCode)
         {
             var notFound = response.StatusCode == System.Net.HttpStatusCode.NotFound ? " (not found)" : "";
-            throw new ConfigException($"GET /{path} failed: HTTP {(int)response.StatusCode}{notFound}");
+            // decision 65: 401 = GitHub rejected the PAT — revoked/expired/invalid; no fallback PAT exists.
+            var rejectedPat = response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                ? " — GitHub rejected the PAT (revoked, expired, or invalid); replace the host-managed PAT file (no automatic fallback, decision 65)"
+                : "";
+            throw new ConfigException($"GET /{path} failed: HTTP {(int)response.StatusCode}{notFound}{rejectedPat}");
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);

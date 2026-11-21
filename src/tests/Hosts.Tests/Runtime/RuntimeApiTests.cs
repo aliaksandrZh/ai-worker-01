@@ -571,6 +571,96 @@ public class StartContainerPlanTests
         Assert.Contains("github_agent_pat", error);
     }
 
+    // ---- runtime-side reference grammar (frozen rows; ticket 11b) — mirrors the Config Loader check ----
+
+    [Fact]
+    public void ReservedCallbackName_FailsStartClosed() // per-Run callback credential mount (decision 60)
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        File.WriteAllText(Path.Combine(secretsDir, "callback-token"), "not-a-token");
+        var error = StartPlanError(secretsDir, """{"secret_references":["callback-token"]}""");
+        Assert.Contains("reserved for the per-Run callback credential", error);
+    }
+
+    [Fact]
+    public void TraversalName_FailsStartClosed()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var error = StartPlanError(secretsDir, """{"secret_references":["../github-sync-pat.txt"]}""");
+        Assert.Contains("must match", error);
+    }
+
+    [Fact]
+    public void DuplicateReferences_MountOnce()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        File.WriteAllText(Path.Combine(secretsDir, "github_agent_pat"), "pat-bytes");
+        var plan = StartPlan(secretsDir, """{"secret_references":["github_agent_pat","github_agent_pat"]}""", out var error);
+        Assert.Null(error);
+        Assert.Single(plan!.Volumes.Split('\n'), v => v.EndsWith(":/run/secrets/github_agent_pat:ro"));
+    }
+
+    // ---- mount-source hygiene (decision 54 fail-closed; ticket 11b review) ----
+
+    [Fact]
+    public void SecretFile_IsEmpty_FailsStartClosed()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        File.WriteAllText(Path.Combine(secretsDir, "github_agent_pat"), "");
+        var error = StartPlanError(secretsDir, """{"secret_references":["github_agent_pat"]}""");
+        Assert.Contains("exists but is empty", error);
+        Assert.Contains("github_agent_pat", error);
+    }
+
+    [Fact]
+    public void DirectoryNamedLikeSecret_FailsStartClosed() // a directory mounts "successfully" but reads broken
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(secretsDir, "github_agent_pat"));
+        var error = StartPlanError(secretsDir, """{"secret_references":["github_agent_pat"]}""");
+        Assert.Contains("no host-managed file", error);
+    }
+
+    [Fact]
+    public void MalformedEnvironmentConfiguration_FailsStartClosed()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        Assert.Contains("must be a JSON object", StartPlanError(secretsDir, "[]"));
+        Assert.Contains("must be an array of names", StartPlanError(secretsDir, """{"secret_references":"x"}"""));
+    }
+
+    [Fact]
+    public void NullReferencesArray_MountsNothing() // the Config Loader shape for profiles without a secrets: section
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var plan = StartPlan(secretsDir, """{"secret_references":null}""", out var error);
+        Assert.Null(error);
+        Assert.DoesNotContain(plan!.Volumes.Split('\n'), v => v.Contains("/run/secrets/") && !v.Contains("callback-token"));
+    }
+
+    [Fact]
+    public void OnlyReferencedSecrets_AreMounted_LestPrivilege()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        File.WriteAllText(Path.Combine(secretsDir, "github_agent_pat"), "pat-bytes");
+        File.WriteAllText(Path.Combine(secretsDir, "mcp-github.token"), "other-bytes");
+        var plan = StartPlan(secretsDir, """{"secret_references":["github_agent_pat"]}""", out var error);
+        Assert.Null(error);
+        var secretMounts = plan!.Volumes.Split('\n').Where(v => v.Contains("/run/secrets/") && !v.Contains("callback-token")).ToList();
+        Assert.Single(secretMounts);
+        // read-only host-managed file — only the profile's referenced name, path shape per decision 54
+        Assert.EndsWith("/etc/pi-agent/secrets/github_agent_pat:/run/secrets/github_agent_pat:ro", secretMounts[0]);
+        // decision 54: values travel by file mount only — the name must not leak into the environment either
+        Assert.DoesNotContain("github_agent_pat", plan.Environment ?? "");
+    }
+
     private static KomodoDeploymentPlan? StartPlan(string secretsDir, string? environmentConfiguration, out string? error) =>
         StartContainerPlan(
             Version(environmentConfiguration, """{"cpu":1.0,"memory":"512MiB"}"""),

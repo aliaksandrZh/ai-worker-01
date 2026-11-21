@@ -77,14 +77,20 @@ public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
         Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
             .Sum(file => new FileInfo(file).Length);
 
-    /// <summary>Host path of a profile secret reference; verified against the in-container secrets dir.</summary>
-    public string? SecretHostPath(string name)
+    /// <summary>Resolves a profile secret reference (decision 54, fail closed): the returned host path is the
+    /// mount source; the checks (single flat name, must exist, must be non-empty, files only — a directory
+    /// named like a secret is not a mountable secret) probe the in-container managed view, which is the
+    /// only one guaranteed to exist. Error strings are name-free prefixes; the callers add the name.</summary>
+    public (string? HostPath, string? Error) SecretHostPath(string name)
     {
         if (name.Contains('/') || name.Contains('\\') || name.Contains(".."))
-            return null;
-        if (Path.Exists(Path.Combine(Options.SecretsManagedDir, name)))
-            return $"{Options.SecretsHostDir}/{name}";
-        return null;
+            return (null, "must be a single flat file name");
+        var managed = Path.Combine(Options.SecretsManagedDir, name);
+        if (!File.Exists(managed))
+            return (null, $"has no host-managed file under {Options.SecretsManagedDir}");
+        if (new FileInfo(managed).Length == 0)
+            return (null, "exists but is empty; supply the host-managed secret value");
+        return ($"{Options.SecretsHostDir}/{name}", null);
     }
 
     /// <summary>chown via libc — uid mapping between the runtime-api container and the host has no managed API.

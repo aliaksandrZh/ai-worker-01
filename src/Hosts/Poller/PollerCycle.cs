@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -76,8 +77,20 @@ public sealed class PollerCycle(
                         if (result.Kind == StreamResultKind.Failed)
                         {
                             state.AddError();
-                            logger.LogWarning("poller stream failed: {repo}/{stream}: {error}",
-                                repository.FullName, stream.StreamName, result.Error);
+                            // decision 65: 401 = GitHub rejected the PAT (revoked/expired) — a proper,
+                            // actionable error with no automatic fallback; other failures stay warnings.
+                            if (result.Status == HttpStatusCode.Unauthorized)
+                            {
+                                logger.LogError(
+                                    "poller sync failed: {repo}/{stream}: {error} — the polling PAT is revoked, expired, or invalid: " +
+                                    "system configuration error; synchronization stays broken until the host-managed PAT file is replaced (no automatic fallback, decisions 50/65)",
+                                    repository.FullName, stream.StreamName, result.Error);
+                            }
+                            else
+                            {
+                                logger.LogWarning("poller stream failed: {repo}/{stream}: {error}",
+                                    repository.FullName, stream.StreamName, result.Error);
+                            }
                         }
                         else
                         {

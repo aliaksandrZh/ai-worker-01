@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Platform.Secrets;
 
 namespace PiAgent.RuntimeApi;
 
@@ -197,10 +198,12 @@ public static class StartRunHandler
         }
         foreach (var secret in versionSecrets)
         {
-            var hostPath = storage.SecretHostPath(secret);
+            var (hostPath, secretPathError) = storage.SecretHostPath(secret);
             if (hostPath is null)
             {
-                error = $"profile secret '{secret}' has no host-managed file under {storage.Options.SecretsManagedDir}";
+                // decision 54 fail-closed: a missing/empty secret file mounts broken — the agent would fail
+                // later with no hint; this error names the real problem at provisioning time.
+                error = $"profile secret '{secret}' {secretPathError}";
                 return false;
             }
             volumes.Add($"{hostPath}:/run/secrets/{secret}:ro");
@@ -229,27 +232,42 @@ public static class StartRunHandler
         return true;
     }
 
-    /// <summary>Profile secrets as `/run/secrets/<name>` references (decision 54); empty list = no mounts.</summary>
+    /// <summary>Profile secrets as `/run/secrets/<name>` references (decision 54); empty list = no mounts.
+    /// The row is written by the Config Loader, so a wrong-shaped document means a corrupted jsonb row —
+    /// fail closed instead of silently running the agent without its secrets.</summary>
     public static List<string>? ParseSecretReferences(string? environmentConfiguration, out string? error)
     {
         error = null;
         if (string.IsNullOrEmpty(environmentConfiguration))
             return [];
         using var document = JsonDocument.Parse(environmentConfiguration);
-        if (!document.RootElement.TryGetProperty("secret_references", out var references) || references.ValueKind != JsonValueKind.Array)
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            error = "environment_configuration must be a JSON object with an optional 'secret_references' name array";
+            return null;
+        }
+        if (!document.RootElement.TryGetProperty("secret_references", out var references))
+            return [];
+        if (references.ValueKind is not JsonValueKind.Array and not JsonValueKind.Null)
+        {
+            error = $"environment_configuration 'secret_references' must be an array of names (got {references.ValueKind})";
+            return null;
+        }
+        if (references.ValueKind == JsonValueKind.Null) // profiles without a `secrets:` section sync as null
             return [];
         var names = new List<string>();
         foreach (var reference in references.EnumerateArray())
         {
             var name = reference.GetString();
-            if (string.IsNullOrEmpty(name))
+            var nameError = ProfileSecretName.Validate(name);
+            if (nameError is not null)
             {
-                error = "secret references must be non-empty names";
+                error = $"profile secret reference invalid: {nameError}";
                 return null;
             }
-            names.Add(name);
+            names.Add(name!);
         }
-        return names;
+        return names.Distinct().ToList();
     }
 
     private static int ParseBridgeSeconds(string? bridgeConfiguration, string property, int defaultValue)
