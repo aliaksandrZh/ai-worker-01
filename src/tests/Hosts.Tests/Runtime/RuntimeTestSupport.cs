@@ -12,6 +12,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Context;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Platform.Auth;
 using PiAgent.RuntimeApi;
@@ -77,9 +78,10 @@ public sealed record RuntimeApi(
 
 public static class RuntimeTestSupport
 {
-    /// <summary>Seeds repo/workItem + task/job (admission bypassed) and runs the production RunPrepare —
-    /// Run (pending) + AgentSession (provisioning) + ContainerInstance + Workspace + optionally the frozen
-    /// snapshot the dispatcher would have built (so /start accepts the run).</summary>
+    /// <summary>Seeds repo/workItem + task/job (admission bypassed) and mirrors the claim flow: the
+    /// ticket-11 Context Assembler assembles first, the production RunPrepare prepares, and the frozen
+    /// snapshot is written via the same freeze helper the dispatcher uses (so /start accepts the run).
+    /// `withSnapshot: false` leaves the snapshot missing (negative dispatch-path tests).</summary>
     public static async Task<RunPreparation> SeedPreparedRunAsync(
         RuntimeApi api,
         string versionState = ProfileVersionStates.Ready,
@@ -98,23 +100,22 @@ public static class RuntimeTestSupport
             version.BridgeConfiguration = bridgeConfiguration;
         if (resourceConfiguration is not null)
             version.ResourceConfiguration = resourceConfiguration;
-        // one command text for both the dispatcher payload and /input (the frozen snapshot's instructions)
         var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false);
         if (seeded.Command is { } seededCommand)
             seededCommand.SourceBodySnapshot = "Do the stub work.";
         var task = await db.OrchestrationTasks.SingleAsync(x => x.Id == seeded.Task.Id); // tracked: the dispatcher mutates it
-        var preparation = await RunPrepare.PrepareAsync(db, task, version, default);
+        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == seeded.Task.WorkflowId);
+
+        // ticket-11 claim flow: assemble BEFORE RunPrepare, then prepare, then freeze (dispatcher order)
+        var assembly = await ContextAssembler.AssembleAsync(db, task, version, workflow, workItem, repo, seeded.Command, default);
+        if (assembly.TooLarge)
+            throw new InvalidOperationException($"seeded context is too large: {assembly.TooLargeDetail}");
+        var preparation = await RunPrepare.PrepareAsync(db, task, version, default, assembly.Assembled);
         if (preparation is null)
             throw new InvalidOperationException("RunPrepare refused the seeded claim");
         if (withSnapshot)
         {
-            SnapshotWithInput(db, preparation, new
-            {
-                workItem = new { repository = $"{repo.Owner}/{repo.Name}", number = workItem.Number, title = workItem.Title },
-                command = "plan",
-                instructions = "Do the stub work.",
-                artifactReferences = Array.Empty<Guid>(),
-            });
+            ContextAssemblyFreezable.FreezeOrThrow(db, preparation, assembly.Assembled!);
             await db.SaveChangesAsync();
         }
         return preparation;
@@ -137,20 +138,15 @@ public static class RuntimeTestSupport
         });
     }
 
-    /// <summary>POSTs /start as the orchestrator and returns (response, raw body).</summary>
+    /// <summary>POSTs /start as the orchestrator with the FROZEN context (the same bytes the dispatcher
+    /// would carry) and returns (response, raw body).</summary>
     public static Task<HttpResponseMessage> StartAsync(HttpClient client, Guid runId, RunPreparation preparation) =>
         client.PostAsJsonAsync($"/internal/runtime/runs/{runId}/start", new
         {
             agentSessionId = preparation.Session.Id,
             workspaceId = preparation.Workspace.Id,
             agentProfileVersionId = preparation.ProfileVersion.Id,
-            input = new
-            {
-                workItem = new { repository = "o/r", number = 1L, title = "t" },
-                command = "plan",
-                instructions = "Do the stub work.",
-                artifactReferences = Array.Empty<Guid>(),
-            },
+            input = JsonDocument.Parse(preparation.AssembledContext!.Content).RootElement,
         });
 
     /// <summary>Reads the per-Run callback token the secret-file delivery would give the Bridge.</summary>

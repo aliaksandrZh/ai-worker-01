@@ -375,7 +375,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasIndex(s => s.RunId).IsUnique();
             entity.Property(s => s.IncludedSources).HasColumnType("jsonb");
             entity.Property(s => s.ExcludedSources).HasColumnType("jsonb");
-            entity.Property(s => s.Content).HasColumnType("jsonb");
+            // ticket 11: content is a `text` blob — jsonb would reorder keys and re-space the JSON on
+            // storage, breaking the frozen-bytes identity (the content_hash and budget both apply to the
+            // EXACT serialized input the Bridge gets via /input, 02 §14a + decision 63).
+            entity.Property(s => s.Content).HasColumnType("text");
             entity.HasOne<Run>()
                 .WithMany()
                 .HasForeignKey(s => s.RunId)

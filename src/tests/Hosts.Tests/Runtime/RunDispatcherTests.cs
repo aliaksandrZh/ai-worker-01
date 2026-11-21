@@ -6,6 +6,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Context;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Orchestrator.Commands;
 using Xunit;
@@ -70,8 +71,9 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(preparation.Workspace.Id, body.RootElement.GetProperty("workspaceId").GetGuid());
         Assert.Equal(preparation.ProfileVersion.Id, body.RootElement.GetProperty("agentProfileVersionId").GetGuid());
         var input = body.RootElement.GetProperty("input");
-        Assert.Equal("plan", input.GetProperty("command").GetString());
-        Assert.Equal("Do the stub work.", input.GetProperty("instructions").GetString());
+        Assert.Equal("plan", input.GetProperty("command").GetString()); // the canonical task verb
+        Assert.Equal("Do the stub work.", input.GetProperty("commandComment").GetProperty("text").GetString());
+        Assert.Equal(ContextInstructions.For(OrchestrationTaskTypes.Plan), input.GetProperty("instructions").GetString());
 
         var db = postgres.NewDbContext();
         var job = await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.TaskId == preparation.Task.Id);
@@ -81,10 +83,20 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.NotNull(task.StartedAt);
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
         Assert.Equal(RunStatuses.Starting, run.Status);
+
+        // the frozen snapshot is IMMUTABLE, hashed, and its content is what /start carried + /input serves
         var snapshot = await db.RunContextSnapshots.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
         Assert.Equal(64, snapshot.ContentHash.Length);
-        Assert.NotEqual("[]", snapshot.IncludedSources); // it records the work-item/command sources
-        Assert.Equal("[]", snapshot.ExcludedSources); // nothing pruned at ticket-11 scope
+        Assert.Equal(input.GetRawText(), snapshot.Content); // the payload carries the same frozen bytes
+        Assert.False(snapshot.ExcludedSources is null || snapshot.ExcludedSources.Length == 0);
+        Assert.Equal("[]", snapshot.ExcludedSources); // nothing pruned: the seeded input fits easily
+        var includedSources = JsonDocument.Parse(snapshot.IncludedSources).RootElement;
+        Assert.Equal(JsonValueKind.Array, includedSources.ValueKind);
+        Assert.True(includedSources.GetArrayLength() > 0); // work_item, repository, command_comment recorded
+        Assert.Contains(includedSources.EnumerateArray(),
+            source => source.GetProperty("kind").GetString() == ContextAssembler.SourceKinds.WorkItem);
+        Assert.Contains(includedSources.EnumerateArray(),
+            source => source.GetProperty("kind").GetString() == ContextAssembler.SourceKinds.CommandComment);
     }
 
     [Fact]

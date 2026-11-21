@@ -4,15 +4,7 @@ namespace PiAgent.RuntimeApi;
 
 // ---- 04 §3: start request/response ----
 
-public sealed record RunInputPackage(
-    RunInputWorkItem WorkItem,
-    string Command,
-    string Instructions,
-    Guid[] ArtifactReferences);
-
-public sealed record RunInputWorkItem(string Repository, int Number, string Title);
-
-public sealed record StartRunRequest(Guid AgentSessionId, Guid? WorkspaceId, Guid AgentProfileVersionId, RunInputPackage Input);
+public sealed record StartRunRequest(Guid AgentSessionId, Guid? WorkspaceId, Guid AgentProfileVersionId, JsonElement Input);
 
 public sealed record StartRunResponse(
     Guid RunId,

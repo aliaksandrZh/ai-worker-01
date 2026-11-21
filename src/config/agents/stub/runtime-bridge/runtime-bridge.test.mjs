@@ -151,17 +151,59 @@ test("gitFacts return nulls when there is no repository", () => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("renderPrompt makes one structured markdown message", () => {
+test("renderPrompt renders the ticket-11 context package sections", () => {
   const prompt = renderPrompt({
-    workItem: { repository: "o/r", number: 15, title: "T" },
+    schemaVersion: 2,
+    profile: { name: "planner", version: 4 },
+    task: { type: "plan", targetHeadSha: null, targetBaseSha: null },
+    repository: { fullName: "o/r", defaultBranch: "main" },
+    workItem: { repository: "o/r", number: 15, type: "issue", title: "T", body: "Issue body.", state: "open", author: "alice", labels: ["bug"] },
+    instructions: "You are the planner agent.",
     command: "plan",
-    instructions: "Do the work.",
-    artifactReferences: [],
+    commandComment: { author: "bob", githubCommentId: 42, createdAt: "2026-11-21T10:00:00Z", text: "@bot /plan with trailing user context" },
+    conversation: [
+      { githubCommentId: 43, kind: "issue_comment", author: "bob", createdAt: "2026-11-21T11:00:00Z", body: "one line answer" },
+      { githubCommentId: 44, kind: "issue_comment", author: "carol", createdAt: "2026-11-21T12:00:00Z", body: "multi\nline\nbody" },
+    ],
+    artifacts: [{ id: "a1", taskSequence: 1, type: "plan", purpose: "approved_plan", format: "markdown", createdAt: "", content: "THE PLAN" },
+      { id: "a2", taskSequence: 2, type: "log_reference", format: "text", createdAt: "", content: null, reference: "/var/lib/pi-agent/workflows/x/runs/y/logs" }],
   });
-  assert.match(prompt, /# Task/);
-  assert.match(prompt, /o\/r/);
-  assert.match(prompt, /## Instructions/);
-  assert.match(prompt, /Do the work\./);
+
+  assert.match(prompt, /^# Task/);
+  assert.match(prompt, /## Instructions\nYou are the planner agent\./);
+  assert.match(prompt, /## User command/);
+  assert.match(prompt, /```text\n@bot \/plan with trailing user context\n```/);
+  assert.match(prompt, /## Input artifacts/);
+  assert.match(prompt, /Artifact plan — purpose: approved_plan/);
+  assert.match(prompt, /THE PLAN/);
+  assert.match(prompt, /Artifact log_reference.*\[reference: \/var\/lib\/pi-agent\/workflows\/x\/runs\/y\/logs\]/);
+  assert.match(prompt, /## Conversation \(chronological\)/);
+  assert.match(prompt, /bob at 2026-11-21T11:00:00Z \(comment 43\): one line answer/);
+  assert.match(prompt, /carol at .*: multi line body/); // multi-line bodies collapse to one line
+  assert.doesNotMatch(prompt, /artifactReferences/); // superseded by artifacts
+});
+
+test("renderPrompt renders reviewer context sections and skips absent ones", () => {
+  const prompt = renderPrompt({
+    task: { type: "review", targetHeadSha: "head-sha", targetBaseSha: "base-sha" },
+    repository: { fullName: "o/r", defaultBranch: "main" },
+    workItem: { repository: "o/r", number: 7, type: "pull_request", title: "PR", body: "", state: "open", author: "alice", labels: [] },
+    instructions: "review", command: "review",
+    reviews: [{ githubReviewId: 9, author: "dave", state: "changes_requested", body: "Please fix X", submittedAt: "2026-11-21T09:00:00Z", commitSha: null }],
+    threads: [{ githubCommentId: 50, resolved: null, state: "changes_requested", path: "src/a.ts", line: 12,
+      comments: [{ githubCommentId: 50, author: "dave", createdAt: "", body: "This looks wrong" }] }],
+  });
+  assert.match(prompt, /Target head SHA: head-sha/);
+  assert.match(prompt, /Target base SHA: base-sha/);
+  assert.match(prompt, /Task type: review/);
+  assert.match(prompt, /## Submitted reviews \(newest first\)/);
+  assert.match(prompt, /dave at 2026-11-21T09:00:00Z — state: changes_requested/);
+  assert.match(prompt, /Thread 50 \(at src\/a\.ts:12\).*review state: changes_requested/);
+  assert.match(prompt, /resolution unknown/);
+  assert.match(prompt, /dave at .*: This looks wrong/);
+  // sections that were not assembled never render
+  assert.doesNotMatch(prompt, /Conversation/);
+  assert.doesNotMatch(prompt, /git facts/);
 });
 
 // ---- spool: durable append, coalescing, redelivery ----

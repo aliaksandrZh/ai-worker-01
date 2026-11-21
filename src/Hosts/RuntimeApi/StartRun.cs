@@ -52,8 +52,11 @@ public static class StartRunHandler
         if (request.AgentProfileVersionId != task.AgentProfileVersionId)
             return RunPipelineApi.Error(400, "validation",
                 $"agentProfileVersionId {request.AgentProfileVersionId} does not match run's pinned version {task.AgentProfileVersionId}");
-        if (request.Input is null)
-            return RunPipelineApi.Error(400, "validation", "input (the frozen RunContextSnapshot) is required");
+        // 04 §3 (ticket 11): `input` is the frozen context package — the RunContextSnapshot content the
+        // Orchestrator assembled; the model contract is loose (a JSON object) because 04 §3's example is
+        // conceptual and the Bridge consumes the frozen bytes from `/input`, not this field.
+        if (request.Input.ValueKind is not JsonValueKind.Object)
+            return RunPipelineApi.Error(400, "validation", "input (the frozen RunContextSnapshot content) must be a JSON object");
 
         var snapshot = await db.RunContextSnapshots.AsNoTracking()
             .SingleOrDefaultAsync(s => s.RunId == runId, cancellationToken);

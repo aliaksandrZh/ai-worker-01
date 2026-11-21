@@ -99,7 +99,8 @@ public class RunPipelineModelTests
         var entity = Entity(dbContext, typeof(RunContextSnapshot));
         Assert.Equal("run_context_snapshot", entity.GetTableName());
         Assert.True(entity.GetIndexes().Single(i => i.Properties.Single().Name == nameof(RunContextSnapshot.RunId)).IsUnique);
-        Assert.Equal("jsonb", Property(entity, nameof(RunContextSnapshot.Content)).GetColumnType());
+        // ticket 11: the frozen input is byte-exact (content_hash/budget apply to the exact bytes) → text, not jsonb
+        Assert.Equal("text", Property(entity, nameof(RunContextSnapshot.Content)).GetColumnType());
         Assert.Equal("jsonb", Property(entity, nameof(RunContextSnapshot.IncludedSources)).GetColumnType());
         Assert.Equal("jsonb", Property(entity, nameof(RunContextSnapshot.ExcludedSources)).GetColumnType());
     }

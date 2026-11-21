@@ -1176,7 +1176,7 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Content")
                         .IsRequired()
-                        .HasColumnType("jsonb")
+                        .HasColumnType("text")
                         .HasColumnName("content");
 
                     b.Property<string>("ContentHash")

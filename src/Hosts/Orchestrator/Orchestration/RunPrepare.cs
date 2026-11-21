@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Context;
 
 namespace PiAgent.Orchestrator.Orchestration;
 
@@ -14,11 +15,15 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// non-terminal Run (`pending|starting|running|stopping`) — the next Run of a Workflow, of any Task
 /// type, never starts before the previous Run's terminal callback fixed its state. Returns null when
 /// the hook refuses; the claim is then released, a Run is never created for a busy Workflow.
+/// The caller assembles the Run's context FIRST (ticket 11: assembly precedes Run creation so that
+/// `context_too_large` never leaves Run rows behind) and passes it in; the dispatcher freezes it as the
+/// immutable RunContextSnapshot.
 /// </summary>
 public static class RunPrepare
 {
     public static async Task<RunPreparation?> PrepareAsync(
-        AppDbContext db, OrchestrationTask task, AgentProfileVersion version, CancellationToken cancellationToken)
+        AppDbContext db, OrchestrationTask task, AgentProfileVersion version, CancellationToken cancellationToken,
+        ContextAssembly? assembled = null)
     {
         var activeRuns = await (
             from previous in db.Runs
@@ -86,6 +91,6 @@ public static class RunPrepare
             db.Workspaces.Add(workspace);
         }
         await db.SaveChangesAsync(cancellationToken);
-        return new RunPreparation(run, session, container, workspace, task, version);
+        return new RunPreparation(run, session, container, workspace, task, version, assembled);
     }
 }

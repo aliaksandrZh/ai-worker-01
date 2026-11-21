@@ -97,18 +97,96 @@ export function gitFacts(workspace) {
   return facts;
 }
 
-/** The structured Markdown prompt the Bridge renders from the frozen input (decision 63, one RPC prompt). */
+/**
+ * The structured Markdown prompt the Bridge renders from the frozen input (decision 63, one RPC
+ * prompt). The input is the ticket-11 context package (v2 shape); sections are optional — the
+ * renderer prints only what the Orchestrator assembled and invents nothing: each section maps 1:1
+ * to the frozen RunContextSnapshot content.
+ */
 export function renderPrompt(input) {
   const lines = [];
+  const section = (title) => lines.push("", `## ${title}`);
+
   lines.push("# Task");
-  if (input?.workItem) {
-    lines.push(`- Repository: ${input.workItem.repository}`);
-    lines.push(`- Number: ${input.workItem.number}`);
-    if (input.workItem.title) lines.push(`- Title: ${input.workItem.title}`);
+  if (input?.profile) lines.push(`- Profile: ${input.profile.name} v${input.profile.version}`);
+  if (input?.task) {
+    lines.push(`- Task type: ${input.task.type}`);
+    if (input.task.targetHeadSha) lines.push(`- Target head SHA: ${input.task.targetHeadSha}`);
+    if (input.task.targetBaseSha) lines.push(`- Target base SHA: ${input.task.targetBaseSha}`);
   }
-  if (input?.command) lines.push(`- Command: ${input.command}`);
-  if (input?.instructions) lines.push("", "## Instructions", input.instructions);
-  if (Array.isArray(input?.artifactReferences) && input.artifactReferences.length > 0)
-    lines.push("", `## Input artifact references: ${input.artifactReferences.join(", ")}`);
+  if (input?.repository)
+    lines.push(`- Repository: ${input.repository.fullName} (default branch: ${input.repository.defaultBranch})`);
+  if (input?.workItem) {
+    lines.push(
+      `- Work item: ${input.workItem.type} ${input.workItem.repository}#${input.workItem.number} (${input.workItem.state})`,
+      `- Title: ${input.workItem.title}`);
+    if (input.workItem.labels?.length) lines.push(`- Labels: ${input.workItem.labels.join(", ")}`);
+    if (input.workItem.author) lines.push(`- Author: ${input.workItem.author}`);
+    if (input.workItem.body) section("Work item body"), lines.push(input.workItem.body);
+  }
+  if (input?.instructions) section("Instructions"), lines.push(input.instructions);
+  if (input?.commandComment) {
+    section("User command");
+    lines.push(`${input.commandComment.author} wrote at ${input.commandComment.createdAt} (comment ${input.commandComment.githubCommentId}):`);
+    lines.push("", "```text", input.commandComment.text.replace(/\r/g, ""), "```");
+  } else if (input?.command) {
+    lines.push(`- Command: ${input.command}`);
+  }
+  if (input?.git) {
+    section("Workspace git facts");
+    if (input.git.branch) lines.push(`- Agent branch: ${input.git.branch}`);
+    if (input.git.baseSha) lines.push(`- Base SHA: ${input.git.baseSha}`);
+    if (input.git.currentSha) lines.push(`- Current SHA: ${input.git.currentSha}`);
+  }
+  if (Array.isArray(input?.artifacts) && input.artifacts.length > 0) {
+    section("Input artifacts");
+    for (const artifact of input.artifacts) {
+      const purpose = artifact.purpose ? ` — purpose: ${artifact.purpose}` : "";
+      const reference = artifact.reference ? ` [reference: ${artifact.reference}]` : "";
+      lines.push("", `### Artifact ${artifact.type}${purpose}${reference}`);
+      if (artifact.content) lines.push(artifact.content.replace(/\r/g, ""));
+    }
+  }
+  if (Array.isArray(input?.reviews) && input.reviews.length > 0) {
+    section("Submitted reviews (newest first)");
+    for (const review of input.reviews) {
+      lines.push(`- ${review.author} at ${review.submittedAt ?? "?"} — state: ${review.state}`);
+      if (review.body) lines.push("  ```text", ...indented(review.body), "  ```");
+    }
+  }
+  if (Array.isArray(input?.threads) && input.threads.length > 0) {
+    section("Review threads (newest first)");
+    for (const thread of input.threads) {
+      const binding = [thread.path, thread.line].filter(Boolean).join(":");
+      lines.push(
+        `- Thread ${thread.githubCommentId}${binding ? ` (at ${binding})` : ""}` +
+        `${thread.state ? ` — review state: ${thread.state}` : ""}` +
+        (thread.resolved === true ? " — resolved" : thread.resolved === false ? "" : " — resolution unknown"));
+      for (const comment of thread.comments ?? [])
+        lines.push(`  - ${comment.author} at ${comment.createdAt} (comment ${comment.githubCommentId}): ${inline(comment.body)}`);
+    }
+  }
+  if (Array.isArray(input?.relatedWorkItems) && input.relatedWorkItems.length > 0) {
+    section("Related work items");
+    for (const related of input.relatedWorkItems)
+      lines.push(
+        `- relation ${related.relation} (other: ${related.otherType}): ` +
+        `${related.repository}#${related.number} "${related.title}" (${related.state})`);
+  }
+  if (Array.isArray(input?.conversation) && input.conversation.length > 0) {
+    section("Conversation (chronological)");
+    for (const comment of input.conversation)
+      lines.push(`- ${comment.author} at ${comment.createdAt} (comment ${comment.githubCommentId}): ${inline(comment.body)}`);
+  }
   return lines.join("\n");
+}
+
+/** Indents every line of a multi-line body by two spaces (no truncation). */
+function indented(body) {
+  return String(body).replace(/\r/g, "").split("\n").map((line) => "  " + line);
+}
+
+/** Collapses newlines so a comment stays on one indented line. */
+function inline(body) {
+  return String(body ?? "").replace(/\r/g, "").replace(/\n+/g, " ").trim();
 }

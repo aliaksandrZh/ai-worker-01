@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Context;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.RuntimeApi;
 using Xunit;
@@ -433,7 +434,8 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("plan", body.RootElement.GetProperty("command").GetString());
-        Assert.Equal("Do the stub work.", body.RootElement.GetProperty("instructions").GetString());
+        Assert.Equal("Do the stub work.", body.RootElement.GetProperty("commandComment").GetProperty("text").GetString());
+        Assert.Equal(ContextInstructions.For(OrchestrationTaskTypes.Plan), body.RootElement.GetProperty("instructions").GetString());
     }
 
     [Fact]

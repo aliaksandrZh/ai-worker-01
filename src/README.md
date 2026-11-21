@@ -112,6 +112,23 @@ with the same `buildId`. The worker has no database (boundary-guarded) and accep
 Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile` (decision 56)
 are profile-Dockerfile responsibilities (see `config/agents/planner/Dockerfile`).
 
+## Context assembling (ticket 11, decision 63)
+
+The claim worker runs the Context Assembler (`Hosts/Orchestrator/Context/`) BEFORE preparing the
+Run: package = task-type instructions + pinned profile identity, the user command (its full
+`source_body_snapshot` incl. trailing text, decision 79), the work item, every conversation
+comment chronologically (tombstones recorded as exclusions), `relatedWorkItems` from
+WorkItemLink rows, prior Workflow artifacts (the `task_artifact_input` approved plan is mandatory
+and never pruned; `log_reference` artifacts travel by reference), repository data, coder
+agent-branch facts, and — for reviews — the pinned head/base SHAs plus submitted reviews and
+grouped inline threads. Owner simplification: V1 collects everything and applies only
+budget-driven pruning, newest-first kept, with every exclusion recorded in the snapshot. Limits:
+`ContextTokenEstimator` (bytes/4, OBS-6) against the profile's `max_context_tokens`, plus 256 KiB
+per artifact / 512 KiB artifacts / 512 KiB serialized input. Mandatory context that cannot fit →
+Task fails `context_too_large` with NO Run rows (metric `claimContextTooLargeTotal`); the frozen
+snapshot is byte-exact (`content` moved jsonb → text, OBS-8), hashed, immutable, and served to
+the Bridge via `GET /internal/runtime/runs/{runId}/input`.
+
 ## Observations — known non-critical debt
 
 Four deferred items from the task-01 review (unauthenticated dev metrics port, unpinned

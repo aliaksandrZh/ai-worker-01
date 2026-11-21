@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -6,22 +5,26 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Context;
 
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>Run rows the Orchestrator created for one claim, ready to hand to the dispatcher
 /// (decision 44: the Orchestrator owns the DB rows; the Runtime API — ticket 09 — provisions).
-/// The Workspace row was created (or reused) by RunPrepare on the Task's first attempt.</summary>
+/// The Workspace row was created (or reused) by RunPrepare on the Task's first attempt.
+/// `AssembledContext` carries the ticket-11 Context Assembler output (null only in task-07 legacy
+/// tests that never dispatch); the dispatcher freezes it as the Run's immutable snapshot.</summary>
 public sealed record RunPreparation(
     Run Run,
     AgentSession Session,
     ContainerInstance Container,
     Workspace Workspace,
     OrchestrationTask Task,
-    AgentProfileVersion ProfileVersion);
+    AgentProfileVersion ProfileVersion,
+    ContextAssembly? AssembledContext);
 
 /// <summary>The dispatch hook between the queue and the Runtime API (decision 44: the Orchestrator owns
-/// the DB rows; the Runtime API provisions). Ticket 09 replaces the task-07 no-op stub.
+/// the DB rows; the Runtime API provisions). Ticket 09 replaced the task-07 no-op stub.
 /// <list type="bullet">
 /// <item><see cref="HandedOff"/> — `/start` accepted: the job is completed, the Task moved `starting`,
 /// the Run mirrored `starting`; the terminal-Run consumer takes over afterwards.</item>
@@ -68,72 +71,51 @@ public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions
     }
 }
 
+/// <summary>The 04 §3 start request the Orchestrator sends; `input` is the frozen context package
+/// (the ticket-11 assembler's content, byte-identical to RunContextSnapshot.content — tested).</summary>
 public sealed record RunStartPayload(
     [property: JsonPropertyName("agentSessionId")] Guid AgentSessionId,
     [property: JsonPropertyName("workspaceId")] Guid WorkspaceId,
     [property: JsonPropertyName("agentProfileVersionId")] Guid AgentProfileVersionId,
-    [property: JsonPropertyName("input")] RunInput Input);
-
-public sealed record RunInput(
-    [property: JsonPropertyName("workItem")] RunInputWorkItem WorkItem,
-    [property: JsonPropertyName("command")] string Command,
-    [property: JsonPropertyName("instructions")] string Instructions,
-    [property: JsonPropertyName("artifactReferences")] Guid[] ArtifactReferences);
-
-public sealed record RunInputWorkItem(
-    [property: JsonPropertyName("repository")] string Repository,
-    [property: JsonPropertyName("number")] long Number,
-    [property: JsonPropertyName("title")] string? Title);
+    [property: JsonPropertyName("input")] JsonElement Input);
 
 /// <summary>
-/// The real dispatcher (ticket 09): freezes the Run's Context snapshot (idempotent, ticket-11 scope:
-/// minimal assembly of the command + work item + artifact references; no pruning), then calls the
-/// Runtime API `POST /internal/runtime/runs/{runId}/start` and completes the claim on success.
+/// The real dispatcher (ticket 11 refines ticket 09): freezes the ticket-11 Assembler's context as the
+/// Run's IMMUTABLE RunContextSnapshot (idempotent by content hash; never rewritten — an existing row
+/// with a different hash aborts the dispatch) and calls the Runtime API
+/// `POST /internal/runtime/runs/{runId}/start` with the same frozen content, then completes the claim
+/// on success.
 /// </summary>
 public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<RuntimeApiRunDispatcher> logger) : IRunDispatcher
 {
     public async Task<DispatchOutcome> DispatchAsync(AppDbContext db, RunPreparation preparation, CancellationToken cancellationToken)
     {
-        var (run, session, container, workspace, task, version) = preparation;
+        var (run, session, container, workspace, task, version, assembled) = preparation;
         // the claim's own write-back (job completion, task transition) happens on the same context the
         // worker gave us, so it cannot be lost on a later release
         var job = await db.OrchestrationJobs
             .SingleOrDefaultAsync(j => j.TaskId == task.Id
                 && (j.Status == OrchestrationJobStatuses.Processing || j.Status == OrchestrationJobStatuses.Pending), cancellationToken);
-        _ = workspace; // deconstructed for task/version below
+        _ = container; // deconstruction only; task/version below
 
-        var payload = await BuildStartPayloadAsync(db, preparation, cancellationToken);
-        var snapshot = await db.RunContextSnapshots.SingleOrDefaultAsync(s => s.RunId == run.Id, cancellationToken);
-        var content = JsonSerializer.Serialize(payload.Payload.Input);
-        if (snapshot is null)
-        {
-            db.RunContextSnapshots.Add(new RunContextSnapshot
-            {
-                Id = Guid.NewGuid(),
-                RunId = run.Id,
-                TaskId = task.Id,
-                ContentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant(),
-                IncludedSources = JsonSerializer.Serialize(payload.IncludedSources),
-                ExcludedSources = "[]",
-                Content = content,
-                CreatedAt = DateTime.UtcNow,
-            });
-        }
-        else
-        {
-            snapshot.Content = content;
-            snapshot.ContentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
-            snapshot.IncludedSources = JsonSerializer.Serialize(payload.IncludedSources);
-            snapshot.ExcludedSources = "[]";
-        }
-        // Commit BEFORE the POST: /start requires the frozen snapshot to be visible to the Runtime API
+        if (assembled is null)
+            throw new InvalidOperationException(
+                $"run {run.Id} dispatch requires the assembled context — the claim path assembles before RunPrepare (ticket 11)");
+
+        // The /start payload carries the SAME frozen content (the Runtime API serves /input from the
+        // snapshot row, so this field is transport duplication; keeping them byte-identical is tested).
+        using var inputDocument = JsonDocument.Parse(assembled.Content);
+        var payload = new RunStartPayload(session.Id, workspace.Id, version.Id, inputDocument.RootElement);
+
+        // Freeze BEFORE the POST: /start requires the frozen snapshot to be visible to the Runtime API
         // (its pull route serves this row), and any later claim-time run deletion then cascades it safely.
+        ContextAssemblyFreezable.FreezeOrThrow(db, preparation, assembled);
         await db.SaveChangesAsync(cancellationToken);
 
         HttpResponseMessage response;
         try
         {
-            response = await client.StartRunAsync(run.Id, payload.Payload, cancellationToken);
+            response = await client.StartRunAsync(run.Id, payload, cancellationToken);
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or TimeoutException)
         {
@@ -185,42 +167,5 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
 
         logger.LogWarning("run {runId} dispatch rejected ({statusCode}): {body}", run.Id, (int)response.StatusCode, errorBody);
         return DispatchOutcome.Permanent;
-    }
-
-    /// <summary>Ticket-11 scope: the command text, work item identity, and linked artifact references —
-    /// the frozen input the Bridge renders and prompts. No pruning machinery yet (nothing pruned).</summary>
-    internal static async Task<(RunStartPayload Payload, string[] IncludedSources)> BuildStartPayloadAsync(
-        AppDbContext db, RunPreparation preparation, CancellationToken cancellationToken)
-    {
-        var (run, session, container, workspace, task, version) = preparation;
-        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
-        var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
-        var repository = await db.Repositories.AsNoTracking().SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
-        var command = task.TriggerCommandId is { } commandId
-            ? await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == commandId, cancellationToken)
-            : null;
-        var artifactIds = await db.TaskArtifactInputs.AsNoTracking()
-            .Where(i => i.TaskId == task.Id)
-            .Select(i => i.ArtifactId)
-            .ToListAsync(cancellationToken);
-
-        var instructions = command?.SourceBodySnapshot;
-        if (string.IsNullOrWhiteSpace(instructions))
-            instructions = $"Execute the '{task.Type}' task for {repository.FullName}#{workItem.Number}.";
-
-        var input = new RunInput(
-            new RunInputWorkItem(repository.FullName, workItem.Number, workItem.Title),
-            command?.CommandName ?? task.Type,
-            instructions,
-            artifactIds.ToArray());
-        var payload = new RunStartPayload(session.Id, workspace.Id, version.Id, input);
-        var sources = new List<string>
-        {
-            $"{workItem.Type}:{repository.FullName}#{workItem.Number}",
-        };
-        if (command is not null)
-            sources.Add($"command:{command.Id}");
-        sources.AddRange(artifactIds.Select(artifactId => $"artifact:{artifactId}"));
-        return (payload, sources.ToArray());
     }
 }

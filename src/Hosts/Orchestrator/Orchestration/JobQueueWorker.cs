@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
+using PiAgent.Orchestrator.Context;
 using PiAgent.Platform.Workers;
 using PiAgent.Infrastructure.Persistence;
 
@@ -240,7 +241,14 @@ public sealed class JobQueueWorker(
             return;
         }
 
-        var preparation = await RunPrepare.PrepareAsync(db, task, version, cancellationToken);
+        var (preparation, contextTooLarge) = await AssembleAndPrepareAsync(
+            db, task, job, version, workflow, workItem, repository, command, cancellationToken);
+        if (contextTooLarge)
+        {
+            // ticket 11: the Task already failed terminal with `context_too_large` (no Run rows, job
+            // failed, command failed) — nothing to release
+            return;
+        }
         if (preparation is null)
         {
             // serialization hook refused (a previous Run of this Workflow is still non-terminal)
@@ -259,6 +267,36 @@ public sealed class JobQueueWorker(
                 await CancelAsync(AgentCommandRejectionReasons.RuntimeDispatchFailed);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Ticket 11 (decision 63): the Context Assembler runs BEFORE RunPrepare so that — per the spec —
+    /// mandatory context that cannot fit fails the Task with `context_too_large` while the Run is
+    /// NEVER created (no Run/AgentSession/Container/Workspace rows, no snapshot, no dispatch). When the
+    /// context fits, the Run is prepared carrying the assembled package for the dispatcher to freeze.
+    /// `contextTooLarge = true` means the Task is already terminal — no release must happen; a null
+    /// preparation (with `contextTooLarge = false`) means the Workflow was busy → release the claim.
+    /// </summary>
+    private async Task<(RunPreparation? Preparation, bool ContextTooLarge)> AssembleAndPrepareAsync(
+        AppDbContext db,
+        OrchestrationTask task,
+        OrchestrationJob job,
+        AgentProfileVersion version,
+        Workflow workflow,
+        WorkItem workItem,
+        Repository repository,
+        AgentCommand? command,
+        CancellationToken cancellationToken)
+    {
+        var assembly = await ContextAssembler.AssembleAsync(
+            db, task, version, workflow, workItem, repository, command, cancellationToken);
+        if (assembly.TooLarge)
+        {
+            await TaskLifecycle.FailTaskContextTooLargeAsync(
+                db, task, job, repository, workItem, assembly.TooLargeDetail ?? "context_too_large", metrics, cancellationToken);
+            return (null, true);
+        }
+        return (await RunPrepare.PrepareAsync(db, task, version, cancellationToken, assembly.Assembled), false);
     }
 
     private async Task RefreshGaugesAsync(CancellationToken cancellationToken)

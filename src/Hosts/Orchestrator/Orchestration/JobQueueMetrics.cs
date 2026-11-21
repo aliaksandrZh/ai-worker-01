@@ -17,14 +17,18 @@ public sealed class JobQueueMetrics
     public long JobsClaimedTotal => Interlocked.Read(ref _jobsClaimed);
     public long LeaseExpirationsTotal => Interlocked.Read(ref _leaseExpirations);
     public long ClaimCancellationsTotal => Interlocked.Read(ref _claimCancellations);
+    public long ClaimContextTooLargeTotal => Interlocked.Read(ref _claimContextTooLarge);
 
     private long _jobsClaimed;
     private long _leaseExpirations;
     private long _claimCancellations;
+    private long _claimContextTooLarge;
 
     public void RecordClaim() => Interlocked.Increment(ref _jobsClaimed);
     public void RecordLeaseExpiration() => Interlocked.Increment(ref _leaseExpirations);
     public void RecordClaimCancellation() => Interlocked.Increment(ref _claimCancellations);
+    /// <summary>Ticket 11: a claim died at context assembly — mandatory context beyond the budgets.</summary>
+    public void RecordClaimContextTooLarge() => Interlocked.Increment(ref _claimContextTooLarge);
 
     public void UpdateGauges(long pendingJobs, double oldestPendingAgeSeconds, double claimWaitSeconds, long activeRuns)
     {
