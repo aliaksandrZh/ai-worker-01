@@ -1,8 +1,8 @@
 # pi-agent control plane
 
 The real implementation of `docs/pi-agent-architecture/` (task `01-stack-and-skeleton` and onward).
-The repo root is still the PoC — `api/`, `github-polling/`, `pi/`, `komodo/` are frozen reference
-material; everything in this directory is the new system.
+The PoC lives in `../poc/` (`api/`, `github-polling/`, `pi/`, `komodo/`) as frozen reference
+material; everything in this directory is the new system. Repo overview + main flow: root `../README.md`.
 
 ## Stack (spec decision 1, finalized)
 

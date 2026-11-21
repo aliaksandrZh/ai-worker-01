@@ -1,49 +1,6 @@
 version: 3
 
 tasks:
-  komodo:
-    desc: Run komodo (docker compose)
-    cmds:
-      - docker compose --file komodo/ferretdb.compose.yaml --env-file komodo/compose.env up
-
-  api:
-    desc: Run pi-worker start/stop api (needs api/.env, see api/.env.example)
-    dir: api
-    cmds:
-      - npm install --no-fund --no-audit
-      - npm start
-
-  hook:
-    desc: Run console webhook receiver for /sessions/:id/notify (port 3900)
-    dir: api
-    cmds:
-      - node src/webhook-listener.mjs
-
-  github-polling:
-    desc: Poll GitHub repo activity and log to console (needs github-polling/.env, see .env.example)
-    dir: github-polling
-    cmds:
-      - node --env-file-if-exists=.env src/poll.mjs
-
-  github-api:
-    desc: GitHub App write API (issues/PRs/reviews/changes; needs github-polling/.env; test via src/console.html)
-    dir: github-polling
-    cmds:
-      - node --env-file-if-exists=.env src/write-api.mjs
-
-  test:
-    desc: Unit + contract tests (api signals state machine, github-polling poller + write-api)
-    cmds:
-      - node --test api/src/rpc-session.test.mjs
-      - node --test github-polling/src/poll.test.mjs
-      - node --test github-polling/src/write-api.test.mjs
-
-  check-signals:
-    desc: Live walkthrough — create session, prompt, await via /wait, webhook settled line (api + komodo must be running)
-    dir: api
-    cmds:
-      - sh curl-check-signals.sh
-
   stack:
     desc: Run the pi-agent control plane (postgres, migrator, runtime-api, host-monitor, build-worker, orchestrator, poller, outbox-worker; uses src/.env)
     cmds:

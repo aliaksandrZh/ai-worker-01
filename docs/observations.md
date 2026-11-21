@@ -59,7 +59,7 @@
 ## OBS-9: the planner's LLM provider is a dev-posture baked config (ticket 12)
 
 - **Where:** `src/config/agents/planner/models.json` + `settings.json` (baked into the version image,
-  PoC `pi/pi-agent-state` shape): provider `ollama` → `http://host.docker.internal:11434/v1`, model
+  PoC `poc/pi/pi-agent-state` shape): provider `ollama` → `http://host.docker.internal:11434/v1`, model
   `glm-5.3-flash:cloud` (the deployment-time Ollama app proxy). Decision 56 defers LLM model/provider
   selection to V2 — but ticket 12's real Pi runs need SOME model now.
 - **State today:** acceptable dev posture — the config is baked per profile version (pinned, no

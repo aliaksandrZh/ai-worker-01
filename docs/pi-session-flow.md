@@ -1,5 +1,7 @@
 # Drive a pi coding agent through the pi-worker API — flow guide
 
+> PoC documentation — all paths below (`api/…`, `pi/…`, `komodo/…`) are under `../poc/`.
+
 > This guide shows how to run a pi coding-agent session from outside docker, with every
 > docker operation executed by Komodo. You get one container per session, bidirectional
 > pi RPC over HTTP, host-side command execution through pi's extension-UI protocol,
