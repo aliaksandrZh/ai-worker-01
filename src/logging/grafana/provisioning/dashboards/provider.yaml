@@ -1,0 +1,10 @@
+# Grafana provisioning — where dashboard files live inside the container.
+apiVersion: 1
+
+providers:
+  - name: pi-agent
+    type: file
+    updateIntervalSeconds: 30
+    allowUiUpdates: false # src/logging/grafana/dashboards/ is the source of truth
+    options:
+      path: /etc/grafana/dashboards

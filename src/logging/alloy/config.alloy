@@ -1,0 +1,45 @@
+// Grafana Alloy — ships every container's stdout/stderr to Loki (src/compose.yaml `alloy`).
+// Uses the Docker API through the read-only socket mount (same pattern as host-monitor),
+// not the logging driver, so `docker compose logs` / `task stack-logs` keep working.
+//
+// Labels per stream: `service` = compose service name (non-compose containers, e.g. Komodo
+// agent runs, carry only `container`). The log stack's own containers are dropped so
+// alloy→loki→grafana chatter never enters the log lake.
+
+discovery.docker "docker" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+discovery.relabel "docker" {
+  targets = discovery.docker.docker.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "^(loki|alloy|grafana)$"
+    action        = "drop"
+  }
+}
+
+loki.source.docker "docker" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker.output
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

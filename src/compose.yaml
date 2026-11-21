@@ -226,9 +226,55 @@ services:
       - backups:/backups
     entrypoint: ["/bin/sh", "/scripts/config-snapshot-loop.sh"]
 
+  # Centralized logging (config in src/logging/): every service logs §14 JSON to stdout and
+  # Alloy ships it to Loki with a `service` label (compose service name); Grafana serves the
+  # one provisioned log-list dashboard (Pi Agent Logs) on 127.0.0.1. No .NET or logging-driver
+  # changes — docker-json-file stays, so `docker compose logs` keeps working.
+  loki:
+    image: grafana/loki:3.6.22
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    ports:
+      # development-only LogQL / logcli endpoint (127.0.0.1, same posture as postgres:5432)
+      - "127.0.0.1:${LOKI_HOST_PORT:-3100}:3100"
+    volumes:
+      - ./logging/loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+
+  alloy:
+    image: grafana/alloy:v1.22.0
+    restart: unless-stopped
+    command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data"]
+    volumes:
+      - ./logging/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Docker API for log tailing (same read-only socket mount as host-monitor).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data # tail positions: no re-ingested dupes after restarts
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    restart: unless-stopped
+    ports:
+      # the one log lake UI: http://localhost:3000 → dashboard "Pi Agent Logs"
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in src/.env}
+    volumes:
+      - ./logging/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./logging/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+
 volumes:
   pgdata:
   backups:
+  loki-data:
+  alloy-data:
+  grafana-data:
 
 networks:
   default:

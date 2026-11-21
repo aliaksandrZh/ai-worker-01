@@ -1,0 +1,11 @@
+# Grafana provisioning — the one Loki datasource; the dashboard references it by uid.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    editable: false

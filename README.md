@@ -49,7 +49,9 @@ One comment travels like this:
    dead-letter handling. Workflow storage is cleaned up when the root item closes.
 
 Services: `poller`, `orchestrator`, `runtime-api`, `outbox-worker`, `build-worker`, `host-monitor`
-(one executable each under `src/Hosts/`), plus `postgres`, `migrator`, `backups`, `config-snapshot`.
+(one executable each under `src/Hosts/`), plus `postgres`, `migrator`, `backups`, `config-snapshot`,
+and the log lake `loki` + `alloy` + `grafana` — every service's §14 JSON stdout lands in one
+Grafana log-list dashboard at http://localhost:3000 (`src/logging/`).
 Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
 `src/tests/Architecture.Tests`); they depend on the Docker socket only.
 

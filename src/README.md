@@ -26,8 +26,9 @@ material; everything in this directory is the new system. Repo overview + main f
 | `config/` | configuration plane (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml`, `agents/<name>/profile.yaml` — mounted read-only into the orchestrator, synced only at startup |
 | `backup/` | scheduled `pg_dump` + config-plane Git snapshot scripts (compose: `backups`, `config-snapshot`) |
 | `komodo/` | Komodo Deployment for this system (vendor duplicate; own compose, port 9120) |
+| `logging/` | centralized logging config: `loki-config.yaml` (single-binary Loki, 7-day retention), `alloy/config.alloy` (ships all container stdout/stderr to Loki, labels every stream with the compose `service` name, drops loki/alloy/grafana self-noise), `grafana/` provisioning (one datasource + one log-list dashboard "Pi Agent Logs") — compose services `loki`, `alloy`, `grafana` |
 | `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) |
-| `compose.yaml` | the §13 control-plane stack (10 services, private network `pi-agent-net`) |
+| `compose.yaml` | the §13 control-plane stack (13 services, private network `pi-agent-net`) |
 ## Quick start
 
 ```sh
@@ -37,6 +38,7 @@ task stack                # postgres → migrator → the rest; --wait gates a g
                           # after any src/ change: task stack-rebuild first (rebuilds images), then task stack
 curl localhost:8080/healthz && curl localhost:8080/readyz && curl localhost:8080/metrics
 task stack-logs           # each service logs §14 JSON lines
+open http://localhost:3000 # the same logs in one place: "Pi Agent Logs" dashboard (admin / GRAFANA_ADMIN_PASSWORD)
 task stack-down
 ```
 
