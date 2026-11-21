@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "/usr/local/bin/github-mcp-server",
+      "args": ["stdio"],
+      "exposure": "direct",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "!cat /run/secrets/github-write-pat.txt",
+        "GITHUB_TOOLS": "issue_read,add_issue_comment"
+      }
+    }
+  }
+}

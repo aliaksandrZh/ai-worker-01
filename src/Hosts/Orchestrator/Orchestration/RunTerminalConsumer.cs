@@ -14,11 +14,11 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// <item>Task `starting` whose Run reached `running` → Task `running` (the agent started executing).</item>
 /// <item>Terminal Run → Task terminal: `succeeded` (+Workflow `waiting_for_human`, command `processed`),
 /// `blocked` when the persisted `completed` callback carried `outcome = needs_human_input` (decision 72),
-/// `failed` (`run.error_code` as the recorded reason, job `failed`). Desired container state becomes
+/// `failed` (`run.error_code` as the recorded reason, job `failed`) — with the decision-42 exception that
+/// a `github_publication_failed` Run enqueues its Outbox notification right here (task 12; the generic
+/// task-failure notification template remains ticket 15's). Desired container state becomes
 /// `stopped` — the Runtime API already stopped the container at terminal delivery (decision 75:
 /// the slot releases at terminal state + confirmed stop).</item>
-/// </list>
-/// Task-failure notifications (06 §13) land with ticket 15's retry semantics — deliberately not here.
 /// </summary>
 public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWorkerCycle
 {
@@ -98,6 +98,11 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     command.RejectionReason = task.FailureReason;
                     command.ProcessedAt = now;
                 }
+                // decision 42 (06 §13, ticket 12): the unconfirmed mandatory publication is the one
+                // failure the OWNER must hear about immediately with the artifacts-kept note — the
+                // generic task-failure notification template remains ticket 15's.
+                if (run.ErrorCode == RunErrorCodes.GithubPublicationFailed)
+                    await EnqueuePublicationFailedNotificationAsync(db, task, run, workflow, cancellationToken);
                 break;
 
             case RunStatuses.Cancelled:
@@ -151,6 +156,38 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
 
         await db.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    /// <summary>The decision-42 failure notification (06 §13): command, agent, attempt, the publication
+    /// stage and the error with a diagnostic id — never re-publishes the agent's result; the artifacts
+    /// stay. The terminal consumer transitions each Task exactly once, and the enqueue rides the same
+    /// change set, so one failed Run produces at most one notification.</summary>
+    private static async Task EnqueuePublicationFailedNotificationAsync(
+        AppDbContext db, OrchestrationTask task, Run run, Workflow workflow, CancellationToken cancellationToken)
+    {
+        var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
+        var profileName = await db.AgentProfileVersions.AsNoTracking()
+            .Where(v => v.Id == task.AgentProfileVersionId)
+            .Join(db.AgentProfiles, v => v.AgentProfileId, p => p.Id, (v, p) => p.Name)
+            .SingleOrDefaultAsync(cancellationToken);
+        var commandToken = task.Type switch
+        {
+            OrchestrationTaskTypes.Plan => "/plan",
+            OrchestrationTaskTypes.Implement => "/code",
+            OrchestrationTaskTypes.Review => "/review",
+            OrchestrationTaskTypes.TestDesign => "/test-cases",
+            _ => $"/{task.Type.Replace('_', '-')}",
+        };
+        var text =
+            $"Task failed: {commandToken}\n" +
+            $"Agent: {profileName ?? "unknown"} | Attempt: #{run.AttemptNumber} | Stage: Required GitHub publication\n" +
+            $"Failure: the run could not confirm its mandatory GitHub publication " +
+            $"({RunErrorCodes.GithubPublicationFailed}) (id: run_{run.Id})\n\n" +
+            "The produced artifacts are kept. The Workflow is waiting for human input.\n" +
+            "Check for an already-posted result comment, resolve the underlying issue and submit the command again (or use /retry).";
+        await new OutboxActionStore(db).EnqueueAsync(
+            new OutboxEnqueueRequest(workItem.RepositoryId, workItem.Id, task.Id, workItem.Number, text, run.Id),
+            cancellationToken);
     }
 
     /// <summary>Reads the `outcome` from the run's persisted `completed` callback (04 §4: the full body is

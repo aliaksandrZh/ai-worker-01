@@ -29,6 +29,8 @@ public static class StartRunHandler
 
         var task = await db.OrchestrationTasks.SingleAsync(t => t.Id == run.TaskId, cancellationToken);
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
+        var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
+        var repository = await db.Repositories.AsNoTracking().SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
         var session = await db.AgentSessions.SingleOrDefaultAsync(s => s.RunId == runId, cancellationToken);
         if (session is null)
             return RunPipelineApi.Error(409, "invalid_transition", $"run {runId} has no AgentSession row (Orchestrator owns it)");
@@ -85,9 +87,11 @@ public static class StartRunHandler
             storage.EnsureWorkspaceDirectory(workflow.Id, task.Id);
             var workspaceHost = storage.WorkspaceHostPath(workflow.Id, task.Id);
 
-            // 3. container plan (04 §3 provisioning): pinned image, resource_configuration limits, mounts
+            // 3. container plan (04 §3 provisioning): pinned image, resource_configuration limits, mounts.
+            // The work item's repository name travels as GIT_CLONE_REPO (not secret — profiles whose
+            // entry script clones use their mounted token file; the stub ignores it).
             if (!TryBuildContainerPlan(run, task, version, storage, komodoOptions.Value, workspaceHost, runTreeHost,
-                    out var plan, out var planError))
+                    repository.FullName, out var plan, out var planError))
                 return RunPipelineApi.Error(400, "validation", planError!);
 
             // 4. Komodo: create + deploy + wait running
@@ -160,6 +164,7 @@ public static class StartRunHandler
         KomodoOptions komodoOptions,
         string workspaceHost,
         string runTreeHost,
+        string? workItemRepository,
         out KomodoDeploymentPlan? plan,
         out string? error)
     {
@@ -223,6 +228,8 @@ public static class StartRunHandler
         Env("PI_SESSION_DIR", "/session");
         Env("PI_WORKSPACE", "/workspace");
         Env("STUB_BEHAVIOR", ParseBridgeBehavior(version.BridgeConfiguration));
+        if (!string.IsNullOrEmpty(workItemRepository))
+            Env("GIT_CLONE_REPO", workItemRepository);
 
         plan = new KomodoDeploymentPlan(
             Name: $"pi-session-{run.Id}",

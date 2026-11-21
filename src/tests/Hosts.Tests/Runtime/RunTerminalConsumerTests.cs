@@ -149,6 +149,57 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
+    public async Task GithubPublicationFailed_EnqueuesTheDecision42Notification_OnceWithArtifactsKept()
+    {
+        await postgres.ResetAsync();
+        var db = postgres.NewDbContext();
+        var (task, run) = await SeedStartingRunAsync(RunStatuses.Failed);
+        await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set =>
+        {
+            set.SetProperty(r => r.Status, RunStatuses.Failed);
+            set.SetProperty(r => r.ErrorCode, RunErrorCodes.GithubPublicationFailed);
+            set.SetProperty(r => r.ErrorMessage, "required publication kind 'issue_comment' has no confirmed successful tool execution");
+        });
+        db.ChangeTracker.Clear();
+        await NewConsumer().RunCycleAsync(default);
+
+        var notifications = await db.OutboxActions.AsNoTracking().ToListAsync();
+        var notification = Assert.Single(notifications); // exactly one per failed Run (06 §13)
+        Assert.Equal(OutboxActionTypes.Comment, notification.ActionType);
+        Assert.Equal(task.Id, notification.TaskId);
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.Contains("Task failed: /plan", text, StringComparison.Ordinal);
+        Assert.Contains("| Attempt: #1 | Stage: Required GitHub publication", text, StringComparison.Ordinal);
+        Assert.Contains("github_publication_failed", text, StringComparison.Ordinal);
+        Assert.Contains($"(id: run_{run.Id})", text, StringComparison.Ordinal);
+        Assert.Contains("The produced artifacts are kept", text, StringComparison.Ordinal);
+        Assert.Contains("(or use /retry)", text, StringComparison.Ordinal);
+        // decision 42: never re-publishes the agent's result — the notification carries diagnostics only
+        Assert.DoesNotContain("## Plan", text, StringComparison.Ordinal);
+        // deterministic idempotency: the Run's own id is the dedup key of this notification
+        Assert.Equal(run.Id.ToString(), notification.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task OtherRunFailures_DoNotEnqueueThePublicationNotification()
+    {
+        await postgres.ResetAsync();
+        var db = postgres.NewDbContext();
+        var (task, run) = await SeedStartingRunAsync(RunStatuses.Failed);
+        await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set =>
+        {
+            set.SetProperty(r => r.Status, RunStatuses.Failed);
+            set.SetProperty(r => r.ErrorCode, RunErrorCodes.RuntimeFailure);
+        });
+        db.ChangeTracker.Clear();
+        await NewConsumer().RunCycleAsync(default);
+
+        // the generic task-failure notification template is ticket 15's — not this path
+        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
     public async Task TimedOutRun_MarksTaskFailedMaxRunDuration()
     {
         await postgres.ResetAsync();

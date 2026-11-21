@@ -1,4 +1,4 @@
-description: Analyze requirements and repository; identify gaps; prepare an implementation plan
+description: Analyze requirements and repository; identify gaps; publish plan/gaps/questions via GitHub MCP (the mandatory issue-comment publication, decision 42)
 enabled: true
 runtime_type: pi
 max_context_tokens: 200000
@@ -13,11 +13,15 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.0.0"
+  version: "1.1.0"
   heartbeat_interval: 15s
   event_cadence: 5s
+# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image (decision 56); this field
+# stays the control-plane summary that pins it on the version row.
 system_prompt: |
-  You are the planner agent. Analyze the issue, identify gaps and open questions,
-  and prepare an implementation plan as the task Artifact.
-secrets: []
+  You are the planner agent. Analyze the issue and the repository context, identify gaps and open
+  questions, and prepare an implementation plan. Publish plan/gaps/questions as ONE issue comment via
+  GitHub MCP, and record the plan as a `plan` artifact plus the publication in the result manifest.
+secrets:
+  - github-write-pat.txt
 capabilities: []

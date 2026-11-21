@@ -362,6 +362,51 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     }
 
     [Fact]
+    public async Task TerminalCallbacks_RecordTheBridgeDiscoveredSessionFilePath()
+    {
+        // decision 57 (ticket 12): the Bridge discovers the REAL pi session path (<timestamp>_<id>.jsonl)
+        // and reports it on the terminal callbacks — the AgentSession row records the actual path.
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
+        await RuntimeTestSupport.StartAsync(api.ServiceClient, preparation.Run.Id, preparation);
+        var token = RuntimeTestSupport.CallbackToken(api, preparation.Run.Id);
+        var provisionedPath = (await postgres.NewDbContext().AgentSessions.AsNoTracking()
+            .SingleAsync(s => s.RunId == preparation.Run.Id)).SessionFilePath;
+        Assert.EndsWith(".jsonl", provisionedPath); // the provisioning-time prediction differs from pi's
+
+        var sessionFile = $"/session/2026-11-21T15-31-18-187Z_{preparation.Run.Id}.jsonl";
+        var completed = await PostCallback(api, preparation.Run.Id, token, "completed", $@"{{
+            ""eventId"":""evt-terminal"",
+            ""occurredAt"":""{DateTime.UtcNow:O}"",
+            ""sessionFilePath"":""{sessionFile}"",
+            ""result"": {{""summary"":""done"",""artifacts"":[]}}
+        }}");
+        Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
+        var session = (await postgres.NewDbContext().AgentSessions.AsNoTracking()
+            .SingleAsync(s => s.RunId == preparation.Run.Id));
+        Assert.Equal(sessionFile, session.SessionFilePath); // the discovered path won
+    }
+
+    [Fact]
+    public async Task FailedCallback_SessionFilePath_IsRecordedAndOptional()
+    {
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
+        await RuntimeTestSupport.StartAsync(api.ServiceClient, preparation.Run.Id, preparation);
+        var token = RuntimeTestSupport.CallbackToken(api, preparation.Run.Id);
+        // a failed callback WITHOUT sessionFilePath keeps the recorded provisioning value (crash before
+        // the launch handshake found it) — the field is optional on both terminal routes
+        var failed = await PostCallback(api, preparation.Run.Id, token, "failed", $@"{{
+            ""eventId"":""evt-fail"",
+            ""occurredAt"":""{DateTime.UtcNow:O}"",
+            ""error"": {{""code"":""github_publication_failed"",""message"":""publication unconfirmed""}}
+        }}");
+        Assert.Equal(HttpStatusCode.OK, failed.StatusCode);
+        var run = (await postgres.NewDbContext().Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id));
+        Assert.Equal("github_publication_failed", run.ErrorCode);
+    }
+
+    [Fact]
     public async Task Completed_OversizeArtifact_IsRejectedWithoutTruncation()
     {
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
@@ -673,7 +718,24 @@ public class StartContainerPlanTests
             ? error! : "";
 
     private static KomodoDeploymentPlan? StartContainerPlan(
-        AgentProfileVersion version, RuntimeStorageService storage, out string? error) =>
+        AgentProfileVersion version, RuntimeStorageService storage, out string? error,
+        string? workItemRepository = "aliaksandrZh/04") =>
         StartRunHandler.TryBuildContainerPlan(Run(), Task(), version, storage,
-            new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs", out var plan, out error) ? plan : null;
+            new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository,
+            out var plan, out error) ? plan : null;
+
+    [Fact]
+    public void RepositoryFullName_TravelsAsGitCloneRepo() // ticket 12: workspace clone provisioning input
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var plan = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
+            out var error, workItemRepository: "aliaksandrZh/04");
+        Assert.Null(error);
+        Assert.Contains("GIT_CLONE_REPO=aliaksandrZh/04", plan!.Environment);
+        // profiles without a clone need no env at all
+        var bare = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
+            out _, workItemRepository: null);
+        Assert.DoesNotContain("GIT_CLONE_REPO", bare!.Environment ?? "");
+    }
 }

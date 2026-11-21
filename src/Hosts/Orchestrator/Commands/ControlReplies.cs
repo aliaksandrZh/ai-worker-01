@@ -130,7 +130,10 @@ public static class ControlReplies
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>`- Container: running | Last heartbeat: 20s ago | …`; omitted when nothing observed yet.</summary>
+    /// <summary>`- Phase: tool_started | Container: running | Last heartbeat: 20s ago | …`; omitted when
+    /// nothing observed yet. The Phase mirrors the Run's LATEST persisted RunEvent TYPE (task 12 owner
+    /// ruling: no extra enum — the event type vocabulary itself, 02 §18) and deliberately skips
+    /// `heartbeat` rows: heartbeat proves liveness and never advances progress or the phase (decision 58).</summary>
     private static async Task<string?> ExecutionLineAsync(
         AppDbContext db, Run? run, DateTime now, CancellationToken cancellationToken)
     {
@@ -140,6 +143,13 @@ public static class ControlReplies
             .SingleOrDefaultAsync(c => c.RunId == run.Id, cancellationToken);
 
         var pieces = new List<string>();
+        var latestEventType = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == run.Id && e.Type != RunEventTypes.Heartbeat)
+            .OrderByDescending(e => e.ReceivedAt)
+            .Select(e => e.Type)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (latestEventType is not null)
+            pieces.Add($"Phase: {latestEventType}");
         if (container is { ObservedState: not ContainerObservedStates.Unknown })
             pieces.Add($"Container: {container.ObservedState}");
         if (run.LastHeartbeatAt is { } heartbeat)

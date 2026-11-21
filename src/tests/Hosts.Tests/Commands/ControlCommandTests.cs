@@ -89,6 +89,53 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
     }
 
     [Fact]
+    public async Task StatusDuringRun_PhaseMirrorsTheLatestRunEvent_NeverTheHeartbeat()
+    {
+        var (db, harness, comment, workItem) = await NewCaseAsync("@jsxhuz /status");
+        AuthStub200(harness.Handler);
+        var (_, version, _) = await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
+        var prepared = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version);
+        await db.Runs.ExecuteUpdateAsync(u => u
+            .SetProperty(r => r.Status, RunStatuses.Running)
+            .SetProperty(r => r.StartedAt, DateTime.UtcNow.AddMinutes(-3))
+            .SetProperty(r => r.LastHeartbeatAt, DateTime.UtcNow.AddSeconds(-10))
+            .SetProperty(r => r.LastProgressAt, DateTime.UtcNow.AddSeconds(-40)));
+        await db.OrchestrationTasks.ExecuteUpdateAsync(u => u
+            .SetProperty(t => t.Status, OrchestrationTaskStatuses.Running));
+        // the RunEvent stream: the latest NON-heartbeat event is the phase (owner ruling, ticket 12:
+        // mirror the event type, no extra enum); a newer heartbeat must not shift it (decision 58)
+        db.RunEvents.Add(new RunEvent
+        {
+            Id = Guid.NewGuid(), RunId = prepared.Run!.Id, EventId = "evt-1", Type = RunEventTypes.AgentStarted,
+            OccurredAt = DateTime.UtcNow.AddSeconds(-90), ReceivedAt = DateTime.UtcNow.AddSeconds(-90),
+        });
+        db.RunEvents.Add(new RunEvent
+        {
+            Id = Guid.NewGuid(), RunId = prepared.Run.Id, EventId = "evt-2",
+            Type = RunEventTypes.ToolStarted,
+            Payload = """{"toolCallId":"c1","toolName":"mcp__github__add_issue_comment"}""",
+            OccurredAt = DateTime.UtcNow.AddSeconds(-40), ReceivedAt = DateTime.UtcNow.AddSeconds(-40),
+        });
+        db.RunEvents.Add(new RunEvent
+        {
+            Id = Guid.NewGuid(), RunId = prepared.Run.Id, EventId = "hb-1", Type = RunEventTypes.Heartbeat,
+            OccurredAt = DateTime.UtcNow.AddSeconds(-10), ReceivedAt = DateTime.UtcNow.AddSeconds(-10),
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        await RunAsync(db, harness);
+
+        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        // the phase mirrors the latest NON-heartbeat event type verbatim (no extra vocabulary)
+        Assert.Contains("Phase: tool_started", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain("Phase: heartbeat", payload, StringComparison.Ordinal);
+        // heartbeat/progress facts stay in the Execution line
+        Assert.Contains("Last heartbeat: 10s ago", payload, StringComparison.Ordinal);
+        Assert.Contains("Last progress: 40s ago", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StatusWithFailedWorkflow_ShowsReasonAndNoStartedReply()
     {
         var (db, harness, comment, workItem) = await NewCaseAsync("@jsxhuz /status");

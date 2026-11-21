@@ -18,7 +18,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, arg, i, all) 
 }, []));
 const sessionDir = args["session-dir"] ?? "/session";
 const sessionId = args["session-id"] ?? "stub";
-const workspace = args["workspace"] ?? "/workspace";
+const workspace = args["workspace"] ?? process.env.PI_WORKSPACE ?? "/workspace";
 const behavior = process.env.STUB_BEHAVIOR || argvBehavior() || "succeed";
 
 function argvBehavior() {
@@ -32,6 +32,12 @@ mkdirSync(sessionDir, { recursive: true });
 function emit(event) {
   appendFileSync(sessionFile, JSON.stringify(event) + "\n");
   process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+/** pi RPC `response` record (rpc.md): echoes the command id; the Bridge correlates on it. */
+function respond(id, command, data) {
+  const record = { id, type: "response", command, success: true, data };
+  process.stdout.write(JSON.stringify(record) + "\n");
 }
 
 function settleWithManifest(outcome = "completed") {
@@ -106,7 +112,17 @@ process.stdin.on("data", (chunk) => {
     }
     switch (rpc.type) {
       case "prompt":
+        // rpc-commands.md: the response means accepted — the run then streams to `agent_settled`
+        respond(rpc.id, "prompt", { disposition: "started" });
         answerPrompt();
+        break;
+      case "get_state":
+        // rpc-commands.md: `sessionFile` is the actual on-disk path (decision 57 discovery)
+        respond(rpc.id, "get_state", {
+          sessionId,
+          sessionFile: sessionFile,
+          isStreaming: false,
+        });
         break;
       default:
         // clear_queue / abort / anything else: acknowledged by ignoring; stdin EOF then ends the process

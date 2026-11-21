@@ -1,10 +1,12 @@
 # Global default rules (repository_id = NULL); per-repo overrides win, the version is
 # pinned on the Task at creation (02 §12a).
-# Ticket-09 posture: /plan routes to the STUB profile (the pipeline proves itself end to end) until
-# tickets 10–12 land; then this rule flips back to `planner`.
+# Ticket-12 posture: /plan routes to the REAL planner profile (the Pi tracer bullet end to end;
+# `/plan` publishes the plan/gaps/questions comment via GitHub MCP). The stub profile stays for the
+# dev/testing levers of later tickets (13/14/15): flipping this rule back to `stub` re-enables the
+# deterministic pipeline scenarios.
 rules:
   - task_type: plan
-    profile: stub
+    profile: planner
     priority: 1
     enabled: true
 # Per-repo override example (repository must exist in repositories.yaml):

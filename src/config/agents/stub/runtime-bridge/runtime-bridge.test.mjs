@@ -10,8 +10,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { EventMapper } from "./events.mjs";
+import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
 import { openSpool } from "./spool.mjs";
+import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
+import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
 import { loadManifest, validateManifest, terminalFromManifest, gitFacts, renderPrompt } from "./manifest.mjs";
 
@@ -32,9 +34,10 @@ test("EventMapper maps the prompt event sequence one to one", () => {
     JSON.stringify({ id: "3", type: "message_update", data: { delta: "Analyzing " } }),
     JSON.stringify({ id: "4", type: "tool_execution_start", data: { toolCallId: "c1", toolName: "t" } }),
     JSON.stringify({ id: "5", type: "tool_execution_update", data: { toolCallId: "c1" } }),
-    JSON.stringify({ id: "6", type: "tool_execution_end", data: { toolCallId: "c1", status: "completed" } }),
+    JSON.stringify({ id: "6", type: "tool_execution_end", data: { toolCallId: "c1", toolName: "t", status: "completed" } }),
     JSON.stringify({ id: "7", type: "turn_end" }),
     JSON.stringify({ id: "8", type: "agent_settled", data: {} }),
+    JSON.stringify({ id: "c1", type: "response", command: "prompt", success: true, data: { disposition: "started" } }),
   ]) mapper.onLine(line);
 
   assert.deepEqual(emitted.map((e) => e.type), [
@@ -42,7 +45,7 @@ test("EventMapper maps the prompt event sequence one to one", () => {
   ]);
   assert.equal(mapper.settled, true);
   const toolCompleted = emitted.find((e) => e.type === "tool_completed");
-  assert.deepEqual(toolCompleted.payload, { toolCallId: "c1", status: "completed" });
+  assert.deepEqual(toolCompleted.payload, { toolCallId: "c1", toolName: "t", status: "completed" });
   assert.equal(emitted.every((e) => typeof e.eventId === "string" && e.eventId.length > 0), true);
 });
 
@@ -63,12 +66,99 @@ test("EventMapper: thinking deltas, queue updates and empty text are not events"
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    JSON.stringify({ type: "message_update", data: { delta: "thinking…", reasoning: true } }),
+    // real pi thinking stream events are typed and never become RunEvents (decision 58)
+    JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "hmm" } }),
     JSON.stringify({ type: "message_update", data: { delta: "" } }),
     JSON.stringify({ type: "queue_update", data: { queued: 1 } }),
     JSON.stringify({ type: "unknown_stream_type", data: {} }),
+    JSON.stringify({ type: "response", command: "prompt", success: true, id: "r1" }),
   ]) mapper.onLine(line);
   assert.equal(emitted.length, 0);
+});
+
+// ---- real pi record shapes (pi docs json.md; ticket 12) ----
+
+test("EventMapper maps real pi shapes: nested text deltas, top-level tool events", () => {
+  const emitted = [];
+  const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
+  for (const line of [
+    JSON.stringify({ type: "agent_start" }),
+    JSON.stringify({ type: "turn_start" }),
+    JSON.stringify({ type: "message_update", usage: {},
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Analyzing the issue." } }),
+    JSON.stringify({ type: "message_update", usage: {},
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "hmm" } }), // never progress
+    JSON.stringify({ type: "message_update", usage: {},
+      assistantMessageEvent: { type: "toolcall_start", id: "c9", toolName: "mcp__github__add_issue_comment" } }),
+    JSON.stringify({ type: "tool_execution_start", toolCallId: "c9", toolName: "mcp__github__add_issue_comment", args: {} }),
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "c9", toolName: "mcp__github__add_issue_comment",
+      result: {}, isError: false, durationMs: 12 }),
+    JSON.stringify({ type: "turn_end", message: {}, toolResults: [] }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
+  ]) mapper.onLine(line);
+
+  assert.deepEqual(emitted.map((e) => e.type), [
+    "agent_started", "turn_started", "assistant_output", "tool_started", "tool_completed", "turn_completed", "agent_settled",
+  ]);
+  assert.deepEqual(emitted.find((e) => e.type === "assistant_output").payload, { text: "Analyzing the issue." });
+  const completed = emitted.find((e) => e.type === "tool_completed");
+  assert.deepEqual(completed.payload, { toolCallId: "c9", toolName: "mcp__github__add_issue_comment", isError: false });
+});
+
+/** Mirrors the Bridge's decision-59 correlation set building (only error-free completed ends count). */
+function completedToolCallsFrom(records) {
+  const set = new Set();
+  const mapper = new EventMapper((entry) => {
+    if (entry.body.type === "tool_completed" && isSuccessfulToolEnd(entry.body.payload))
+      set.add(entry.body.payload.toolCallId);
+  }, 5);
+  for (const line of records) mapper.onLine(line);
+  return set;
+}
+
+test("isSuccessfulToolEnd: pi isError and stub status determine the correlation set", () => {
+  const set = completedToolCallsFrom([
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "ok", toolName: "add_issue_comment", isError: false }),
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "bad", toolName: "add_issue_comment", isError: true }),
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "stub", status: "completed" }),
+  ]);
+  assert.deepEqual([...set].sort(), ["ok", "stub"]);
+  assert.equal(isSuccessfulToolEnd({ toolCallId: "ok", isError: false }), true);
+  assert.equal(isSuccessfulToolEnd({ toolCallId: "bad", isError: true }), false);
+  assert.equal(isSuccessfulToolEnd({ toolCallId: "x", status: "failed" }), false);
+  assert.equal(isSuccessfulToolEnd(null), false);
+});
+
+// ---- rpc response correlation (pi docs rpc.md; ticket 12) ----
+
+test("RpcCorrelator correlates command ids and resolves the matching response", async () => {
+  const sent = [];
+  const rpc = new RpcCorrelator((line) => sent.push(JSON.parse(line)), 5_000);
+  const pending = rpc.command("get_state");
+  assert.deepEqual(sent, [{ id: "req-1", type: "get_state" }]);
+  assert.equal(rpc.onRecord({ type: "agent_start" }), false); // event lines pass through
+  assert.equal(rpc.onRecord({ type: "response", command: "get_state", success: true, id: "req-1",
+    data: { sessionFile: "/session/2026-11-21T15-31-18-187Z_probe-run.jsonl", sessionId: "probe-run" } }), true);
+  const response = await pending;
+  assert.equal(response.data.sessionFile, "/session/2026-11-21T15-31-18-187Z_probe-run.jsonl");
+});
+
+test("RpcCorrelator rejects success:false responses", async () => {
+  const rpc = new RpcCorrelator(() => {}, 5_000);
+  const pending = rpc.command("prompt", { message: "hi" });
+  rpc.onRecord({ type: "response", command: "prompt", success: false, id: "req-1", error: "Model not found" });
+  await assert.rejects(pending, /Model not found/);
+});
+
+test("RpcCorrelator times out an unanswered command", async () => {
+  const rpc = new RpcCorrelator(() => {}, 30);
+  await assert.rejects(rpc.command("get_state"), /timed out after 30ms/);
+});
+
+test("promptDisposition: only 'started' begins a run", () => {
+  assert.equal(promptDisposition({ data: { disposition: "started" } }), "started");
+  assert.equal(promptDisposition({ data: { disposition: "handled" } }), "handled");
+  assert.equal(promptDisposition({}), undefined);
 });
 
 // ---- manifest validation + terminal shape ----
@@ -123,6 +213,33 @@ test("validateManifest enforces publication correlation (decision 42)", () => {
   assert.match(validateManifest(manifest, workspace, new Set()) ?? "", /github_publication_failed/);
   assert.equal(validateManifest(manifest, workspace, new Set(["call-1"])), null);
   rmSync(workspace, { recursive: true, force: true });
+});
+
+test("validateManifest enforces the mandated publication kinds (task 12, decision 42)", () => {
+  const workspace = tempDir("ws-");
+  // a manifest that lists no publication at all still fails when the kind is mandated — an agent
+  // that never attempted its mandatory publication cannot "succeed" unverified
+  const noPublication = { schemaVersion: 1, summary: "done", artifacts: [] };
+  assert.match(
+    validateManifest(noPublication, workspace, new Set(["call-1"]), ["issue_comment"]) ?? "",
+    /github_publication_failed: required publication kind 'issue_comment' has no confirmed successful tool execution/);
+  // a listed but unconfirmed publication also fails the mandate (error ends never correlate)
+  const unconfirmed = { schemaVersion: 1, summary: "done", artifacts: [],
+    requiredPublications: [{ toolCallId: "call-err", kind: "issue_comment", externalId: "p1" }] };
+  assert.match(validateManifest(unconfirmed, workspace, new Set(), ["issue_comment"]) ?? "", /github_publication_failed/);
+  // confirmed mandate passes
+  const confirmed = { schemaVersion: 1, summary: "done", artifacts: [],
+    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "42" }] };
+  assert.equal(validateManifest(confirmed, workspace, new Set(["call-1"]), ["issue_comment"]), null);
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("terminalFromManifest carries the Bridge-discovered session file path (decision 57)", () => {
+  process.env.PI_WORKSPACE = tempDir("ws-nogit-");
+  const terminal = terminalFromManifest({ schemaVersion: 1, summary: "s", artifacts: [] }, "run-9",
+    "/session/2026-11-21T15-31-18-187Z_run-9.jsonl");
+  assert.equal(terminal.body.sessionFilePath, "/session/2026-11-21T15-31-18-187Z_run-9.jsonl");
+  delete process.env.PI_WORKSPACE;
 });
 
 test("terminalFromManifest carries outcome + git facts", () => {
@@ -283,17 +400,23 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
   const workspace = tempDir("ws-stub-");
   const sessionDir = tempDir("session-");
   const child = spawnSync(process.execPath, [AGENT, "--session-dir", sessionDir,
-    "--session-id", "run-1", "--workspace", workspace], {
-    env: { ...process.env, STUB_BEHAVIOR: "succeed" },
+    "--session-id", "run-1"], { // workspace from PI_WORKSPACE env (the Bridge never passes --workspace)
+    env: { ...process.env, STUB_BEHAVIOR: "succeed", PI_WORKSPACE: workspace },
     input: '{"type":"prompt","message":"do a thing"}\n',
     encoding: "utf8",
   });
   assert.equal(child.status, 0, child.stderr);
   const types = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line).type);
   assert.deepEqual(types, [
+    "response", // the prompt acceptance disposition (pi-shape response record)
     "agent_start", "turn_start", "message_update", "tool_execution_start",
     "tool_execution_update", "tool_execution_end", "turn_end", "agent_settled",
   ]);
+  const accepted = JSON.parse(child.stdout.split("\n")[0]);
+  assert.equal(accepted.type, "response");
+  assert.equal(accepted.command, "prompt");
+  assert.equal(accepted.success, true);
+  assert.deepEqual(accepted.data, { disposition: "started" });
   assert.ok(existsSync(join(workspace, "result.json")));
   const manifest = JSON.parse(readFileSync(join(workspace, "result.json"), "utf8"));
   assert.equal(manifest.schemaVersion, 1);
@@ -303,11 +426,30 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
   rmSync(sessionDir, { recursive: true, force: true });
 });
 
+test("stub handshake: get_state echoes the discovered session file, then the prompt resolves", () => {
+  const sessionDir = tempDir("session-handshake-");
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", sessionDir, "--session-id", "handshake-1"], {
+    env: { ...process.env, STUB_BEHAVIOR: "succeed", PI_WORKSPACE: tempDir("ws-hs-") },
+    input: '{"id":"req-1","type":"get_state"}\n{"id":"req-2","type":"prompt","message":"go"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const state = records.find((r) => r.type === "response" && r.command === "get_state");
+  assert.equal(state.success, true);
+  assert.equal(state.id, "req-1");
+  assert.equal(state.data.sessionId, "handshake-1");
+  assert.equal(state.data.sessionFile, join(sessionDir, "handshake-1.jsonl")); // decision 57 discovery
+  const accepted = records.find((r) => r.type === "response" && r.command === "prompt");
+  assert.equal(accepted.id, "req-2");
+  assert.equal(accepted.data.disposition, "started");
+});
+
 test("stub agent crash behavior: fail reports an error line and exits non-zero", () => {
   const workspace = tempDir("ws-fail-");
   const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
-    "--session-id", "r", "--workspace", workspace], {
-    env: { ...process.env, STUB_BEHAVIOR: "fail" },
+    "--session-id", "r"], {
+    env: { ...process.env, STUB_BEHAVIOR: "fail", PI_WORKSPACE: workspace },
     input: '{"type":"prompt","message":"do a thing"}\n',
     encoding: "utf8",
   });
@@ -322,8 +464,8 @@ test("stub agent crash behavior: fail reports an error line and exits non-zero",
 test("stub agent needs_human behavior writes the outcome flag", async () => {
   const workspace = tempDir("ws-human-");
   const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
-    "--session-id", "r", "--workspace", workspace], {
-    env: { ...process.env, STUB_BEHAVIOR: "needs_human" },
+    "--session-id", "r"], {
+    env: { ...process.env, STUB_BEHAVIOR: "needs_human", PI_WORKSPACE: workspace },
     input: '{"type":"prompt","message":"q"}\n',
     encoding: "utf8",
   });

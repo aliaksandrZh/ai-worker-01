@@ -1,27 +1,50 @@
-# Planner agent profile image (ticket 10, decisions 54/56).
+# Planner agent profile image (decisions 54/56; ticket 12 mirrors the PoC pi-worker image).
 # Pi is PINNED at build time (never floating `latest`; a Pi upgrade = a new AgentProfileVersion) and
-# the profile configuration is baked READ-ONLY at /opt/pi-agent/profile, selected via PI_CODING_AGENT_DIR
-# (the pi agent directory: settings/MCP/skills/prompts land here as the profile defines them).
+# the profile configuration is baked at /opt/pi-agent/profile, selected via PI_CODING_AGENT_DIR
+# (settings/models/MCP/system-prompt land here as the profile defines them).
 
-# Ticket-10 status: BUILD-ONLY — this image is not driven by any Run until tickets 11–12 wire the real
-# planner. The baked reference Runtime Bridge (v1.0.0 per profile.yaml bridge.version) currently spawns
-# the stub protocol agent (PI_AGENT_COMMAND wiring is ticket 11's runtime work), so it is carried here
-# as the image's pinned supervisor, not as a runnable run path.
+# The official GitHub MCP server binary comes from the pinned upstream image (static Go binary at
+# /server/github-mcp-server); the tool allow-list travels in the baked mcp.json (GITHUB_TOOLS — the
+# server refuses unknown names at startup, fail-closed).
+ARG PI_VERSION=1.6.0
+ARG GH_MCP_VERSION=v2.2.0
+
+FROM ghcr.io/github/github-mcp-server:${GH_MCP_VERSION} AS gh-mcp
 
 FROM node:24-bookworm-slim
-ARG PI_VERSION=1.6.0
+ARG PI_VERSION
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
     && npm cache clean --force
 
+# Official GitHub MCP server (planner's GitHub write path: add_issue_comment + issue_read only)
+COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
+
 WORKDIR /workspace
-# Profile configuration (config plane) + the pinned reference Runtime Bridge; uid 1000 (`node`) is the
-# user the Runtime API chowns the per-Run mounts to (task 09). Image layers are read-only, matching
-# decision 56's "baked read-only" profile.
-COPY profile.yaml /opt/pi-agent/profile/profile.yaml
+# Profile configuration (control plane) + the pinned Runtime Bridge; uid 1000 (`node`) is the user the
+# Runtime API chowns the per-Run mounts to (task 09). `/opt/pi-agent/profile` is chowned to `node`
+# below — the FILES remain image-baked (decision 56: the image is the sole source; nothing mounts over
+# them), the ownership only lets pi write its own state files (mcp.log et al.) inside the ephemeral
+# container layer the same way the PoC's owned /home/pi/.pi/agent did.
+COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json /opt/pi-agent/profile/
 COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
+COPY entry /usr/local/bin/agent-entry
+
 ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
+# Agent launch (decision 56): real pi in RPC mode; the Bridge appends --session-dir/--session-id per
+# Run (decision 57). PI_REQUIRED_PUBLICATION_KINDS pins the decision-42 publication mandate in the
+# image: the run cannot finish `completed` without a confirmed (error-free) issue-comment publication.
+# PI_REQUIRED_PUBLICATION_KINDS / the token-file path pointer are non-secret configuration paths only —
+# the token VALUE stays in the host-managed secret file (decision 54).
+ENV PI_AGENT_BIN=pi \
+    PI_AGENT_ARGS="--mode rpc" \
+    PI_REQUIRED_PUBLICATION_KINDS=issue_comment \
+    GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
+
+RUN chmod +x /usr/local/bin/agent-entry /usr/local/bin/github-mcp-server \
+    && chown -R node:node /opt/pi-agent/profile
 USER node
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/agent-entry"]
 CMD ["node", "/opt/pi-agent/profile/runtime-bridge/bridge.mjs"]

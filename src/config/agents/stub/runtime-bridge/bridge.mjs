@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 /**
  * Runtime Bridge (04 §4, decisions 33/58–61) — the supervisor INSIDE the agent container. Not a Pi
- * extension: it launches the agent CLI in the pi-RPC-shaped protocol, reads the stdout JSONL event
- * stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
+ * extension: it launches the agent CLI in `--mode rpc` (real Pi baked via PI_AGENT_BIN/PI_AGENT_ARGS
+ * per decision 56; the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
+ * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
  * callback to the durable per-Run spool BEFORE sending, retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
  * validates the run's `result.json` manifest after `agent_settled` (in place, deriving
- * branch/commitSha via Git, correlating requiredPublications with tool events) and delivers the
- * terminal `completed` (or `failed`) callback — the delivery cycle ends only on the Runtime API's
- * persistence acknowledgement. The container image entrypoint.
+ * branch/commitSha via Git, correlating requiredPublications with error-free completed tool
+ * executions — decision 42/59) and delivers the terminal `completed` (or `failed`) callback — the
+ * delivery cycle ends only on the Runtime API's persistence acknowledgement. It also captures Pi
+ * stdout/stderr plus its own diagnostics into the per-Run log trio (decision 43).
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { openSpool } from "./spool.mjs";
-import { EventMapper } from "./events.mjs";
+import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
+import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { loadManifest, renderPrompt, terminalFromManifest, validateManifest } from "./manifest.mjs";
 
@@ -24,6 +28,17 @@ const baseUrl = (env.PI_CALLBACK_BASE_URL || "http://runtime-api:8080").replace(
 const tokenFile = env.PI_CALLBACK_TOKEN_FILE || fail("callback token file (PI_CALLBACK_TOKEN_FILE) is required");
 const workspace = env.PI_WORKSPACE || "/workspace";
 const sessionDir = env.PI_SESSION_DIR || "/session";
+// decision 56: the image is the sole source of the runtime configuration — the baked env picks the
+// agent binary and its fixed flags; the Bridge appends only the per-Run session flags (decision 57).
+// The agent process runs with cwd = the workspace (that cwd is pi's project scope). The stub default
+// therefore resolves its agent module ABSOLUTELY (a relative arg would miss from /workspace).
+const agentBin = env.PI_AGENT_BIN || "node";
+const defaultStubAgent = fileURLToPath(new URL("../stub-agent/pi-stub.mjs", import.meta.url));
+const agentArgs = (env.PI_AGENT_ARGS || defaultStubAgent).split(" ").filter(Boolean);
+// decision 42 (task 12): mandated publication kinds that MUST be confirmed before `completed`
+// (comma-separated; empty = no mandate — every listed publication is still correlated, the stub).
+const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
+  .split(",").map((kind) => kind.trim()).filter(Boolean);
 const heartbeatSeconds = clampSeconds(env.PI_HEARTBEAT_SECONDS, 15);
 const eventCadenceSeconds = clampSeconds(env.PI_EVENT_CADENCE_SECONDS, 5);
 const maxLogBytes = Number(env.PI_MAX_LOG_MB || 50) * 1024 * 1024;
@@ -41,7 +56,7 @@ function clampSeconds(value, fallback) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const logs = openLogs(logsDir, maxLogBytes, `bridge ${runId} boot\n`);
+const logs = openLogs(logsDir, maxLogBytes, `bridge ${runId} boot (agent: ${agentBin} ${agentArgs.join(" ")})\n`);
 const log = (line) => logs.write("bridge.log", line);
 
 /** Idempotent container restart: terminal delivered in an earlier lifetime → nothing left to do. */
@@ -133,6 +148,7 @@ function terminalBody(code, message) {
     body: {
       eventId: `evt-${runId}-failed`,
       occurredAt: new Date().toISOString(),
+      ...(sessionFilePath ? { sessionFilePath } : {}),
       error: { code, message },
     },
   };
@@ -165,6 +181,18 @@ async function pullInput() {
   fail("input pull retries exhausted");
 }
 
+// ---- run state shared across the launch/lifecycle/terminal stages ----
+const observedCompletedToolCalls = new Set(); // error-free completed tool ids (decision 59)
+let sessionFilePath = null; // decision 57: the actual session path, discovered via `get_state`
+let settled = false;
+
+/** Terminal failure path: spool the `failed` callback, stop the agent, wait for the ack, exit. */
+function spoolFailure(code, message) {
+  log(`terminal failure (${code}): ${message}\n`);
+  spool.append(terminalBody(code, message));
+  return finishWait();
+}
+
 // ---- pipeline ----
 
 async function main() {
@@ -173,26 +201,24 @@ async function main() {
   const input = await pullInput();
   const prompt = renderPrompt(input);
 
-  const observedCompletedToolCalls = new Set();
   const mapper = new EventMapper((entry) => {
-    if (entry.body.type === "tool_completed" && entry.body.payload?.toolCallId)
+    if (entry.body.type === "tool_completed" && isSuccessfulToolEnd(entry.body.payload))
       observedCompletedToolCalls.add(entry.body.payload.toolCallId);
     spool.append(entry);
   }, eventCadenceSeconds);
 
-  const agent = spawn("node", [
-    "stub-agent/pi-stub.mjs",
+  const agent = spawn(agentBin, [
+    ...agentArgs,
     "--session-dir", sessionDir,
     "--session-id", runId,
-    "--workspace", workspace,
-  ], { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"] });
+  ], { cwd: workspace, env, stdio: ["pipe", "pipe", "pipe"] });
 
-  // 04 §4: the task input is delivered as ONE RPC prompt over the agent's stdin (never env/input file)
-  agent.stdin.write(JSON.stringify({ type: "prompt", message: prompt }) + "\n");
-
-  let settled = false;
+  // pi docs rpc.md: commands carry an id; the matching `response` repeats it. The correlator consumes
+  // response records; every other stdout line is the realtime event stream.
+  const correlator = new RpcCorrelator((line) => agent.stdin.write(line + "\n"));
   agent.on("error", (error) => log(`agent spawn error: ${error.message}\n`));
   agent.on("exit", (code, signal) => log(`agent exited code ${code} signal ${signal}\n`));
+  const onAgentExit = new Promise((resolve) => agent.on("exit", (code) => resolve(code)));
   agent.stdout.setEncoding("utf8");
   let stdoutBuffer = "";
   agent.stdout.on("data", (chunk) => {
@@ -203,8 +229,14 @@ async function main() {
       stdoutBuffer = stdoutBuffer.slice(newline + 1);
       if (line.length === 0) continue;
       logs.write("stdout.log", line + "\n"); // decision 43: trio capture
-      mapper.onLine(line);
-      if (mapper.settled && !settled) {
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        record = null; // not protocol output (e.g. pi shutdown notices) — logged verbatim only
+      }
+      if (correlator.onRecord(record)) continue; // a handshake response, not an event
+      if (mapper.onLine(line) && mapper.settled && !settled) {
         settled = true;
         agent.stdin.end(); // one prompt per run: close stdin for a graceful agent exit
       }
@@ -212,6 +244,35 @@ async function main() {
   });
   agent.stderr.setEncoding("utf8");
   agent.stderr.on("data", (chunk) => logs.write("stderr.log", chunk));
+
+  // ---- launch handshake: discover the real session path, then deliver the ONE task prompt ----
+  try {
+    const state = await Promise.race([
+      correlator.command("get_state"),
+      onAgentExit.then((code) => {
+        throw new Error(`agent exited before the launch handshake (code ${code})`);
+      }),
+    ]);
+    sessionFilePath = typeof state.data?.sessionFile === "string" ? state.data.sessionFile : null;
+    log(`pi session file: ${sessionFilePath ?? "not reported by the agent"}\n`);
+
+    const promptResponse = await Promise.race([
+      correlator.command("prompt", { message: prompt }),
+      onAgentExit.then((code) => {
+        throw new Error(`agent exited during prompt acceptance (code ${code})`);
+      }),
+    ]);
+    const disposition = promptDisposition(promptResponse);
+    if (disposition !== "started") {
+      // rpc-commands.md: "queued"/"handled" prompts start no run — nothing will settle afterwards
+      agent.kill("SIGTERM");
+      return await spoolFailure("runtime_failure",
+        `the task prompt did not start a run (disposition ${JSON.stringify(disposition)})`);
+    }
+  } catch (error) {
+    agent.kill("SIGTERM");
+    return await spoolFailure("runtime_failure", `agent launch failed — ${error.message}`);
+  }
 
   // heartbeat cadence → coalesced single-slot spool entry (decision 60); heartbeat proves liveness
   // only and never counts as progress (decision 58)
@@ -252,24 +313,27 @@ async function main() {
 
   if (exitCode !== 0 || !settled) {
     // on a crash the Bridge reports failure with the agent's exit code (decision 33)
-    spool.append(terminalBody("runtime_failure",
-      `agent process exited (code ${exitCode}) without settling — reported by the Runtime Bridge`));
-  } else {
-    // ---- result manifest: validate in place, derive Git facts, correlate publications ----
-    const manifest = loadManifest(workspace, log);
-    const invalid = validateManifest(manifest, workspace, observedCompletedToolCalls);
-    if (invalid !== null) {
-      log(`result manifest invalid: ${invalid}\n`);
-      const code = invalid.startsWith("artifact_too_large") ? "artifact_too_large"
-        : invalid.startsWith("github_publication_failed") ? "github_publication_failed"
-        : "manifest_invalid";
-      spool.append(terminalBody(code, `result manifest invalid — ${invalid}`));
-    } else {
-      spool.append(terminalFromManifest(manifest, runId));
-    }
+    return await spoolFailure("runtime_failure",
+      `agent process exited (code ${exitCode}) without settling — reported by the Runtime Bridge`);
   }
 
-  // the delivery cycle ends only on the Runtime API's persistence acknowledgement of the terminal
+  // ---- result manifest: validate in place, derive Git facts, correlate publications ----
+  const manifest = loadManifest(workspace, log);
+  const invalid = validateManifest(manifest, workspace, observedCompletedToolCalls, requiredPublicationKinds);
+  if (invalid !== null) {
+    log(`result manifest invalid: ${invalid}\n`);
+    const code = invalid.startsWith("artifact_too_large") ? "artifact_too_large"
+      : invalid.startsWith("github_publication_failed") ? "github_publication_failed"
+      : "manifest_invalid";
+    return await spoolFailure(code, `result manifest invalid — ${invalid}`);
+  }
+
+  spool.append(terminalFromManifest(manifest, runId, sessionFilePath));
+  await finishWait();
+}
+
+/** The delivery cycle ends only on the Runtime API's persistence acknowledgement of the terminal. */
+async function finishWait() {
   for (let waited = 0; !existsSync(terminalMarker); waited += 1000) {
     if (waited % 60_000 === 0 && waited > 0) log(`still waiting for terminal acknowledgement (${waited / 1000}s)\n`);
     await sleep(1000);

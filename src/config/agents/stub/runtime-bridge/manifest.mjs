@@ -27,9 +27,13 @@ export function loadManifest(workspace, log = () => {}) {
 /**
  * Validates `{schemaVersion, summary, artifacts[], requiredPublications[], outcome?}`; every artifact
  * file must exist inside the workspace and be ≤256 KiB — no silent truncation, ever.
+ * `requiredPublicationKinds` (decision 42, task 12): each mandated kind must have at least one
+ * publication whose `toolCallId` observed a completed, error-free `tool_execution_end` — an agent that
+ * never even attempted its mandatory publication fails here instead of “succeeding” unverified.
+ * `observedCompletedToolCalls` is the Bridge-built set of error-free completed tool call ids.
  * @returns null when valid, else the diagnosable reason string.
  */
-export function validateManifest(manifest, workspace, observedCompletedToolCalls = new Set()) {
+export function validateManifest(manifest, workspace, observedCompletedToolCalls = new Set(), requiredPublicationKinds = []) {
   if (manifest === null) return "manifest_invalid: the agent did not write a result.json";
   if (manifest.schemaVersion !== 1) return "manifest_invalid: schemaVersion must be 1";
   if (typeof manifest.summary !== "string" || manifest.summary.length === 0)
@@ -51,17 +55,26 @@ export function validateManifest(manifest, workspace, observedCompletedToolCalls
   }
   if (manifest.outcome !== undefined && manifest.outcome !== "needs_human_input")
     return "manifest_invalid: outcome must be 'needs_human_input' (or absent)";
-  for (const publication of manifest.requiredPublications ?? []) {
+  const publications = Array.isArray(manifest.requiredPublications) ? manifest.requiredPublications : [];
+  for (const publication of publications) {
     if (!publication || typeof publication.toolCallId !== "string" || typeof publication.kind !== "string")
       return "manifest_invalid: requiredPublications[] entries need toolCallId/kind";
     if (!observedCompletedToolCalls.has(publication.toolCallId))
       return `github_publication_failed: required publication '${publication.toolCallId}' (${publication.kind}) had no completed tool execution`;
   }
+  for (const kind of requiredPublicationKinds) {
+    const confirmed = publications.some(
+      (publication) => publication?.kind === kind && observedCompletedToolCalls.has(publication.toolCallId));
+    if (!confirmed)
+      return `github_publication_failed: required publication kind '${kind}' has no confirmed successful tool execution`;
+  }
   return null;
 }
 
-/** Builds the terminal `completed` body (validation, including publication correlation, precedes it). */
-export function terminalFromManifest(manifest, runId) {
+/** Builds the terminal `completed` body (validation, including publication correlation, precedes it).
+ * `sessionFilePath` is the per-Run path the Bridge discovered at launch (`get_state.sessionFile`,
+ * decision 57) — carried so the Runtime API can record the actual path on the AgentSession row. */
+export function terminalFromManifest(manifest, runId, sessionFilePath = null) {
   return {
     id: `evt-${runId}-terminal`,
     route: "completed",
@@ -69,6 +82,7 @@ export function terminalFromManifest(manifest, runId) {
       eventId: `evt-${runId}-terminal`,
       occurredAt: new Date().toISOString(),
       ...(manifest.outcome === "needs_human_input" ? { outcome: "needs_human_input" } : {}),
+      ...(sessionFilePath ? { sessionFilePath } : {}),
       result: {
         summary: manifest.summary,
         artifacts: (manifest.artifacts ?? []).map(({ type, format, path }) => ({ type, format, path })),

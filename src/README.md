@@ -64,7 +64,7 @@ Before `task stack`: create the two secrets files and align identities
 ```sh
 mkdir -p src/secrets && printf '<your-pat>' > src/secrets/github-sync-pat.txt   # gitignored
 #   → the PAT's login (GET /user) must equal github.bot_login in src/config/system.yaml
-printf '<your-write-pat>' > src/secrets/github-write-pat.txt                    # task 03: outbox comments
+printf '<your-write-pat>' > src/secrets/github-write-pat.txt                    # task 03: outbox comments; task 12+: agent GitHub MCP (planner publication) + workspace clone
 ```
 
 Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown

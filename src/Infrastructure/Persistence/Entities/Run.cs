@@ -14,6 +14,16 @@ public static class RunStatuses
     public const string TimedOut = "timed_out";
 }
 
+/// <summary>Canonical Run error codes from 04 §7 (the vocabulary the Bridge reports and the
+/// Orchestrator consumes; the set that drives e.g. the decision-42 failure notification).</summary>
+public static class RunErrorCodes
+{
+    public const string GithubPublicationFailed = "github_publication_failed";
+    public const string RuntimeFailure = "runtime_failure";
+    public const string ArtifactTooLarge = "artifact_too_large";
+    public const string ManifestInvalid = "manifest_invalid";
+}
+
 /// <summary>
 /// One execution attempt of a Task (02 §14); a retry creates a new attempt with `attempt_number + 1`.
 /// The Run↔AgentSession and Run↔Container links live on AgentSession.RunId (unique) and

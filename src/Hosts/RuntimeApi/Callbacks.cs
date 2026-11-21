@@ -76,7 +76,8 @@ public static class CallbackHandler
         Guid runId, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
     {
         return await TerminalAsync(runId, RunStatuses.Succeeded, RunEventTypes.Completed, request.EventId,
-            () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, db, storage, komodo,
+            () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
+            db, storage, komodo,
             run => ValidateAndApplyCompletedAsync(run, request, db, storage, cancellationToken),
             cancellationToken);
     }
@@ -85,7 +86,8 @@ public static class CallbackHandler
         Guid runId, FailedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
     {
         return await TerminalAsync(runId, RunStatuses.Failed, RunEventTypes.Failed, request.EventId,
-            () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, db, storage, komodo,
+            () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
+            db, storage, komodo,
             run =>
             {
                 run.ErrorCode = request.Error.Code;
@@ -102,6 +104,7 @@ public static class CallbackHandler
         string eventId,
         Func<string> serializePayload,
         DateTime occurredAt,
+        string? sessionFilePath,
         AppDbContext db,
         RuntimeStorageService storage,
         IKomodoClient komodo,
@@ -156,6 +159,12 @@ public static class CallbackHandler
             }
 
             await FinalizeTerminalRunAsync(db, run, storage, cancellationToken);
+            // decision 57 (ticket 12): record the Bridge-discovered session path when the agent
+            // reported one — the provisioning-time prediction is provisional, this is the actual path.
+            if (!string.IsNullOrWhiteSpace(sessionFilePath))
+                await db.AgentSessions.Where(s => s.RunId == runId)
+                    .ExecuteUpdateAsync(set => set.SetProperty(s => s.SessionFilePath, sessionFilePath.Trim()),
+                        cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }

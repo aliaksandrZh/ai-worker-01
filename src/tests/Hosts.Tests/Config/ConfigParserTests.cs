@@ -449,4 +449,35 @@ public class ConfigParserTests : IDisposable
         var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
         Assert.Contains("planner", exception.Message);
     }
+
+    /// <summary>Shipped configuration integrity (ticket 12): the real `src/config` tree must parse under
+    /// the strict schema — a dropped key in a profile.yaml aborts the Orchestrator at startup otherwise,
+    /// which CI should catch, not the next stack start. Skipped when the layout is absent (packaged CI).</summary>
+    [Fact]
+    public void ShippedConfig_ParsesStrictly()
+    {
+        var configRoot = FindShippedConfigRoot();
+        if (configRoot is null)
+            return;
+        var parsed = ConfigParser.Parse(configRoot);
+        Assert.Contains(parsed.Profiles, p => p.Name == "planner");
+        var planner = parsed.Profiles.Single(p => p.Name == "planner");
+        Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
+        Assert.Equal("1.1.0", planner.BridgeVersion);
+    }
+
+    private static string? FindShippedConfigRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent!)
+        {
+            var candidate = Path.Combine(directory.FullName, "config");
+            if (File.Exists(Path.Combine(candidate, "system.yaml")))
+                return candidate;
+            // the test project lives under src/tests/...; the shipped config is src/config
+            var srcCandidate = Path.Combine(directory.FullName, "src", "config");
+            if (File.Exists(Path.Combine(srcCandidate, "system.yaml")))
+                return srcCandidate;
+        }
+        return null;
+    }
 }

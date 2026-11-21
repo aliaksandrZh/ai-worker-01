@@ -55,3 +55,18 @@
 - **Where:** `src/Infrastructure/Persistence/AppDbContext.cs` (`Content` column type), migration `20261121142504_SnapshotContentExactBytes`.
 - **State today:** fine — `jsonb` re-serialized stored JSON (key order + whitespace), so the frozen input the Bridge pulls via `/input` was not the exact bytes the Orchestrator hashed and budget-checked. As `text`, the assembled bytes are `content_hash`-verifiable end to end. This amends ticket 09's jsonb choice (its note recorded the column as an incidental addition, not an immutability requirement).
 - **Revisit trigger:** none expected; reconsider only if a future feature needs server-side JSON operators on the snapshot content (excluded/included sources remain jsonb).
+
+## OBS-9: the planner's LLM provider is a dev-posture baked config (ticket 12)
+
+- **Where:** `src/config/agents/planner/models.json` + `settings.json` (baked into the version image,
+  PoC `pi/pi-agent-state` shape): provider `ollama` → `http://host.docker.internal:11434/v1`, model
+  `glm-5.3-flash:cloud` (the deployment-time Ollama app proxy). Decision 56 defers LLM model/provider
+  selection to V2 — but ticket 12's real Pi runs need SOME model now.
+- **State today:** acceptable dev posture — the config is baked per profile version (pinned, no
+  floating anything), no secret travels (Ollama's local proxy needs no credential), and a provider
+  change is the normal configuration-plane flow (edit → new version → automatic build). The container
+  reaches the host via Docker Desktop's `host.docker.internal` (on plain Linux compose, add
+  `extra_hosts: host.docker.internal:host-gateway` to the agent deployment or use a LAN IP).
+- **Revisit trigger:** V2 model selection (decision 56) — replace with the real per-deployment model
+  configuration (or secret-based auth); also if Ollama proxy errors (see `docs/ollama-error.md`) recur,
+  flip `defaultModel` to a tool-capable local model (e.g. `qwen3.5:4b`) — one config change + rebuild.
