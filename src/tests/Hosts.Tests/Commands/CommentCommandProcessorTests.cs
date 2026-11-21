@@ -221,14 +221,16 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     }
 
     [Fact]
-    public async Task PausedRepository_StatusAuthorized()
+    public async Task PausedRepository_StatusStillProcessed()
     {
+        // decision 75 + task 08: control commands are unaffected by a repository pause — /status works
         var (db, harness, comment, _) = await NewCaseAsync(body: "@jsxhuz /status", enabled: false);
         AuthStub200(harness.Handler);
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Authorized, command.Status);
+        Assert.Equal(AgentCommandStatuses.Processed, command.Status);
+        Assert.Contains("No agent workflow started.", (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload, StringComparison.Ordinal);
     }
 
     [Fact]

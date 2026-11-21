@@ -11,12 +11,17 @@ namespace PiAgent.Orchestrator.Commands;
 
 /// <summary>
 /// Consumes `issue_comment_created` GitHubEvent rows (Poller-written, `pending`) and turns synchronized
-/// comments into persisted `AgentCommand` rows through the grammar (CommandParser) and the
-/// authorization gates: policy checks from the synced `Repository.Configuration` (repository pause,
-/// permitted commands/types, command-target types) then the allowlist + collaborator-permission check
-/// (decision 66). A comment produces at most one AgentCommand ever (unique GitHub comment ID =
+/// comments into persisted `AgentCommand` rows: the shared acceptance stage (CommandIngestion, also
+/// used by the task-08 `POST /internal/commands` hook) runs the grammar and policy checks from the
+/// synced `Repository.Configuration` (repository pause, permitted commands/types, command-target types),
+/// then this file runs the allowlist + collaborator-permission check (decision 66).
+/// A comment produces at most one AgentCommand ever (unique GitHub comment ID =
 /// idempotency key, 02 §11); event replays after a crash are no-ops. Rejections persist their reason
-/// and enqueue exactly one Outbox reply (ticket 03 delivers). Transient permission-lookup failures
+/// and enqueue exactly one Outbox reply (ticket 03 delivers). After authorization: task-producing
+/// commands are admitted (task 07); control commands /status and /help are answered by
+/// ControlCommandHandler (task 08) with exactly one Outbox reply and no Workflow/Task/Run writes
+/// (decision 29); /stop (14) and /retry (15) remain `authorized` for later tickets. Transient
+/// permission-lookup failures
 /// leave the command `received` with the event released back to `pending` — retried on a later tick
 /// (decision 66); a 401/non-rate-limit 403 is a system configuration error (log + metric, never a
 /// per-user rejection, no PAT fallback — decisions 65/66). The loop only claims
@@ -36,19 +41,6 @@ public sealed class CommentCommandProcessor(
     private static readonly TimeSpan MaxPause = TimeSpan.FromHours(1);
     /// <summary>In-memory pause after a rate-limited permission check (Retry-After honored, capped 1 h).</summary>
     private DateTime _pauseUntilUtc = DateTime.MinValue;
-
-    /// <summary>Valid WorkItem types per command (06 §2 table).</summary>
-    private static readonly Dictionary<string, string[]> ValidTargetTypes = new()
-    {
-        [AgentCommandNames.Plan] = [WorkItemTypes.Issue],
-        [AgentCommandNames.Code] = [WorkItemTypes.Issue],
-        [AgentCommandNames.TestCases] = [WorkItemTypes.Issue],
-        [AgentCommandNames.Review] = [WorkItemTypes.PullRequest],
-        [AgentCommandNames.Status] = [WorkItemTypes.Issue, WorkItemTypes.PullRequest],
-        [AgentCommandNames.Stop] = [WorkItemTypes.Issue, WorkItemTypes.PullRequest],
-        [AgentCommandNames.Help] = [WorkItemTypes.Issue, WorkItemTypes.PullRequest],
-        [AgentCommandNames.Retry] = [WorkItemTypes.Issue, WorkItemTypes.PullRequest],
-    };
 
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
@@ -162,8 +154,11 @@ public sealed class CommentCommandProcessor(
 
             if (command is null)
             {
-                var accepted = await TryAcceptCommentAsync(
-                    db, comment, workItem, repository, cancellationToken);
+                var accepted = await CommandIngestion.TryAcceptAsync(
+                    db, metrics, configurationState.BotLogin!,
+                    comment.GithubCommentId, comment.AuthorLogin, comment.Body,
+                    comment.UpdatedAtGithub != comment.CreatedAtGithub,
+                    workItem, repository, cancellationToken);
                 if (accepted is null || accepted.Status != AgentCommandStatuses.Received)
                 {
                     // mentioned but context-only (decision 45), or fresh and already rejected
@@ -205,6 +200,10 @@ public sealed class CommentCommandProcessor(
                 : null;
             if (outcome is { } rejection)
                 await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);
+            else if (command.Status == AgentCommandStatuses.Authorized && command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help)
+                // Control commands (task 08, decisions 29/71/75): render from current rows + one Outbox reply,
+                // command → processed; nothing else is written. /stop stays `authorized` (ticket 14), /retry (15).
+                await ControlCommandHandler.HandleAsync(db, command, workItem, repository, cancellationToken);
 
             MarkProcessed(githubEvent);
             await db.SaveChangesAsync(cancellationToken);
@@ -222,88 +221,6 @@ public sealed class CommentCommandProcessor(
         githubEvent.ProcessingStatus = GitHubEventStatuses.Processed;
         githubEvent.ProcessedAt = DateTime.UtcNow;
         githubEvent.ProcessingError = null;
-    }
-
-    /// <summary>First-sight handling: the already-edited check → grammar → policy checks. Returns the
-    /// persisted AgentCommand (received, or rejected for a grammar/policy reason), or null when the
-    /// comment is context only (no usable directive). A rejection reply goes through the Outbox here.</summary>
-    private async Task<AgentCommand?> TryAcceptCommentAsync(
-        AppDbContext db,
-        GitHubComment comment,
-        WorkItem workItem,
-        Repository repository,
-        CancellationToken cancellationToken)
-    {
-        if (comment.UpdatedAtGithub != comment.CreatedAtGithub)
-            return await PersistRejectedAsync(db, comment, workItem, repository,
-                AgentCommandRejectionReasons.CommandEdited, "already edited when first seen",
-                commandName: null, cancellationToken);
-
-        var config = RepoCommandConfigParser.Parse(repository);
-        var parsed = CommandParser.Parse(comment.Body, configurationState.BotLogin!);
-        switch (parsed)
-        {
-            case NoCommandDetected:
-                return null;
-
-            case CommandRejectedParse rejected:
-                var (reason, detail) = rejected.Reason switch
-                {
-                    CommandRejection.UnknownCommand => (AgentCommandRejectionReasons.UnknownCommand, rejected.Detail),
-                    CommandRejection.AmbiguousCommand => (AgentCommandRejectionReasons.AmbiguousCommand, rejected.Detail),
-                    CommandRejection.MalformedCommand => (AgentCommandRejectionReasons.MalformedCommand, rejected.Detail),
-                    CommandRejection.CommandInQuoteOrCodeBlock => (AgentCommandRejectionReasons.CommandInQuoteOrCodeBlock, rejected.Detail),
-                    _ => (AgentCommandRejectionReasons.MalformedCommand, rejected.Detail),
-                };
-                // owner decision B: the supported-commands line in the reply is derived from the
-                // repository's permitted set (unknown commands), not hand-maintained
-                var permittedForReply = reason == AgentCommandRejectionReasons.UnknownCommand
-                    ? config.PermittedCommands
-                    : null;
-                return await PersistRejectedAsync(db, comment, workItem, repository, reason, detail,
-                    commandName: null,
-                    permittedCommands: permittedForReply, cancellationToken: cancellationToken);
-
-            case CommandParsed commandParsed:
-                var name = commandParsed.Name;
-
-                if (!repository.IsEnabled && AgentCommandNames.TaskProducingOrExecution.Contains(name))
-                    return await PersistRejectedAsync(db, comment, workItem, repository,
-                        AgentCommandRejectionReasons.RepositoryPaused, name, name, cancellationToken); // decision 75
-
-                if (!config.PermittedCommands.Contains(name))
-                    return await PersistRejectedAsync(db, comment, workItem, repository,
-                        AgentCommandRejectionReasons.NotPermittedCommand, name, name,
-                        permittedCommands: config.PermittedCommands, cancellationToken: cancellationToken);
-
-                if (!ValidTargetTypes[name].Contains(workItem.Type))
-                    return await PersistRejectedAsync(db, comment, workItem, repository,
-                        AgentCommandRejectionReasons.WrongTargetType, name, name, cancellationToken);
-
-                if (!config.PermittedWorkItemTypes.Contains(workItem.Type))
-                    return await PersistRejectedAsync(db, comment, workItem, repository,
-                        AgentCommandRejectionReasons.WorkItemTypeNotPermitted, workItem.Type, name, cancellationToken);
-
-                metrics.RecordReceived();
-                var received = new AgentCommand
-                {
-                    Id = Guid.NewGuid(),
-                    WorkItemId = workItem.Id,
-                    GithubCommentId = comment.GithubCommentId,
-                    AuthorLogin = comment.AuthorLogin,
-                    CommandName = name,
-                    Arguments = "{}",
-                    ParserVersion = "1",
-                    Status = AgentCommandStatuses.Received,
-                    SourceBodySnapshot = comment.Body,
-                    CreatedAt = DateTime.UtcNow,
-                    ParsedAt = DateTime.UtcNow,
-                };
-                db.AgentCommands.Add(received);
-                return received;
-        }
-
-        return null; // unreachable
     }
 
     /// <summary>Allowlist + permission check for a `received` command. Returns null to continue
@@ -356,34 +273,6 @@ public sealed class CommentCommandProcessor(
                     ? DateTime.UtcNow + (retryAfter > MaxPause ? MaxPause : retryAfter)
                     : DateTime.UtcNow;
         }
-    }
-
-    /// <summary>Persists a fresh rejected row + exactly one Outbox reply in the caller's transaction.</summary>
-    private async Task<AgentCommand> PersistRejectedAsync(
-        AppDbContext db, GitHubComment comment, WorkItem workItem, Repository repository,
-        string reason, string detail, string? commandName, CancellationToken cancellationToken,
-        IReadOnlyList<string>? permittedCommands = null)
-    {
-        var command = new AgentCommand
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = workItem.Id,
-            GithubCommentId = comment.GithubCommentId,
-            AuthorLogin = comment.AuthorLogin,
-            CommandName = commandName,
-            Arguments = "{}",
-            ParserVersion = "1",
-            Status = AgentCommandStatuses.Rejected,
-            SourceBodySnapshot = comment.Body,
-            CreatedAt = DateTime.UtcNow,
-            ParsedAt = DateTime.UtcNow,
-            ProcessedAt = DateTime.UtcNow,
-            RejectionReason = reason,
-        };
-        db.AgentCommands.Add(command);
-        metrics.RecordRejected(reason);
-        await EnqueueReplyAsync(db, repository, workItem, reason, detail, permittedCommands, cancellationToken);
-        return command;
     }
 
     /// <summary>Rejects an already-persisted command row (authorization path) in the caller's transaction.</summary>

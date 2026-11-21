@@ -76,8 +76,9 @@ startup with a diagnosable log line; the compose `--wait` gate shows it red.
 
 | exposure | port | why |
 |---|---|---|
-| `runtime-api` | published (`RUNTIME_API_HOST_PORT`, default 8080) | the only control-plane port on the host — health/readiness/metrics |
+| `runtime-api` | published (`RUNTIME_API_HOST_PORT`, default 8080) | control-plane port on the host — health/readiness/metrics |
 | Komodo Core | published 9120 | UI bootstrap + API key management |
+| orchestrator | private network only (host access via `docker compose exec orchestrator curl …`) | decision 65 — hosts the Orchestration API + internal commands hook (task 08) |
 | postgres, all workers, migrator | private network only | decision 65 — no external exposure |
 
 Host Monitor and Build Worker never touch PostgreSQL (day-one enforcement:

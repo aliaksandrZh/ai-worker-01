@@ -3,9 +3,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure;
 using PiAgent.Orchestrator;
+using PiAgent.Orchestrator.Api;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Orchestration;
+using PiAgent.Platform.Auth;
 using PiAgent.Platform.Http;
 using PiAgent.Platform.Logging;
 using PiAgent.Platform.Workers;
@@ -21,6 +23,8 @@ builder.Services.AddPiWorkerLoop();
 builder.Services.AddSingleton<IWorkerMetrics, OrchestratorMetrics>();
 // Command pipeline (task 06): grammar + authorization over synchronized comment events.
 builder.Services.AddSingleton<CommandMetrics>();
+// Decision-65 internal contour (task 08): the Orchestration API + /internal/commands hook are service-token guarded.
+builder.Services.AddServiceTokens(builder.Configuration);
 builder.Services.AddSingleton(sp =>
 {
     var patFile = sp.GetRequiredService<IOptions<ConfigLoaderOptions>>().Value.PatFile;
@@ -37,6 +41,7 @@ builder.Services.AddSingleton<IWorkerCycle, JobQueueWorker>();
 
 var app = builder.Build();
 app.MapPiEndpoints();
+app.MapOrchestrationApi();
 app.Run();
 
 public partial class Program;

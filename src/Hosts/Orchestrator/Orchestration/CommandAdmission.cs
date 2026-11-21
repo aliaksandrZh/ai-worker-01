@@ -61,8 +61,9 @@ public sealed record AdmissionOutcome(string Reason, string Detail);
 /// </summary>
 public static class CommandAdmission
 {
-    /// <summary>Commands that create Tasks (06 §2 table); /retry, /status, /stop, /help are not admission inputs here.</summary>
-    private static readonly Dictionary<string, string> TaskTypeFor = new()
+    /// <summary>Commands that create Tasks (06 §2 table); /retry, /status, /stop, /help are not
+    /// admission inputs here. Public because /help (task 08) reuses the same command→task-type map.</summary>
+    public static readonly Dictionary<string, string> TaskTypeFor = new()
     {
         [AgentCommandNames.Plan] = OrchestrationTaskTypes.Plan,
         [AgentCommandNames.Code] = OrchestrationTaskTypes.Implement,
@@ -97,25 +98,11 @@ public static class CommandAdmission
 
         var taskType = TaskTypeFor[name];
 
-        // Routing: repo-specific enabled rule wins, then the global rule; higher priority first (02 §12a)
-        var rule = await db.AgentProfileRoutingRules
-            .Where(r => r.TaskType == taskType && r.IsEnabled
-                && (r.RepositoryId == repository.Id || r.RepositoryId == null))
-            .OrderBy(r => r.RepositoryId == repository.Id ? 0 : 1)
-            .ThenByDescending(r => r.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (rule is null)
-            return new AdmissionOutcome(AgentCommandRejectionReasons.AgentProfileNotConfigured,
-                $"no routing rule maps task type '{taskType}'");
-
-        var version = await db.AgentProfileVersions.SingleAsync(v => v.Id == rule.AgentProfileVersionId, cancellationToken);
-        var profile = await db.AgentProfiles.SingleAsync(p => p.Id == version.AgentProfileId, cancellationToken);
-        if (!profile.IsEnabled || version.State == ProfileVersionStates.Disabled)
-            return new AdmissionOutcome(AgentCommandRejectionReasons.AgentProfileNotConfigured,
-                $"profile '{profile.Name}' is disabled");
-        if (version.State != ProfileVersionStates.Ready)
-            return new AdmissionOutcome(AgentCommandRejectionReasons.AgentImageNotReady,
-                $"profile version state is '{version.State}'");
+        // Routing/profile gates (02 §12a, decisions 35/36) — the same resolution /help lists with.
+        var (resolved, reason, detail) = await ProfileGate.ResolveAsync(db, repository, taskType, cancellationToken);
+        if (resolved is null || reason is not null || detail is not null)
+            return new AdmissionOutcome(reason!, detail!);
+        var version = resolved.Version;
 
         Guid? workflowId = await db.Workflows
             .Where(w => w.WorkItemId == workItem.Id)
@@ -126,17 +113,7 @@ public static class CommandAdmission
         if (taskType == OrchestrationTaskTypes.Implement)
         {
             // decision 80: /code approves the latest successful plan artifact — no implement-without-plan mode
-            var latestPlanTaskId = await db.OrchestrationTasks.AsNoTracking()
-                .Where(t => t.WorkflowId == workflowId && t.Type == OrchestrationTaskTypes.Plan && t.Status == OrchestrationTaskStatuses.Succeeded)
-                .OrderByDescending(t => t.Sequence)
-                .Select(t => (Guid?)t.Id)
-                .FirstOrDefaultAsync(cancellationToken);
-            planArtifactId = latestPlanTaskId is null
-                ? null
-                : await db.Artifacts
-                    .Where(a => a.TaskId == latestPlanTaskId && a.Type == ArtifactTypes.Plan)
-                    .Select(a => (Guid?)a.Id)
-                    .FirstOrDefaultAsync(cancellationToken);
+            planArtifactId = await LatestPlanArtifactIdAsync(db, workflowId, cancellationToken);
             if (planArtifactId is null)
                 return new AdmissionOutcome(AgentCommandRejectionReasons.PlanNotAvailable,
                     "no successful plan artifact to approve — run /plan first");
@@ -230,5 +207,23 @@ public static class CommandAdmission
             .FromSqlInterpolated($"SELECT * FROM workflow WHERE work_item_id = {workItemId} FOR UPDATE")
             .ToListAsync(cancellationToken);
         return locked.Count > 0 ? locked[0] : null;
+    }
+
+    /// <summary>The Artifact of the latest successful plan Task (decision 80) — shared by admission
+    /// and the /help availability filter; null when no eligible artifact exists.</summary>
+    public static async Task<Guid?> LatestPlanArtifactIdAsync(
+        AppDbContext db, Guid? workflowId, CancellationToken cancellationToken)
+    {
+        var latestPlanTaskId = await db.OrchestrationTasks.AsNoTracking()
+            .Where(t => t.WorkflowId == workflowId && t.Type == OrchestrationTaskTypes.Plan && t.Status == OrchestrationTaskStatuses.Succeeded)
+            .OrderByDescending(t => t.Sequence)
+            .Select(t => (Guid?)t.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return latestPlanTaskId is null
+            ? null
+            : await db.Artifacts
+                .Where(a => a.TaskId == latestPlanTaskId && a.Type == ArtifactTypes.Plan)
+                .Select(a => (Guid?)a.Id)
+                .FirstOrDefaultAsync(cancellationToken);
     }
 }
