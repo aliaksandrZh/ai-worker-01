@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using PiAgent.Orchestrator.Builds;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Platform.Http;
@@ -8,7 +9,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.Orchestrator;
 
-public sealed class OrchestratorMetrics(WorkerLoopState state, CommandMetrics commandMetrics, JobQueueMetrics queueMetrics) : WorkerMetricsBase(state)
+public sealed class OrchestratorMetrics(WorkerLoopState state, CommandMetrics commandMetrics, JobQueueMetrics queueMetrics, BuildMetrics buildMetrics) : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()
     {
@@ -24,5 +25,13 @@ public sealed class OrchestratorMetrics(WorkerLoopState state, CommandMetrics co
         yield return new KeyValuePair<string, object?>("jobsClaimedTotal", queueMetrics.JobsClaimedTotal);
         yield return new KeyValuePair<string, object?>("leaseExpirationsTotal", queueMetrics.LeaseExpirationsTotal);
         yield return new KeyValuePair<string, object?>("claimCancellationsTotal", queueMetrics.ClaimCancellationsTotal);
+        // profile image builds (task 10, decision 81)
+        yield return new KeyValuePair<string, object?>("buildJobsPending", buildMetrics.BuildJobsPending);
+        yield return new KeyValuePair<string, object?>("buildJobsPolling", buildMetrics.BuildJobsPolling);
+        yield return new KeyValuePair<string, object?>("oldestPendingBuildAgeSeconds", buildMetrics.OldestPendingBuildAgeSeconds);
+        yield return new KeyValuePair<string, object?>("buildsDispatchedTotal", buildMetrics.BuildsDispatchedTotal);
+        yield return new KeyValuePair<string, object?>("buildsCompletedTotal", buildMetrics.BuildsCompletedTotal);
+        yield return new KeyValuePair<string, object?>("buildsFailedTotal", buildMetrics.BuildsFailedTotal);
+        yield return new KeyValuePair<string, object?>("buildTransientErrorsTotal", buildMetrics.TransientBuildErrorsTotal);
     }
 }

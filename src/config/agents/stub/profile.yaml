@@ -1,7 +1,8 @@
-# The stub agent profile (ticket 09): a fake headless CLI speaking a tiny pi-RPC-shaped JSON protocol,
-# plus the reference Runtime Bridge baked into the image (decision 33). Proves the run pipeline end to
-# end until ticket 10 builds real profile images; the profile must stay otherwise ordinary — ticket 12
-# replaces it by routing /plan back to the planner.
+# The stub agent profile (ticket 09; keep until ticket 12): a fake headless CLI speaking a tiny pi-RPC-shaped JSON
+# protocol, plus the reference Runtime Bridge baked into the image (decision 33). Proves the run pipeline end to end
+# while the real planner runs are being wired (tickets 11–12). Since ticket 10 its image builds through the build
+# pipeline automatically (agent-stub:v<n>); the profile must stay otherwise ordinary — ticket 12 replaces it by
+# routing /plan back to the planner.
 description: Stub agent proving the run pipeline (pi-RPC-shaped JSON protocol) until ticket 10
 enabled: true
 runtime_type: pi

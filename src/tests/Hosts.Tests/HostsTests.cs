@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using PiAgent.BuildWorker;
 using PiAgent.HostMonitor;
 using PiAgent.Orchestrator;
+using PiAgent.Orchestrator.Builds;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.OutboxWorker;
@@ -67,9 +68,9 @@ public class WorkerMetricKeyTests
     private static WorkerLoopState State() => new();
 
     [Fact]
-    public void OrchestratorMetrics_HaveQueueKeys()
+    public void OrchestratorMetrics_HaveQueueAndBuildKeys()
     {
-        var collect = new OrchestratorMetrics(State(), new CommandMetrics(), new JobQueueMetrics()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var collect = new OrchestratorMetrics(State(), new CommandMetrics(), new JobQueueMetrics(), new BuildMetrics()).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("queuePendingJobs"));
         Assert.True(collect.ContainsKey("queueOldestJobAgeSeconds"));
         Assert.True(collect.ContainsKey("queueClaimWaitSeconds"));
@@ -80,6 +81,14 @@ public class WorkerMetricKeyTests
         Assert.True(collect.ContainsKey("jobsClaimedTotal"));
         Assert.True(collect.ContainsKey("leaseExpirationsTotal"));
         Assert.True(collect.ContainsKey("claimCancellationsTotal"));
+        // task 10 (decision 81): build-flow gauges
+        Assert.Equal(0, collect["buildJobsPending"]);
+        Assert.Equal(0, collect["buildJobsPolling"]);
+        Assert.True(collect.ContainsKey("oldestPendingBuildAgeSeconds"));
+        Assert.Equal(0L, collect["buildsDispatchedTotal"]);
+        Assert.Equal(0L, collect["buildsCompletedTotal"]);
+        Assert.Equal(0L, collect["buildsFailedTotal"]);
+        Assert.True(collect.ContainsKey("buildTransientErrorsTotal"));
     }
 
     [Fact]
@@ -118,10 +127,14 @@ public class WorkerMetricKeyTests
     }
 
     [Fact]
-    public void BuildWorkerMetrics_HaveBuilsActiveKey()
+    public void BuildWorkerMetrics_HaveBuildKeys()
     {
-        var collect = new BuildWorkerMetrics(State()).Collect().ToDictionary(p => p.Key, p => p.Value);
+        var store = new BuildDurableStore(Microsoft.Extensions.Options.Options.Create(new BuildOptions { StateRoot = Path.Combine(Path.GetTempPath(), $"bw-metrics-{Guid.NewGuid():N}") }));
+        var collect = new BuildWorkerMetrics(State(), new RunnerCounters(), store).Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("buildsActive"));
         Assert.Equal(0, collect["buildsActive"]);
+        Assert.Equal(0L, collect["buildsSucceededTotal"]);
+        Assert.Equal(0L, collect["buildsFailedTotal"]);
+        Assert.Contains("buildExecutionRetriesTotal", collect.Keys);
     }
 }

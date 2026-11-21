@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure;
 using PiAgent.Orchestrator;
 using PiAgent.Orchestrator.Api;
+using PiAgent.Orchestrator.Builds;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Orchestration;
@@ -41,6 +42,12 @@ builder.Services.Configure<RuntimeApiOptions>(builder.Configuration.GetSection("
 builder.Services.AddHttpClient<RuntimeApiClient>(client => client.Timeout = TimeSpan.FromSeconds(200));
 builder.Services.AddSingleton<IRunDispatcher, RuntimeApiRunDispatcher>();
 builder.Services.AddSingleton<IWorkerCycle, RunTerminalConsumer>();
+// Profile image builds (ticket 10, decision 81): durable BuildJobs, async dispatch + polling against
+// the Build Worker's internal build API (decision-65 service credential, same direction as task 09).
+builder.Services.Configure<BuildWorkerOptions>(builder.Configuration.GetSection("BuildWorker"));
+builder.Services.AddHttpClient<BuildWorkerApiClient>(client => client.Timeout = TimeSpan.FromSeconds(130));
+builder.Services.AddSingleton<BuildMetrics>();
+builder.Services.AddSingleton<IWorkerCycle, ProfileBuildWorker>();
 builder.Services.AddSingleton<IWorkerCycle, JobQueueWorker>();
 
 var app = builder.Build();

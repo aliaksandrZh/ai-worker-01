@@ -31,6 +31,7 @@ src/.env
 
 # pi-agent control plane (src/) — runtime: compose state, host-storage mounts, backups, logs
 src/storage/
+src/builds/
 src/backups/
 src/state.json
 src/*.log

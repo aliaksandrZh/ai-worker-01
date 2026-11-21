@@ -15,6 +15,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AgentProfile> AgentProfiles => Set<AgentProfile>();
     public DbSet<AgentProfileVersion> AgentProfileVersions => Set<AgentProfileVersion>();
     public DbSet<AgentProfileRoutingRule> AgentProfileRoutingRules => Set<AgentProfileRoutingRule>();
+    public DbSet<BuildJob> BuildJobs => Set<BuildJob>();
     public DbSet<WorkItem> WorkItems => Set<WorkItem>();
     public DbSet<WorkItemLink> WorkItemLinks => Set<WorkItemLink>();
     public DbSet<GitHubComment> GitHubComments => Set<GitHubComment>();
@@ -79,6 +80,22 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasOne<AgentProfile>()
                 .WithMany()
                 .HasForeignKey(v => v.AgentProfileId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- build pipeline (task 10, 02 §12b/decision 81) ----
+
+        // (comment markers preserved in the migration below)
+        modelBuilder.Entity<BuildJob>(entity =>
+        {
+            entity.ToTable("build_job");
+            // One BuildJob per AgentProfileVersion (02 §12b); retries reuse the same buildId
+            entity.HasIndex(j => j.AgentProfileVersionId).IsUnique();
+            entity.HasIndex(j => new { j.State, j.NextRetryAt });
+            entity.Property(j => j.DispatchPayload).HasColumnType("jsonb");
+            entity.HasOne<AgentProfileVersion>()
+                .WithMany()
+                .HasForeignKey(j => j.AgentProfileVersionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

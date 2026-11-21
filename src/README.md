@@ -28,7 +28,6 @@ material; everything in this directory is the new system.
 | `komodo/` | Komodo Deployment for this system (vendor duplicate; own compose, port 9120) |
 | `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) |
 | `compose.yaml` | the §13 control-plane stack (10 services, private network `pi-agent-net`) |
-
 ## Quick start
 
 ```sh
@@ -90,12 +89,28 @@ Host Monitor and Build Worker never touch PostgreSQL (day-one enforcement:
 
 Workers additionally expose `running`, `heartbeatUtc`, `lastSuccessfulCycleUtc`.
 Placeholder `null` keys become real as their features land: poller → task 04, queue → task 07-08,
-runs/reconciliation → task 13. Live now: `outboxPending/outboxFailed/outboxDeadLetter`
-(outbox-worker, task 03), `dbSizeBytes` (runtime-api), `storageFreeBytes` (host-monitor),
-worker heartbeats, and the poller set `pollerLagSeconds/pollerLastSuccessUtc/
-pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining` (task 04: the poller
-synchronizes repositories read-only on the §16 knobs `poll_interval`/`poll_overlap`/`per_page`
-with one read-only PAT (decisions 50/65) — `github-sync-pat.txt`, same file as the Config Loader).
+runs/reconciliation → task 13, build flows → task 13+. Live now: `outboxPending/outboxFailed/
+outboxDeadLetter` (outbox-worker, task 03), `dbSizeBytes` (runtime-api), `storageFreeBytes`
+(host-monitor), the poller set `pollerLagSeconds/pollerLastSuccessUtc/
+pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining` (task 04), worker
+heartbeats, and the task-10 build set — orchestrator: `buildJobsPending/buildJobsPolling/
+oldestPendingBuildAgeSeconds/buildsDispatchedTotal/buildsCompletedTotal/buildsFailedTotal/
+buildTransientErrorsTotal`; build-worker: `buildsActive/buildsSucceededTotal/buildsFailedTotal/
+buildExecutionRetriesTotal`.
+
+## Profile image builds (ticket 10, decision 81)
+
+Every `AgentProfileVersion` is built asynchronously by the Build Worker: version `draft` →
+durable `build_job` row (buildId persisted BEFORE dispatch) → `POST /internal/builds` → `202` →
+the worker materializes the pinned build context from the version's `config_snapshot`
+(hash-verified per file — a build never reads the live Git tree) and runs a local docker build
+(`agent-<profile>:v<n>`, no registry) → `GET /internal/builds/{buildId}` polling → validated
+result → version `ready` (or `build_failed` on a real build failure). The worker keeps durable
+local JSON state under `BUILD_STATE_ROOT` (default `./builds`): results stay retrievable after
+worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
+with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
+Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile` (decision 56)
+are profile-Dockerfile responsibilities (see `config/agents/planner/Dockerfile`).
 
 ## Observations — known non-critical debt
 

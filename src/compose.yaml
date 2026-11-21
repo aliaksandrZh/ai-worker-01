@@ -104,8 +104,15 @@ services:
     restart: unless-stopped
     environment:
       WorkerLoop__IntervalSeconds: 5
+      # Decision-65 contour: the build endpoints accept the caller's dedicated service credential
+      # (the Orchestrator presents its own token — same direction/shape as the Runtime API contour).
+      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
+      # Durable local build-job state (02 §12b/decision 81: results retrievable after restarts; the
+      # worker has no database). Build logs + materialized pinned contexts live under the same root.
+      Build__StateRoot: /var/lib/pi-agent/builds
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${BUILD_STATE_ROOT:-./builds}:/var/lib/pi-agent/builds
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -129,6 +136,9 @@ services:
       # Ticket 09: the Runtime API the dispatcher calls + the decision-65 service credential it presents.
       RuntimeApi__BaseUrl: ${RUNTIME_API_URL:-http://runtime-api:8080}
       RuntimeApi__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
+      # Ticket 10 (decision 81): the Build Worker the dispatcher calls + the decision-65 credential it presents.
+      BuildWorker__BaseUrl: ${BUILD_WORKER_URL:-http://build-worker:8080}
+      BuildWorker__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
       PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
       # Optional metadata pinned into agent profile versions (owner ruling: traceability only).
@@ -138,6 +148,8 @@ services:
       migrator:
         condition: service_completed_successfully
       runtime-api:
+        condition: service_started
+      build-worker:
         condition: service_started
 
   poller:

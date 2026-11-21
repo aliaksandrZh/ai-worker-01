@@ -40,7 +40,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     {
         await using var dbContext = NewDbContext();
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE agent_command, agent_profile_routing_rule, agent_profile_version, agent_profile, sync_cursor, outbox_action, repository, work_item, work_item_link, github_comment, github_review, github_event, task_artifact_input, artifact, workspace, run_context_snapshot, run_credential, run_event, container_instance, agent_session, orchestration_job, run, task, workflow CASCADE",
+            "TRUNCATE agent_command, agent_profile_routing_rule, agent_profile_version, agent_profile, build_job, sync_cursor, outbox_action, repository, work_item, work_item_link, github_comment, github_review, github_event, task_artifact_input, artifact, workspace, run_context_snapshot, run_credential, run_event, container_instance, agent_session, orchestration_job, run, task, workflow CASCADE",
             cancellationToken);
     }
 }

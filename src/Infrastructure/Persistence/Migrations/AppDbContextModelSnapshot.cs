@@ -430,6 +430,72 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("artifact", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.BuildJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AgentProfileVersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_profile_version_id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("BuildLogReference")
+                        .HasColumnType("text")
+                        .HasColumnName("build_log_reference");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DispatchPayload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("dispatch_payload");
+
+                    b.Property<string>("ImageDigest")
+                        .HasColumnType("text")
+                        .HasColumnName("image_digest");
+
+                    b.Property<string>("ImageTag")
+                        .HasColumnType("text")
+                        .HasColumnName("image_tag");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("NextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_retry_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_build_job");
+
+                    b.HasIndex("AgentProfileVersionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_build_job_agent_profile_version_id");
+
+                    b.HasIndex("State", "NextRetryAt")
+                        .HasDatabaseName("ix_build_job_state_next_retry_at");
+
+                    b.ToTable("build_job", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ContainerInstance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1673,6 +1739,16 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_artifact_workflow_workflow_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.BuildJob", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.AgentProfileVersion", null)
+                        .WithMany()
+                        .HasForeignKey("AgentProfileVersionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_build_job_agent_profile_version_agent_profile_version_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ContainerInstance", b =>
