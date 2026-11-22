@@ -121,4 +121,79 @@ public class ConfigSnapshotTests : IDisposable
         Assert.Equal("planner", json.RootElement.GetProperty("profile").GetString());
         Assert.Equal("config/agents/planner", json.RootElement.GetProperty("source_directory").GetString());
     }
+
+    // Shared Runtime Bridge (agents/runtime-bridge/): merged into the pinned snapshot under the
+    // runtime-bridge/ prefix; fail-closed on per-profile copies, version drift and a missing source.
+    private string MakeBridgeSource(string version = "1.0.0") // matches ConfigSamples.PlannerProfile's bridge.version
+    {
+        var bridgeDirectory = Path.Combine(_root, "bridge-src");
+        Directory.CreateDirectory(bridgeDirectory);
+        File.WriteAllText(Path.Combine(bridgeDirectory, "bridge.json"), $"{{\"version\":\"{version}\"}}");
+        File.WriteAllText(Path.Combine(bridgeDirectory, "bridge.mjs"), "// shared bridge");
+        File.WriteAllText(Path.Combine(bridgeDirectory, "rpc.mjs"), "// shared rpc");
+        File.WriteAllText(Path.Combine(bridgeDirectory, "runtime-bridge.test.mjs"), "// test — never baked");
+        return bridgeDirectory;
+    }
+
+    [Fact]
+    public void SharedBridge_Merged_UnderRuntimeBridgePrefix_AndVersionChecked()
+    {
+        var bridgeDirectory = MakeBridgeSource();
+        var snapshot = ConfigSnapshotBuilder.Build(Build(), Path.Combine(_root, "planner"), null, bridgeDirectory);
+        using var json = BuildJsonFrom(snapshot);
+
+        var contents = json.RootElement.GetProperty("file_contents");
+        Assert.Equal("// shared bridge", contents.GetProperty("runtime-bridge/bridge.mjs").GetString());
+        Assert.Equal("// shared rpc", contents.GetProperty("runtime-bridge/rpc.mjs").GetString());
+        // the shared test suite runs against the source, never bakes into a profile image
+        Assert.False(contents.TryGetProperty("runtime-bridge/runtime-bridge.test.mjs", out _));
+    }
+
+    [Fact]
+    public void SharedBridge_ProfileCopy_FailsClosed()
+    {
+        var bridgeDirectory = MakeBridgeSource();
+        Directory.CreateDirectory(Path.Combine(_root, "planner", "runtime-bridge"));
+        File.WriteAllText(Path.Combine(_root, "planner", "runtime-bridge", "bridge.mjs"), "// per-profile copy");
+        var exception = Assert.Throws<ConfigException>(
+            () => ConfigSnapshotBuilder.Build(Build(), Path.Combine(_root, "planner"), null, bridgeDirectory));
+        Assert.Contains("runtime-bridge/bridge.mjs", exception.Message);
+        Assert.Contains("per-profile copies are not allowed", exception.Message);
+    }
+
+    [Fact]
+    public void SharedBridge_VersionDrift_FailsClosed()
+    {
+        var bridgeDirectory = MakeBridgeSource(version: "9.9.9");
+        var profileDirectory = Path.Combine(_root, "planner");
+        Directory.CreateDirectory(profileDirectory);
+        File.WriteAllText(Path.Combine(profileDirectory, "profile.yaml"), "max_context_tokens: 100\n");
+        var profile = new ProfileConfig { Name = "planner", MaxContextTokens = 200000, BridgeVersion = "1.0.0" };
+        var exception = Assert.Throws<ConfigException>(
+            () => ConfigSnapshotBuilder.Build(profile, profileDirectory, null, bridgeDirectory));
+        Assert.Contains("bridge.version '1.0.0'", exception.Message);
+        Assert.Contains("'9.9.9'", exception.Message);
+    }
+
+    [Fact]
+    public void SharedBridge_MissingSourceDirectory_FailsClosed()
+    {
+        var exception = Assert.Throws<ConfigException>(
+            () => ConfigSnapshotBuilder.Build(Build(), Path.Combine(_root, "planner"), null, Path.Combine(_root, "no-such-bridge")));
+        Assert.Contains("shared runtime-bridge source directory", exception.Message);
+    }
+
+    [Fact]
+    public void SharedBridge_ProfileWithoutBridgeBlock_StillMerges()
+    {
+        // bridge.version is optional (ConfigValidator only requires it when a bridge block exists);
+        // the merge itself applies to every profile that bakes the image.
+        var bridgeDirectory = MakeBridgeSource();
+        var profileDirectory = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(profileDirectory);
+        File.WriteAllText(Path.Combine(profileDirectory, "profile.yaml"), "max_context_tokens: 100\n");
+        var snapshot = ConfigSnapshotBuilder.Build(new ProfileConfig { Name = "plain", MaxContextTokens = 100 }, profileDirectory, null, bridgeDirectory);
+        using var json = BuildJsonFrom(snapshot);
+        Assert.True(json.RootElement.GetProperty("file_contents").TryGetProperty("runtime-bridge/bridge.mjs", out _));
+    }
 }

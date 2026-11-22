@@ -1,6 +1,8 @@
 /**
- * Node test suite for the ticket-09 Runtime Bridge + stub agent. Runs with:
- *   node --test config/agents/stub/runtime-bridge/
+ * Node test suite for the ticket-09 Runtime Bridge + stub agent. The shared bridge source lives at
+ * src/agents/runtime-bridge/ (single copy, merged into every profile's pinned build snapshot — see
+ * ConfigSnapshotBuilder); the stub CLI it drives stays baked in the stub profile. Runs with:
+ *   node --test src/agents/runtime-bridge/runtime-bridge.test.mjs
  * (no npm dependencies)
  */
 import test from "node:test";
@@ -17,7 +19,8 @@ import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
 import { loadManifest, validateManifest, terminalFromManifest, gitFacts, renderPrompt } from "./manifest.mjs";
 
-const AGENT = fileURLToPath(new URL("../stub-agent/pi-stub.mjs", import.meta.url));
+// The stub CLI lives in the stub profile (only agent that bakes it); cross-reference kept explicit.
+const AGENT = fileURLToPath(new URL("../../config/agents/stub/stub-agent/pi-stub.mjs", import.meta.url));
 
 function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));

@@ -134,6 +134,8 @@ services:
     volumes:
       # Configuration plane (01 §2): YAML is the source of desired configuration, synced only at startup.
       - ./config:/etc/pi-agent/config:ro
+      # Shared Runtime Bridge implementation (single copy, merged into every profile's pinned snapshot).
+      - ./agents:/etc/pi-agent/agents:ro
       # Host-managed secrets (decisions 50/54): the read-only sync PAT for the GET /user identity check.
       # compose auto-creates ./secrets if absent; a missing PAT file is then a diagnosable config error.
       - ./secrets:/etc/pi-agent/secrets:ro
@@ -147,6 +149,8 @@ services:
       BuildWorker__BaseUrl: ${BUILD_WORKER_URL:-http://build-worker:8080}
       BuildWorker__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
+      # Shared Runtime Bridge implementation (single copy, merged into every profile's pinned snapshot).
+      PI_AGENT_RUNTIME_BRIDGE_DIR: /etc/pi-agent/agents/runtime-bridge
       PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
       # Optional metadata pinned into agent profile versions (owner ruling: traceability only).
       PI_AGENT_SOURCE_COMMIT: ${PI_AGENT_SOURCE_COMMIT:-}

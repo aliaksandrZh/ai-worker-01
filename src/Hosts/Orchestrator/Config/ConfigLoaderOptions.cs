@@ -13,6 +13,13 @@ public sealed class ConfigLoaderOptions
 
     /// <summary>Optional system-repo commit pinned as source_commit_sha traceability metadata (owner ruling, Q1).</summary>
     public string? SourceCommitSha { get; set; }
+
+    /// <summary>
+    /// Shared Runtime Bridge implementation source (single copy, `agents/runtime-bridge/` in the repo):
+    /// merged into every profile's pinned build snapshot under `runtime-bridge/` (ConfigSnapshotBuilder).
+    /// Env PI_AGENT_RUNTIME_BRIDGE_DIR; compose mounts it read-only at /etc/pi-agent/agents/runtime-bridge.
+    /// </summary>
+    public string? RuntimeBridgeSourceDir { get; set; }
 }
 
 public static class ConfigLoaderRegistration
@@ -29,6 +36,7 @@ public static class ConfigLoaderRegistration
             options.ConfigRoot = configuration["PI_AGENT_CONFIG_DIR"] ?? "config";
             options.PatFile = configuration["PI_AGENT_GITHUB_PAT_FILE"];
             options.SourceCommitSha = configuration["PI_AGENT_SOURCE_COMMIT"];
+            options.RuntimeBridgeSourceDir = configuration["PI_AGENT_RUNTIME_BRIDGE_DIR"] ?? "agents/runtime-bridge";
         });
         services.AddSingleton<ConfigurationState>();
         services.AddSingleton<IReadinessCheck, ConfigSyncReadinessCheck>();

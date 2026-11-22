@@ -63,7 +63,11 @@ public sealed class ConfigLoaderHostedService(
             }
 
             var snapshots = parsed.Profiles
-                .Select(profile => ConfigSnapshotBuilder.Build(profile, Path.Combine(configRoot, "agents", profile.Name), options.Value.SourceCommitSha))
+                .Select(profile => ConfigSnapshotBuilder.Build(
+                    profile,
+                    Path.Combine(configRoot, "agents", profile.Name),
+                    options.Value.SourceCommitSha,
+                    options.Value.RuntimeBridgeSourceDir))
                 .ToList();
 
             using var scope = scopeFactory.CreateScope();

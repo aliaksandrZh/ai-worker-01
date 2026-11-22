@@ -24,6 +24,7 @@ material; everything in this directory is the new system. Repo overview + main f
 | `Migrator/` | one-shot EF migration host (§13's `migrations` step) |
 | `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` (Hosts.Tests spins a Testcontainers postgres — Docker required for `dotnet test`) |
 | `config/` | configuration plane (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml`, `agents/<name>/profile.yaml` — mounted read-only into the orchestrator, synced only at startup |
+| `agents/` | shared agent-image implementation, single copy: `runtime-bridge/` (the Runtime Bridge modules every profile bakes). Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only into the orchestrator |
 | `backup/` | scheduled `pg_dump` + config-plane Git snapshot scripts (compose: `backups`, `config-snapshot`) |
 | `logging/` | centralized logging config: `loki-config.yaml` (single-binary Loki, 7-day retention), `alloy/config.alloy` (ships all container stdout/stderr to Loki, labels every stream with the compose `service` name, drops loki/alloy/grafana self-noise), `grafana/` provisioning (one datasource + one log-list dashboard "Pi Agent Logs") — compose services `loki`, `alloy`, `grafana` |
 | `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) |
@@ -109,7 +110,10 @@ local JSON state under `BUILD_STATE_ROOT` (default `./builds`): results stay ret
 worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
 with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
 Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile` (decision 56)
-are profile-Dockerfile responsibilities (see `config/agents/planner/Dockerfile`).
+are profile-Dockerfile responsibilities (see `config/agents/planner/Dockerfile`). The shared
+Runtime Bridge implementation is a single copy at `agents/runtime-bridge/` (never per-profile);
+the Config Loader merges it into every profile's pinned snapshot under `runtime-bridge/` so the
+profile Dockerfiles keep `COPY runtime-bridge/` unchanged.
 
 ## Context assembling (ticket 11, decision 63)
 

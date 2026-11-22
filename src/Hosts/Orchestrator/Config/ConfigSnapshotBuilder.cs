@@ -26,7 +26,14 @@ public static class ConfigSnapshotBuilder
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    public static ProfileSnapshot Build(ProfileConfig profile, string profileDirectory, string? sourceCommitSha)
+    /// <summary>
+    /// Shared Runtime Bridge implementation (single copy under the repo's `agents/runtime-bridge/`):
+    /// byte-identical across every profile that bakes it. Merged into each profile's pinned snapshot
+    /// under the `runtime-bridge/` prefix so the profile Dockerfiles keep their `COPY runtime-bridge/`
+    /// and the composed build context is unchanged; the version must match the profile's
+    /// `bridge.version` (single version stamp in `bridge.json`). `null` disables the merge (tests).
+    /// </summary>
+    public static ProfileSnapshot Build(ProfileConfig profile, string profileDirectory, string? sourceCommitSha, string? bridgeSourceDirectory = null)
     {
         if (!Directory.Exists(profileDirectory))
             throw new ConfigException($"profile '{profile.Name}': directory '{profileDirectory}' does not exist");
@@ -35,10 +42,15 @@ public static class ConfigSnapshotBuilder
         var contents = new SortedDictionary<string, string>();
         long totalBytes = 0;
 
-        foreach (var absolutePath in Directory.EnumerateFiles(profileDirectory, "*", SearchOption.AllDirectories)
-                     .OrderBy(p => p, StringComparer.Ordinal))
+        // Relative snapshot path → absolute source path. Profile files first, then the shared bridge
+        // merged under `runtime-bridge/` (fail closed on conflicts — no per-profile overrides).
+        var sources = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var absolutePath in Directory.EnumerateFiles(profileDirectory, "*", SearchOption.AllDirectories))
+            sources[Path.GetRelativePath(profileDirectory, absolutePath).Replace('\\', '/')] = absolutePath;
+        MergeSharedBridge(profile, sources, bridgeSourceDirectory);
+
+        foreach (var (relativePath, absolutePath) in sources)
         {
-            var relativePath = Path.GetRelativePath(profileDirectory, absolutePath).Replace('\\', '/');
             var bytesToHash = File.ReadAllBytes(absolutePath);
             totalBytes += bytesToHash.Length;
             fileDtos.Add(new FileEntryDto(
@@ -91,6 +103,44 @@ public static class ConfigSnapshotBuilder
         var snapshotJson = JsonSerializer.Serialize(dto, Options);
         var configHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(snapshotJson))).ToLowerInvariant();
         return new ProfileSnapshot(profile.Name, $"config/agents/{profile.Name}", snapshotJson, configHash);
+    }
+
+    private static void MergeSharedBridge(ProfileConfig profile, SortedDictionary<string, string> sources, string? bridgeSourceDirectory)
+    {
+        if (bridgeSourceDirectory is null)
+            return;
+        if (!Directory.Exists(bridgeSourceDirectory))
+            throw new ConfigException($"profile '{profile.Name}': shared runtime-bridge source directory '{bridgeSourceDirectory}' does not exist");
+
+        foreach (var absolutePath in Directory.EnumerateFiles(bridgeSourceDirectory, "*", SearchOption.AllDirectories))
+        {
+            var fileName = Path.GetFileName(absolutePath);
+            if (fileName.EndsWith(".test.mjs", StringComparison.Ordinal))
+                continue; // tests run against the shared source, never bake into a profile image
+            var relativePath = $"runtime-bridge/{Path.GetRelativePath(bridgeSourceDirectory, absolutePath).Replace('\\', '/')}";
+            if (sources.ContainsKey(relativePath))
+                throw new ConfigException(
+                    $"profile '{profile.Name}': '{relativePath}' already exists in the profile directory — the runtime-bridge is shared (agents/runtime-bridge/), per-profile copies are not allowed");
+            sources[relativePath] = absolutePath;
+        }
+
+        var versionFile = Path.Combine(bridgeSourceDirectory, "bridge.json");
+        if (!File.Exists(versionFile))
+            throw new ConfigException($"shared runtime-bridge source '{bridgeSourceDirectory}' has no bridge.json (version stamp)");
+        string bridgeVersion;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(versionFile));
+            bridgeVersion = document.RootElement.GetProperty("version").GetString()
+                ?? throw new ConfigException($"shared runtime-bridge '{versionFile}': 'version' must be a non-empty string");
+        }
+        catch (JsonException exception)
+        {
+            throw new ConfigException($"shared runtime-bridge '{versionFile}' is not readable JSON: {exception.Message}");
+        }
+        if (profile.BridgeVersion is not null && !string.Equals(profile.BridgeVersion, bridgeVersion, StringComparison.Ordinal))
+            throw new ConfigException(
+                $"profile '{profile.Name}': bridge.version '{profile.BridgeVersion}' does not match the shared runtime-bridge version '{bridgeVersion}' ({versionFile})");
     }
 
     private sealed class SnapshotDto
