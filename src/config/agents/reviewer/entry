@@ -1,0 +1,70 @@
+#!/bin/sh
+# Reviewer agent entry (ticket 19). Its OWN clone path — it shares no code with the planner or coder.
+# Provisions a fresh read-only review checkout at the PINNED revisions, then execs the Runtime Bridge.
+#   GIT_CLONE_REPO       owner/name of the base repository (not secret, from the Runtime API)
+#   REVIEW_HEAD_SHA      pinned PR Head SHA (Task.target_head_sha)
+#   REVIEW_BASE_SHA      pinned PR Base SHA (Task.target_base_sha) — the diff is formed locally: base..head
+#   REVIEW_PR_NUMBER     the pull request number (fork heads are fetched from the base repository's PR ref)
+# The token lives ONLY in the host-managed file at /run/secrets/<name> (decision 54), never in env/git config.
+# Fork code is untrusted: nothing from the checkout is executed here (no install/build/test hooks).
+set -eu
+
+token=""
+if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
+  token="$(tr -d '\r' < "${GIT_CLONE_TOKEN_FILE}" | head -n1)"
+fi
+
+fail_source() {
+  # review_source_unavailable (decision 74): the pinned head cannot be resolved/fetched
+  echo "agent-entry: review_source_unavailable: $1" >&2
+  exit 75
+}
+
+if [ -n "${GIT_CLONE_REPO:-}" ]; then
+  # Fresh workspace only: a reviewer never reuses a coder workspace (decision 16).
+  if [ -n "$(ls -A /workspace 2>/dev/null)" ]; then
+    echo "agent-entry: /workspace not empty — refusing to reuse a workspace for a review" >&2
+    exit 70
+  fi
+  : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to clone}"
+  : "${REVIEW_HEAD_SHA:?REVIEW_HEAD_SHA is required (pinned Task.target_head_sha)}"
+  : "${REVIEW_BASE_SHA:?REVIEW_BASE_SHA is required (pinned Task.target_base_sha)}"
+
+  # Clone the BASE repository (never a fork remote), no checkout yet, then fetch the pinned head.
+  GIT_TERMINAL_PROMPT=0 git clone --no-checkout \
+    "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+  git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub the token
+
+  # The head may live on a fork: GitHub exposes every PR head at refs/pull/<n>/head of the base repo,
+  # so the pinned SHA is fetched from there (works for same-repo and fork PRs alike).
+  if [ -n "${REVIEW_PR_NUMBER:-}" ]; then
+    GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin \
+      "refs/pull/${REVIEW_PR_NUMBER}/head:refs/review/head" 2>/dev/null \
+      || GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin "${REVIEW_HEAD_SHA}" 2>/dev/null \
+      || fail_source "cannot fetch PR #${REVIEW_PR_NUMBER} head ${REVIEW_HEAD_SHA}"
+  else
+    GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin "${REVIEW_HEAD_SHA}" 2>/dev/null \
+      || fail_source "cannot fetch head ${REVIEW_HEAD_SHA}"
+  fi
+
+  # The checkout is pinned to the exact head; a head that does not resolve to the pinned SHA fails closed.
+  git -C /workspace cat-file -e "${REVIEW_HEAD_SHA}^{commit}" 2>/dev/null \
+    || fail_source "pinned head ${REVIEW_HEAD_SHA} is not present after fetch"
+  git -C /workspace cat-file -e "${REVIEW_BASE_SHA}^{commit}" 2>/dev/null \
+    || fail_source "pinned base ${REVIEW_BASE_SHA} is not present after fetch"
+  git -C /workspace -c advice.detachedHead=false checkout --quiet --detach "${REVIEW_HEAD_SHA}"
+
+  # The diff is formed locally from the two pinned revisions — never via the GitHub files endpoint (decision 64).
+  # Formed BEFORE the tree is made read-only, so the artifact can be written.
+  mkdir -p /workspace/.review
+  git -C /workspace diff --no-color "${REVIEW_BASE_SHA}...${REVIEW_HEAD_SHA}" > /workspace/.review/diff.patch 2>/dev/null \
+    || fail_source "cannot form diff ${REVIEW_BASE_SHA}...${REVIEW_HEAD_SHA}"
+
+  # Read-only where possible (decision 16): the review never edits the CHECKOUT. The workspace root and
+  # artifacts/ stay writable — the result manifest and the review artifact are written there (decision 42).
+  find /workspace -mindepth 1 -maxdepth 1 ! -name '.*' -exec chmod -R a-w {} + 2>/dev/null || true
+  chmod a-w /workspace/.git 2>/dev/null || true
+  echo "agent-entry: checked out ${REVIEW_HEAD_SHA} (base ${REVIEW_BASE_SHA}) for ${GIT_CLONE_REPO}"
+fi
+
+exec "$@"

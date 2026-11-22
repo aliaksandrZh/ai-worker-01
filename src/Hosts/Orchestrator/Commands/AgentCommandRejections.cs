@@ -35,6 +35,9 @@ public static class AgentCommandRejectionReasons
     public const string AgentProfileNotReady = "agent_profile_not_ready";
     /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued (decision 31, 04 §7).</summary>
     public const string ReviewHeadChanged = "review_head_changed_before_execution";
+    /// <summary>Claim-time reason (ticket 19, decision 31, 06 §11): the bot's review request was withdrawn before
+    /// the automatic initial review Task started. An executing review is never interrupted.</summary>
+    public const string ReviewRequestRemovedBeforeExecution = "review_request_removed_before_execution";
     /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx, ticket 09).</summary>
     public const string RuntimeDispatchFailed = "runtime_dispatch_failed";
     /// <summary>Not a rejection: the reason code recorded on Tasks/commands cancelled by `/stop`

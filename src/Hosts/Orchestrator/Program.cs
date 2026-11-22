@@ -35,6 +35,7 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton<IWorkerCycle, CommentCommandProcessor>();
 builder.Services.AddSingleton<IWorkerCycle, RootClosureCycle>();
+builder.Services.AddSingleton<IWorkerCycle, ReviewTriggerCycle>();
 // Durable job queue (task 07): admission hands commands to Task+Job rows; this worker claims and prepares.
 builder.Services.AddOptions<JobQueueOptions>().BindConfiguration("JobQueue");
 builder.Services.AddSingleton<JobQueueMetrics>();

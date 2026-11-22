@@ -44,6 +44,10 @@ public class OrchestrationTask
     public string Status { get; set; } = null!;
     /// <summary>Command that produced this Task; null only for system-created Tasks (e.g. automatic initial review, ticket 12).</summary>
     public Guid? TriggerCommandId { get; set; }
+    /// <summary>System-created Tasks (ticket 19 automatic initial review): the GitHub event that produced the
+    /// Task (`review_requested`, or the draft→ready `work_item_updated`). Null for command-created Tasks.
+    /// Unique where set — one event creates at most one Task.</summary>
+    public Guid? TriggerGithubEventId { get; set; }
     /// <summary>Review Tasks pin the PR Head SHA at creation; never rewritten on drift (decision 31).</summary>
     public string? TargetHeadSha { get; set; }
     /// <summary>Review Tasks pin the Base SHA used to form the diff locally (decision 64).</summary>

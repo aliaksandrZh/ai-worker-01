@@ -248,6 +248,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(t => t.TriggerCommandId)
                 .OnDelete(DeleteBehavior.Restrict);
+            // Ticket 19: one system trigger event creates at most one automatic Task
+            entity.HasIndex(t => t.TriggerGithubEventId)
+                .IsUnique()
+                .HasFilter("trigger_github_event_id IS NOT NULL");
+            entity.HasOne<GitHubEvent>()
+                .WithMany()
+                .HasForeignKey(t => t.TriggerGithubEventId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Run>(entity =>

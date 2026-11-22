@@ -942,6 +942,10 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("trigger_command_id");
 
+                    b.Property<Guid?>("TriggerGithubEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("trigger_github_event_id");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasColumnType("text")
@@ -961,6 +965,11 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_task_trigger_command_id")
                         .HasFilter("trigger_command_id IS NOT NULL");
+
+                    b.HasIndex("TriggerGithubEventId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_task_trigger_github_event_id")
+                        .HasFilter("trigger_github_event_id IS NOT NULL");
 
                     b.HasIndex("WorkflowId")
                         .IsUnique()
@@ -1927,6 +1936,12 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasForeignKey("TriggerCommandId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_task_agent_command_trigger_command_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.GitHubEvent", null)
+                        .WithMany()
+                        .HasForeignKey("TriggerGithubEventId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_task_github_event_trigger_github_event_id");
 
                     b.HasOne("PiAgent.Infrastructure.Persistence.Workflow", null)
                         .WithMany()

@@ -862,7 +862,7 @@ public class StartContainerPlanTests
         AgentProfileVersion version, RuntimeStorageService storage, out string? error,
         string? workItemRepository = "aliaksandrZh/04") =>
         StartRunHandler.TryBuildContainerPlan(Run(), Task(), version, storage,
-            new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository,
+            new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository, reviewPullRequestNumber: null,
             out var plan, out error) ? plan : null;
 
     [Fact]
@@ -878,5 +878,35 @@ public class StartContainerPlanTests
         var bare = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
             out _, workItemRepository: null);
         Assert.DoesNotContain("GIT_CLONE_REPO", bare!.Environment ?? "");
+    }
+
+    [Fact]
+    public void ReviewTask_TravelsPinnedShas_AndPrNumber() // ticket 19: the reviewer checks out the pinned head and forms base..head locally
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "review-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var review = new OrchestrationTask
+        {
+            Id = Guid.NewGuid(), WorkflowId = Guid.NewGuid(), Type = OrchestrationTaskTypes.Review,
+            TargetHeadSha = "head-sha-1", TargetBaseSha = "base-sha-1",
+        };
+        var plan = StartRunHandler.TryBuildContainerPlan(Run(), review, Version(null, """{"cpu":1.0,"memory":"512MiB"}"""),
+            Storage(secretsDir, "/etc/pi-agent/secrets"), new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs",
+            "aliaksandrZh/04", reviewPullRequestNumber: 13, out var built, out var error) ? built : null;
+        Assert.Null(error);
+        Assert.Contains("REVIEW_HEAD_SHA=head-sha-1", plan!.Environment);
+        Assert.Contains("REVIEW_BASE_SHA=base-sha-1", plan.Environment);
+        Assert.Contains("REVIEW_PR_NUMBER=13", plan.Environment);
+    }
+
+    [Fact]
+    public void NonReviewTask_CarriesNoReviewPins()
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var plan = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
+            out _, workItemRepository: "aliaksandrZh/04");
+        Assert.DoesNotContain("REVIEW_HEAD_SHA", plan!.Environment ?? "");
+        Assert.DoesNotContain("REVIEW_PR_NUMBER", plan.Environment ?? "");
     }
 }

@@ -464,6 +464,10 @@ public class ConfigParserTests : IDisposable
         var planner = parsed.Profiles.Single(p => p.Name == "planner");
         Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
         Assert.Equal("1.2.0", planner.BridgeVersion); // ticket 13 bumped the shared bridge (permission_blocked recording)
+        // ticket 19: the reviewer profile is shipped beside the planner and parses under the same strict schema
+        var reviewer = parsed.Profiles.Single(p => p.Name == "reviewer");
+        Assert.Equal(["github-write-pat.txt"], reviewer.Secrets);
+        Assert.Equal("1.2.0", reviewer.BridgeVersion);
     }
 
     private static string? FindShippedConfigRoot()

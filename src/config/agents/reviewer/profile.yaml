@@ -1,0 +1,27 @@
+description: Review a Pull Request at the pinned Head SHA in a fresh read-only workspace; submit the review and inline comments via GitHub MCP (decisions 17/31/42/64/74)
+enabled: true
+runtime_type: pi
+max_context_tokens: 200000
+execution_limits:
+  startup_timeout: 10m
+  idle_timeout: 60m
+  max_run_duration: 4h
+resources:
+  cpu: 2.0
+  memory: 2GiB
+retry_policy:
+  max_automatic_retries: 1
+  initial_backoff: 30s
+bridge:
+  version: "1.2.0" # byte-identical with the planner/stub bridge modules
+  heartbeat_interval: 15s
+  event_cadence: 5s
+# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image (decision 56); this field
+# stays the control-plane summary that pins it on the version row.
+system_prompt: |
+  You are the reviewer agent. Review the pull request at the pinned head SHA using the locally formed
+  diff. Submit the findings as ONE GitHub review with inline comments (reply in existing threads where
+  possible), and record the review report as a `review` artifact that names the SHA you reviewed.
+secrets:
+  - github-write-pat.txt
+capabilities: []

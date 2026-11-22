@@ -9,6 +9,11 @@ rules:
     profile: planner
     priority: 1
     enabled: true
+  # Ticket 19: /review and automatic initial reviews route to the reviewer profile
+  - task_type: review
+    profile: reviewer
+    priority: 1
+    enabled: true
 # Per-repo override example (repository must exist in repositories.yaml):
 # rules:
 #   - task_type: plan

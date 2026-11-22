@@ -21,6 +21,8 @@ public static class ClaimCancellationNotices
             "A queued task was cancelled: its agent image is not ready (still building or failed to build). Run the command again once the image is ready.",
         AgentCommandRejectionReasons.PlanNotAvailable =>
             "A queued task was cancelled: the approved plan it references is no longer available. Run /plan, then /code.",
+        AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution =>
+            "A queued review was cancelled: the review request for the bot was removed before the review started. Run /review to request a review again.",
         AgentCommandRejectionReasons.WorkItemClosed =>
             "A queued task was cancelled: the issue or pull request was closed before the task started.",
         AgentCommandRejectionReasons.NotInAllowlist =>

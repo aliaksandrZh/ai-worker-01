@@ -194,6 +194,15 @@ public sealed class JobQueueWorker(
         return claimedTasks + activeRuns;
     }
 
+    /// <summary>Whether the bot is still among the synced requested reviewers (ticket 19, 06 §11).</summary>
+    private static bool RequestedReviewerPresent(WorkItem workItem, string? botLogin)
+    {
+        if (string.IsNullOrEmpty(botLogin) || string.IsNullOrWhiteSpace(workItem.RequestedReviewers))
+            return false;
+        var reviewers = System.Text.Json.JsonSerializer.Deserialize<List<string>>(workItem.RequestedReviewers) ?? [];
+        return reviewers.Contains(botLogin, StringComparer.OrdinalIgnoreCase);
+    }
+
     private async Task processClaimAsync((Guid JobId, Guid TaskId) claim, ISet<Guid> skipped, CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -266,6 +275,14 @@ public sealed class JobQueueWorker(
             && !await db.TaskArtifactInputs.AnyAsync(i => i.TaskId == task.Id, cancellationToken))
         {
             await CancelAsync(AgentCommandRejectionReasons.PlanNotAvailable); // decision 80
+            return;
+        }
+        if (task.Type == OrchestrationTaskTypes.Review && task.TriggerGithubEventId is not null
+            && (task.FailureReason == AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution
+                || !RequestedReviewerPresent(workItem, configurationState.BotLogin)))
+        {
+            // ticket 19 (06 §11): the automatic initial review re-checks the bot's request before it starts
+            await CancelAsync(AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution);
             return;
         }
         if (task.Type == OrchestrationTaskTypes.Review

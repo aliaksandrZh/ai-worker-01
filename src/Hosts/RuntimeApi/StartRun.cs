@@ -91,7 +91,7 @@ public static class StartRunHandler
             // The work item's repository name travels as GIT_CLONE_REPO (not secret — profiles whose
             // entry script clones use their mounted token file; the stub ignores it).
             if (!TryBuildContainerPlan(run, task, version, storage, komodoOptions.Value, workspaceHost, runTreeHost,
-                    repository.FullName, out var plan, out var planError))
+                    repository.FullName, workItem.Number, out var plan, out var planError))
                 return RunPipelineApi.Error(400, "validation", planError!);
 
             // 4. Komodo: create + deploy + wait running
@@ -166,6 +166,7 @@ public static class StartRunHandler
         string workspaceHost,
         string runTreeHost,
         string? workItemRepository,
+        long? reviewPullRequestNumber,
         out KomodoDeploymentPlan? plan,
         out string? error)
     {
@@ -231,6 +232,15 @@ public static class StartRunHandler
         Env("STUB_BEHAVIOR", ParseBridgeBehavior(version.BridgeConfiguration));
         if (!string.IsNullOrEmpty(workItemRepository))
             Env("GIT_CLONE_REPO", workItemRepository);
+        // ticket 19 (decision 64/74): a review Task's workspace is formed from the PINNED revisions — the
+        // reviewer entry checks out `target_head_sha` and forms the diff locally from `target_base_sha`.
+        if (task.Type == OrchestrationTaskTypes.Review)
+        {
+            Env("REVIEW_HEAD_SHA", task.TargetHeadSha ?? string.Empty);
+            Env("REVIEW_BASE_SHA", task.TargetBaseSha ?? string.Empty);
+            if (reviewPullRequestNumber is { } prNumber)
+                Env("REVIEW_PR_NUMBER", prNumber.ToString(CultureInfo.InvariantCulture));
+        }
 
         plan = new KomodoDeploymentPlan(
             Name: $"pi-session-{run.Id}",
