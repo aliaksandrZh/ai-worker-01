@@ -77,5 +77,6 @@ task stack                         # postgres → migrator → services (`task s
 curl localhost:8080/healthz        # runtime-api is the only host-published port (8080)
 ```
 
-No CI yet — development is local; `dotnet test` (from `src/`) runs all suites (some spin a
-Testcontainers postgres, so Docker must be running).
+CI runs on GitHub Actions for every pull request (`.github/workflows/ci.yml`: restore → build
+→ `dotnet test` on the full solution). Development is local; `dotnet test` (from `src/`) runs all
+suites (some spin a Testcontainers postgres, so Docker must be running).
