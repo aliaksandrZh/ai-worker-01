@@ -34,6 +34,7 @@ builder.Services.AddSingleton(sp =>
     return new CollaboratorPermissionGate(httpClient, pat);
 });
 builder.Services.AddSingleton<IWorkerCycle, CommentCommandProcessor>();
+builder.Services.AddSingleton<IWorkerCycle, RootClosureCycle>();
 // Durable job queue (task 07): admission hands commands to Task+Job rows; this worker claims and prepares.
 builder.Services.AddOptions<JobQueueOptions>().BindConfiguration("JobQueue");
 builder.Services.AddSingleton<JobQueueMetrics>();

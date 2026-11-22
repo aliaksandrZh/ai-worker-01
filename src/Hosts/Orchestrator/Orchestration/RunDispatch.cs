@@ -85,6 +85,17 @@ public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions
         request.Headers.Add("X-Service-Token", options.Value.ServiceToken);
         return await http.SendAsync(request, cancellationToken);
     }
+
+    public async Task<HttpResponseMessage> CleanupWorkflowAsync(Guid workflowId, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"{options.Value.BaseUrl.TrimEnd('/')}/internal/runtime/workflows/{workflowId}/cleanup")
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add("X-Service-Token", options.Value.ServiceToken);
+        return await http.SendAsync(request, cancellationToken);
+    }
 }
 
 /// <summary>The 04 §3 start request the Orchestrator sends; `input` is the frozen context package

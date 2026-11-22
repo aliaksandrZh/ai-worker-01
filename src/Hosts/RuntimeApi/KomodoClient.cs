@@ -34,6 +34,8 @@ public interface IKomodoClient
     Task<KomodoContainerSnapshot?> GetContainerStateAsync(string deployment, CancellationToken cancellationToken);
     /// <summary>`StopDeployment` (`docker stop`); false on failure.</summary>
     Task<bool> StopAsync(string deployment, CancellationToken cancellationToken);
+    /// <summary>Removes a Komodo deployment after it has stopped; false on failure.</summary>
+    Task<bool> RemoveAsync(string deployment, CancellationToken cancellationToken);
 }
 
 public sealed class KomodoHttpClient : IKomodoClient
@@ -158,6 +160,17 @@ public sealed class KomodoHttpClient : IKomodoClient
         if (update.ValueKind != JsonValueKind.Object || update.TryGetProperty("success", out var success) && success.ValueKind != JsonValueKind.True)
         {
             _logger.LogWarning("komodo StopDeployment {deployment} failed: {update}", deployment, update.ToString());
+            return false;
+        }
+        return true;
+    }
+
+    public async Task<bool> RemoveAsync(string deployment, CancellationToken cancellationToken)
+    {
+        var update = await CallAsync("write", "DeleteDeployment", new Dictionary<string, object?> { ["deployment"] = deployment }, cancellationToken);
+        if (update.ValueKind != JsonValueKind.Object || update.TryGetProperty("success", out var success) && success.ValueKind != JsonValueKind.True)
+        {
+            _logger.LogWarning("komodo DeleteDeployment {deployment} failed: {update}", deployment, update.ToString());
             return false;
         }
         return true;

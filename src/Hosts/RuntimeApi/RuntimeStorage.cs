@@ -50,6 +50,26 @@ public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
 
     public string WorkspaceHostPath(Guid workflowId, Guid taskId) => $"{Options.HostRoot}/{workflowId}/tasks/{taskId}/workspace";
 
+    /// <summary>Deletes the complete workflow tree after its containers have been removed.</summary>
+    public StorageDeletion DeleteWorkflowTree(Guid workflowId)
+    {
+        var path = Path.Combine(Options.ManagedRoot, workflowId.ToString());
+        if (!Directory.Exists(path))
+            return new StorageDeletion(false, true, DateTime.UtcNow);
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            return new StorageDeletion(true, false, DateTime.UtcNow);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new StorageDeletion(false, true, DateTime.UtcNow);
+        }
+    }
+
+    public sealed record StorageDeletion(bool Deleted, bool Missing, DateTime DeletedAt);
+
     /// <summary>Decision-60 evidence probe (task 16): the same host tree is mounted into the Runtime API and
     /// the agent container, so the control plane can see whether a Run's Bridge still holds UNDELIVERED
     /// ORDERED callbacks (the coalesced heartbeat slot does not count — a healthy channel empties the spool

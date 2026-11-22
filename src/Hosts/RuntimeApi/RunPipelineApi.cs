@@ -44,6 +44,8 @@ public static class RunPipelineApi
             .AddEndpointFilter<RunCallbackTokenFilter>();
         app.MapGet("/internal/runtime/runs/{runId:guid}", RunStatusHandler.HandleAsync)
             .RequireServiceToken();
+        app.MapPost("/internal/runtime/workflows/{workflowId:guid}/cleanup", RootCleanupHandler.HandleAsync)
+            .RequireServiceToken();
     }
 
     public static IResult Error(int statusCode, string code, string message, object? details = null) =>
@@ -59,6 +61,60 @@ public static class RunPipelineApi
     /// whose delivery stops the container; the stop-confirm sweeper backstops a Bridge that never
     /// delivers. Idempotent: the signal is recorded once; already-terminal runs return their state.
     /// </summary>
+    public static class RootCleanupHandler
+    {
+        public static async Task<IResult> HandleAsync(Guid workflowId, AppDbContext db, RuntimeStorageService storage,
+            IKomodoClient komodo, CancellationToken cancellationToken)
+        {
+            var workflow = await db.Workflows.SingleOrDefaultAsync(w => w.Id == workflowId, cancellationToken);
+            if (workflow is null)
+                return Error(404, "not_found", $"workflow {workflowId} does not exist");
+
+            var containers = await db.ContainerInstances
+                .Where(c => c.RunId != null && db.Runs.Any(r => r.Id == c.RunId && db.OrchestrationTasks.Any(t => t.Id == r.TaskId && t.WorkflowId == workflowId)))
+                .ToListAsync(cancellationToken);
+            var allRemoved = true;
+            foreach (var container in containers.Where(c => !string.IsNullOrWhiteSpace(c.KomodoDeploymentId)))
+            {
+                var deployment = container.KomodoDeploymentId!;
+                var stopped = container.ObservedState is ContainerObservedStates.Stopped or ContainerObservedStates.Removed
+                    || await komodo.StopAsync(deployment, cancellationToken);
+                if (stopped && await komodo.RemoveAsync(deployment, cancellationToken))
+                {
+                    container.DesiredState = ContainerDesiredStates.Removed;
+                    container.ObservedState = ContainerObservedStates.Removed;
+                    container.RemovedAt = DateTime.UtcNow;
+                }
+                else
+                    allRemoved = false;
+            }
+            if (!allRemoved)
+                return Error(409, "cleanup_pending", "one or more deployments could not be stopped and removed");
+
+            var deletion = storage.DeleteWorkflowTree(workflowId);
+            var now = deletion.DeletedAt;
+            var workspaces = await db.Workspaces
+                .Where(w => db.OrchestrationTasks.Any(t => t.Id == w.TaskId && t.WorkflowId == workflowId))
+                .ToListAsync(cancellationToken);
+            foreach (var workspace in workspaces)
+            {
+                workspace.StorageStatus = deletion.Missing ? WorkspaceStorageStatuses.Missing : WorkspaceStorageStatuses.Deleted;
+                workspace.Status = WorkspaceStatuses.Deleted;
+                workspace.DeletedAt ??= now;
+            }
+            var sessions = await db.AgentSessions
+                .Where(s => db.Runs.Any(r => r.Id == s.RunId && db.OrchestrationTasks.Any(t => t.Id == r.TaskId && t.WorkflowId == workflowId)))
+                .ToListAsync(cancellationToken);
+            foreach (var session in sessions)
+            {
+                session.StorageStatus = deletion.Missing ? AgentSessionStorageStatuses.Missing : AgentSessionStorageStatuses.Deleted;
+                session.FileDeletedAt ??= now;
+            }
+            await db.SaveChangesAsync(cancellationToken);
+            return Results.Json(new { workflowId, storageStatus = deletion.Missing ? "missing" : "deleted", deletedAt = now });
+        }
+    }
+
     public static class StopRunHandler
     {
         public static async Task<IResult> HandleAsync(Guid runId, StopRunRequest request, AppDbContext db, CancellationToken cancellationToken)
