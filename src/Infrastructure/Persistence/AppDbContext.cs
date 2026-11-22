@@ -222,7 +222,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<OrchestrationTask>(entity =>
         {
-            entity.ToTable("task");
+            // Every Task carries at least one trigger reference (owner decision 2026-11-23): a command
+            // row for command-created Tasks, or the producing GitHub event for system-created ones.
+            entity.ToTable("task", tb => tb.HasCheckConstraint("ck_task_has_trigger",
+                "trigger_command_id IS NOT NULL OR trigger_github_event_id IS NOT NULL"));
             entity.HasIndex(t => new { t.WorkflowId, t.Sequence }).IsUnique();
             entity.HasIndex(t => new { t.Status, t.CreatedAt });
             // One command creates at most one Task (02 §23)

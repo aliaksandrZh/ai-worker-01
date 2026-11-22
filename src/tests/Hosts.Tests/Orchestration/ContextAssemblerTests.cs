@@ -92,6 +92,7 @@ public class ContextAssemblerTests(PostgresFixture postgres) : IClassFixture<Pos
             Type = type,
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Queued,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             TargetHeadSha = targetHeadSha,
             TargetBaseSha = targetBaseSha,
             CreatedAt = DateTime.UtcNow,

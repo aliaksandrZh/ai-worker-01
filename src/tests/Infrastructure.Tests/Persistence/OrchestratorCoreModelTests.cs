@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.DependencyInjection;
 using PiAgent.Infrastructure.Persistence;
 using Xunit;
 
@@ -70,7 +73,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal("task", entity.GetTableName());
 
         var properties = entity.GetProperties().ToDictionary(p => p.Name);
-        Assert.Equal(18, properties.Count);
+        Assert.Equal(19, properties.Count);
         foreach (var required in new[] { nameof(OrchestrationTask.Id), nameof(OrchestrationTask.WorkflowId),
                      nameof(OrchestrationTask.Sequence), nameof(OrchestrationTask.Type),
                      nameof(OrchestrationTask.AgentProfileVersionId), nameof(OrchestrationTask.Status),
@@ -78,12 +81,26 @@ public class OrchestratorCoreModelTests
                      nameof(OrchestrationTask.AutomaticRetriesUsed) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");
         foreach (var nullable in new[] { nameof(OrchestrationTask.TriggerCommandId), nameof(OrchestrationTask.TriggerGithubEventId),
+                     nameof(OrchestrationTask.TriggerAtGithub),
                      nameof(OrchestrationTask.TargetHeadSha), nameof(OrchestrationTask.TargetBaseSha),
                      nameof(OrchestrationTask.ClaimedAt), nameof(OrchestrationTask.StartedAt),
                      nameof(OrchestrationTask.CompletedAt), nameof(OrchestrationTask.CancelledAt),
                      nameof(OrchestrationTask.FailureReason) })
             Assert.True(properties[nullable].IsNullable, $"{nullable} must be nullable");
         Assert.Equal("jsonb", properties[nameof(OrchestrationTask.RetryPolicy)].GetColumnType());
+    }
+
+    [Fact]
+    public void OrchestrationTask_HasTriggerCheckConstraint()
+    {
+        using var dbContext = NewDbContext();
+        // check constraints live in the design-time model, not the read-optimized one
+        var entity = ((IInfrastructure<IServiceProvider>)dbContext).Instance
+            .GetRequiredService<IDesignTimeModel>().Model.FindEntityType(typeof(OrchestrationTask))!;
+        var check = Assert.Single(entity.GetCheckConstraints());
+        Assert.Equal("ck_task_has_trigger", check.Name);
+        Assert.Contains("trigger_command_id IS NOT NULL", check.Sql);
+        Assert.Contains("trigger_github_event_id IS NOT NULL", check.Sql);
     }
 
     [Fact]

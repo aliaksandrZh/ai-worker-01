@@ -79,6 +79,10 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
         return prepared;
     }
 
+    /// <summary>A completed trigger command for the extra task (ck_task_has_trigger).</summary>
+    private static async Task<AgentCommand> SeedTriggerAsync(AppDbContext db, Guid workItemId) =>
+        CommandTestSupport.SeedTriggerCommand(db, await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workItemId));
+
     /// <summary>Extra Workflow task (any status) — for cancelled-skip and unfinished-occupancy cases.</summary>
     private static async Task<OrchestrationTask> SeedExtraTaskAsync(AppDbContext db, AdmittedTaskWork prepared, string status)
     {
@@ -90,6 +94,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
             Type = prepared.Task.Type,
             AgentProfileVersionId = prepared.Task.AgentProfileVersionId,
             Status = status,
+            TriggerCommandId = (await SeedTriggerAsync(db, prepared.Workflow.WorkItemId)).Id,
             CreatedAt = DateTime.UtcNow,
             RetryPolicy = "{}",
         };

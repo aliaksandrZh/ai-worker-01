@@ -48,6 +48,11 @@ public class OrchestrationTask
     /// Task (`review_requested`, or the draft→ready `work_item_updated`). Null for command-created Tasks.
     /// Unique where set — one event creates at most one Task.</summary>
     public Guid? TriggerGithubEventId { get; set; }
+    /// <summary>GitHub-side time of the trigger (owner decision 2026-11-23: the no-new-input admission gate
+    /// anchors "no new signal since" on it): the trigger comment's `CreatedAtGithub` for command Tasks, the
+    /// triggering event's GitHub time (or local receipt) for system-created Tasks. Null for rows created
+    /// before the watermark existed — the gate then never rejects.</summary>
+    public DateTime? TriggerAtGithub { get; set; }
     /// <summary>Review Tasks pin the PR Head SHA at creation; never rewritten on drift (decision 31).</summary>
     public string? TargetHeadSha { get; set; }
     /// <summary>Review Tasks pin the Base SHA used to form the diff locally (decision 64).</summary>

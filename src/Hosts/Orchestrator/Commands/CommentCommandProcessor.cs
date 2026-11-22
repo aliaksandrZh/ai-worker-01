@@ -196,7 +196,8 @@ public sealed class CommentCommandProcessor(
             // in this same transaction; non-null outcome → existing rejection path (reason + Outbox reply).
             // Commands rejected by the authorization gate keep their reason — never re-admitted here.
             var outcome = command.Status == AgentCommandStatuses.Authorized
-                ? await CommandAdmission.AdmitAsync(db, command, workItem, repository, cancellationToken)
+                ? await CommandAdmission.AdmitAsync(db, command, workItem, repository,
+                    configurationState.BotLogin, cancellationToken)
                 : null;
             if (outcome is { } rejection)
                 await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);

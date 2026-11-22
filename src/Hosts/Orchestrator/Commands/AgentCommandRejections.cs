@@ -43,6 +43,9 @@ public static class AgentCommandRejectionReasons
     /// <summary>Not a rejection: the reason code recorded on Tasks/commands cancelled by `/stop`
     /// (06 §8, ticket 14) and passed to the Runtime API as the stop-signal reason (decision 61).</summary>
     public const string StopRequested = "stop_requested";
+    /// <summary>Admission gate (owner decision 2026-11-23): the same task-producing command repeated
+    /// with no new human signal since its previous same-type Task succeeded.</summary>
+    public const string NoNewInput = "no_new_input";
 }
 
 public static class AgentCommandRejectionReplies
@@ -97,6 +100,9 @@ public static class AgentCommandRejectionReplies
         AgentCommandRejectionReasons.AgentProfileNotReady =>
             "Command rejected: the failed task's agent profile version is disabled or its image is not ready "
             + "(still building or failed to build). Restore the version, then post /retry again.",
+        AgentCommandRejectionReasons.NoNewInput =>
+            "Command rejected: this command already ran to completion and nothing new has happened since "
+            + "(no new comments, edits, or commits). Comment what should be different, then post the command again.",
         _ => "Command rejected.",
     };
 

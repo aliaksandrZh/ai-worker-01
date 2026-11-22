@@ -106,6 +106,31 @@ public static class CommandTestSupport
         return (repository, workItem, comment);
     }
 
+    private static int _triggerCommentId = 970_000;
+
+    /// <summary>A completed trigger row for a hand-seeded Task: the `ck_task_has_trigger` constraint
+    /// requires every task row to reference a command or a producing event, exactly as production rows do.</summary>
+    public static AgentCommand SeedTriggerCommand(AppDbContext db, WorkItem workItem, string commandName = AgentCommandNames.Plan)
+    {
+        var trigger = new AgentCommand
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItem.Id,
+            GithubCommentId = Interlocked.Increment(ref _triggerCommentId),
+            AuthorLogin = workItem.AuthorLogin,
+            CommandName = commandName,
+            Arguments = "{}",
+            ParserVersion = "1",
+            Status = AgentCommandStatuses.Processed,
+            SourceBodySnapshot = "@jsxhuz /" + commandName,
+            CreatedAt = DateTime.UtcNow,
+            ParsedAt = DateTime.UtcNow,
+            ProcessedAt = DateTime.UtcNow,
+        };
+        db.AgentCommands.Add(trigger);
+        return trigger;
+    }
+
     public static Task<GitHubEvent> SeedCommandEventAsync(AppDbContext db, GitHubComment comment, WorkItem? workItem = null)
     {
         var detected = workItem ?? db.WorkItems.Local.First(w => w.Id == comment.WorkItemId);

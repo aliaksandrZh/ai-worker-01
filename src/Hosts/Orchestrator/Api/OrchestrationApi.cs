@@ -254,7 +254,7 @@ public static class OrchestrationApi
 
         if (command.Status == AgentCommandStatuses.Authorized)
         {
-            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, repository, cancellationToken);
+            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, repository, botLogin, cancellationToken);
             if (outcome is { } rejection)
             {
                 command.Status = AgentCommandStatuses.Rejected;

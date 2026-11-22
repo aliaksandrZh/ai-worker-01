@@ -95,6 +95,7 @@ public class ReviewTriggerTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(OrchestrationTaskTypes.Review, task.Type);
         Assert.Equal(first.Id, task.TriggerGithubEventId);
         Assert.Null(task.TriggerCommandId);
+        Assert.NotNull(task.TriggerAtGithub); // no-new-input gate anchor (owner decision 2026-11-23)
         Assert.Equal("head-1", task.TargetHeadSha);
         Assert.Equal("base-1", task.TargetBaseSha);
         Assert.NotNull(workflow.InitialReviewCreatedAt);

@@ -79,6 +79,7 @@ public class RootClosureCycleTests(PostgresFixture postgres) : IClassFixture<Pos
         {
             Id = Guid.NewGuid(), WorkflowId = workflowId, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Queued, CreatedAt = DateTime.UtcNow,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             RetryPolicy = """{"max_automatic_retries":1,"initial_backoff_seconds":30}""",
         };
         db.Workflows.Add(new Workflow

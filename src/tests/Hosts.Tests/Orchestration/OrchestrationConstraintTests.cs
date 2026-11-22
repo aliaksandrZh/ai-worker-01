@@ -34,6 +34,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
             Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Queued,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             CreatedAt = DateTime.UtcNow,
             RetryPolicy = "{}",
         };
@@ -51,6 +52,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
             Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Succeeded,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             CreatedAt = DateTime.UtcNow,
             RetryPolicy = "{}",
         };
@@ -73,6 +75,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
         {
             Id = Guid.NewGuid(), WorkflowId = workflow.Id, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Succeeded,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             CreatedAt = DateTime.UtcNow, RetryPolicy = "{}",
         };
         db.OrchestrationTasks.Add(duplicate);

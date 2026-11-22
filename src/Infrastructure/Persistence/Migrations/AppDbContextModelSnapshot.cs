@@ -938,6 +938,10 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("target_head_sha");
 
+                    b.Property<DateTime?>("TriggerAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("trigger_at_github");
+
                     b.Property<Guid?>("TriggerCommandId")
                         .HasColumnType("uuid")
                         .HasColumnName("trigger_command_id");
@@ -983,7 +987,10 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_task_workflow_id_sequence");
 
-                    b.ToTable("task", (string)null);
+                    b.ToTable("task", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_task_has_trigger", "trigger_command_id IS NOT NULL OR trigger_github_event_id IS NOT NULL");
+                        });
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrphanCandidate", b =>

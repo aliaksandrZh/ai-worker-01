@@ -88,6 +88,12 @@ public static class OrchestrationTestSupport
         };
 
         AgentCommand? command = null;
+        var triggerCommandId = Guid.NewGuid();
+        if (!withCommand)
+        {
+            // ck_task_has_trigger: a task row always references a trigger command (not returned as Command)
+            triggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem, commandName).Id;
+        }
         if (withCommand)
         {
             command = new AgentCommand
@@ -105,6 +111,7 @@ public static class OrchestrationTestSupport
                 ParsedAt = now,
             };
             db.AgentCommands.Add(command);
+            triggerCommandId = command.Id;
         }
 
         var task = new OrchestrationTask
@@ -115,7 +122,7 @@ public static class OrchestrationTestSupport
             Type = taskType,
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Queued,
-            TriggerCommandId = command?.Id,
+            TriggerCommandId = triggerCommandId,
             TargetHeadSha = targetHeadSha,
             CreatedAt = now,
             RetryPolicy = "{}",

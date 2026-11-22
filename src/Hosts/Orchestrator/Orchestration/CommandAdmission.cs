@@ -97,8 +97,12 @@ public static class CommandAdmission
         [AgentCommandNames.TestCases] = OrchestrationTaskTypes.TestDesign,
     };
 
+    /// <summary>`botLogin` anchors the no-new-input gate's bot-author filtering (the agent's own
+    /// comments and reviews never count as new signal); null disables the filtering — test convenience
+    /// only, the production path (CommentCommandProcessor) always passes it.</summary>
     public static async Task<AdmissionOutcome?> AdmitAsync(
-        AppDbContext db, AgentCommand command, WorkItem workItem, Repository repository, CancellationToken cancellationToken)
+        AppDbContext db, AgentCommand command, WorkItem workItem, Repository repository,
+        string? botLogin, CancellationToken cancellationToken)
     {
         var name = command.CommandName;
 
@@ -168,6 +172,9 @@ public static class CommandAdmission
                 t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
             return new AdmissionOutcome(AgentCommandRejectionReasons.UnfinishedTaskExists,
                 "the workflow already holds an unfinished Task (04 §2)");
+        else if (await IsNoNewInputRepeatAsync(db, workflow, taskType, workItem, botLogin, cancellationToken))
+            return new AdmissionOutcome(AgentCommandRejectionReasons.NoNewInput,
+                "the previous same command succeeded and nothing new happened since it — comment what to change, then post again");
 
         var maxSequence = await db.OrchestrationTasks
             .Where(t => t.WorkflowId == workflow.Id)
@@ -182,6 +189,11 @@ public static class CommandAdmission
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Queued,
             TriggerCommandId = command.Id,
+            // the trigger comment's GitHub time anchors the no-new-input gate on this Task
+            TriggerAtGithub = await db.GitHubComments.AsNoTracking()
+                .Where(c => c.GithubCommentId == command.GithubCommentId && c.Kind == GitHubCommentKinds.IssueComment)
+                .Select(c => (DateTime?)c.CreatedAtGithub)
+                .SingleOrDefaultAsync(cancellationToken) ?? DateTime.UtcNow,
             TargetHeadSha = taskType == OrchestrationTaskTypes.Review ? workItem.HeadSha : null,
             TargetBaseSha = taskType == OrchestrationTaskTypes.Review ? workItem.BaseSha : null,
             CreatedAt = now,
@@ -223,6 +235,84 @@ public static class CommandAdmission
         command.Status = AgentCommandStatuses.Queued;
         command.ProcessedAt = now;
         return null;
+    }
+
+    /// <summary>
+    /// The no-new-input gate (owner decision 2026-11-23): the same task-producing command repeated after
+    /// its previous same-type Task succeeded, with no new human signal since that Task's trigger, is a
+    /// duplicate — rejected `no_new_input` instead of burning another Run. Human signals: a non-bot
+    /// comment (conversation or inline), a non-bot submitted review, a work item title/body edit, or a
+    /// new PR commit not pushed while this Workflow's own Runs were executing (those pushes are the
+    /// agent's own work, not user input). All lookups are fail-open: detection gaps can only allow a
+    /// repeat, never deny one; a pre-watermark previous Task (TriggerAtGithub null) never rejects.
+    /// </summary>
+    private static async Task<bool> IsNoNewInputRepeatAsync(
+        AppDbContext db, Workflow workflow, string taskType, WorkItem workItem,
+        string? botLogin, CancellationToken cancellationToken)
+    {
+        var previous = await db.OrchestrationTasks.AsNoTracking()
+            .Where(t => t.WorkflowId == workflow.Id && t.Type == taskType && t.Status == OrchestrationTaskStatuses.Succeeded)
+            .OrderByDescending(t => t.Sequence)
+            .Select(t => new { t.Id, t.TriggerAtGithub })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (previous?.TriggerAtGithub is not { } anchor)
+            return false;
+
+        if (await db.GitHubComments.AnyAsync(
+                c => c.WorkItemId == workItem.Id && !c.IsDeleted && c.CreatedAtGithub > anchor
+                    && (botLogin == null || c.AuthorLogin != botLogin), cancellationToken))
+            return false; // a human spoke after the previous command
+
+        if (await db.GitHubReviews.AnyAsync(
+                r => r.WorkItemId == workItem.Id && r.SubmittedAtGithub > anchor
+                    && (botLogin == null || r.AuthorLogin != botLogin), cancellationToken))
+            return false; // a human-submitted review after the previous command
+
+        // title/body edits (content-detected by the poller's snapshot diff; labels/assignees stay noise)
+        var editPayloads = await db.GitHubEvents
+            .Where(e => e.WorkItemId == workItem.Id
+                && e.EventType == GitHubEventTypes.WorkItemUpdated
+                && (e.OccurredAtGithub ?? e.ReceivedAt) > anchor)
+            .Select(e => e.Payload)
+            .ToListAsync(cancellationToken);
+        if (editPayloads.Any(IsHumanEditPayload))
+            return false;
+
+        if (workItem.Type != WorkItemTypes.PullRequest)
+            return true; // commit signals cannot apply to an Issue: no human signal was found above
+
+        // new commits outside this Workflow's own run windows (in-window pushes are the agent's work);
+        // the rare human push made mid-run is counted as the agent's — the user recovers by commenting
+        var windows = await (from t in db.OrchestrationTasks
+                       where t.WorkflowId == workflow.Id
+                       join r in db.Runs on t.Id equals r.TaskId
+                       select new { r.StartedAt, r.CompletedAt }).ToListAsync(cancellationToken);
+        var pushes = await db.GitHubEvents
+            .Where(e => e.WorkItemId == workItem.Id && e.EventType == GitHubEventTypes.PullRequestSynchronized)
+            .Select(e => new { e.OccurredAtGithub, e.ReceivedAt })
+            .ToListAsync(cancellationToken);
+        return !pushes.Any(p => (p.OccurredAtGithub ?? p.ReceivedAt) > anchor
+            && !windows.Any(w => p.ReceivedAt >= w.StartedAt
+                && (w.CompletedAt is not { } completed || p.ReceivedAt <= completed)));
+    }
+
+    /// <summary>`work_item_updated` payload ⇒ a human title/body edit (camelCase, Web defaults).</summary>
+    private static bool IsHumanEditPayload(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+            if (root.TryGetProperty("body_changed", out var bodyChanged) && bodyChanged.ValueKind == JsonValueKind.True)
+                return true;
+            return root.TryGetProperty("changed", out var changed)
+                && changed.ValueKind == JsonValueKind.Object
+                && changed.TryGetProperty("title", out _);
+        }
+        catch (JsonException)
+        {
+            return false; // unreadable payload: fail open
+        }
     }
 
     /// <summary>`SELECT … FOR UPDATE` on the Workflow row serializes same-Workflow admissions

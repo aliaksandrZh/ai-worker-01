@@ -195,13 +195,16 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         {
             Id = Guid.NewGuid(), WorkflowId = workflow.Id, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             RetryPolicy = "{}", FailureReason = AgentCommandRejectionReasons.AgentImageNotReady,
             CreatedAt = DateTime.UtcNow,
         };
         var current = new OrchestrationTask
         {
             Id = Guid.NewGuid(), WorkflowId = workflow.Id, Sequence = 2, Type = OrchestrationTaskTypes.Plan,
-            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Queued, RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
+            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Queued,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
+            RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
         };
         db.OrchestrationTasks.AddRange(older, current);
         workflow.CurrentTaskId = current.Id;
@@ -303,6 +306,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         {
             Id = Guid.NewGuid(), WorkflowId = failedWorkflow.Id, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
             AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
             RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
@@ -400,7 +404,9 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         db.OrchestrationTasks.Add(new OrchestrationTask
         {
             Id = Guid.NewGuid(), WorkflowId = workflow.Id, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
-            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed, RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
+            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
+            RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
@@ -427,7 +433,9 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         db.OrchestrationTasks.Add(new OrchestrationTask
         {
             Id = Guid.NewGuid(), WorkflowId = workflow.Id, Sequence = 1, Type = OrchestrationTaskTypes.Plan,
-            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed, RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
+            AgentProfileVersionId = version.Id, Status = OrchestrationTaskStatuses.Failed,
+            TriggerCommandId = CommandTestSupport.SeedTriggerCommand(db, workItem).Id,
+            RetryPolicy = "{}", CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();

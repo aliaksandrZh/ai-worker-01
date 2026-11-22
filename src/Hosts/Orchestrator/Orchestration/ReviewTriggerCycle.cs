@@ -162,6 +162,8 @@ public sealed class ReviewTriggerCycle(
             AgentProfileVersionId = version.Id,
             Status = OrchestrationTaskStatuses.Queued,
             TriggerGithubEventId = githubEvent.Id,
+            // the triggering event's GitHub time anchors the no-new-input gate on this Task
+            TriggerAtGithub = githubEvent.OccurredAtGithub ?? githubEvent.ReceivedAt,
             TargetHeadSha = workItem.HeadSha,
             TargetBaseSha = workItem.BaseSha,
             CreatedAt = now,
