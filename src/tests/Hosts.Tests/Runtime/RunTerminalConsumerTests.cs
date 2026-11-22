@@ -207,7 +207,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
-    public async Task OtherRunFailures_DoNotEnqueueThePublicationNotification()
+    public async Task OtherRunFailures_GetTheGenericFinalFailureNotification()
     {
         await postgres.ResetAsync();
         var db = postgres.NewDbContext();
@@ -217,13 +217,28 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
             set.SetProperty(r => r.Status, RunStatuses.Failed);
             set.SetProperty(r => r.ErrorCode, "manifest_invalid");
         });
+        // realistic detail: manifest_invalid comes from the completion validation — the agent ran
+        db.RunEvents.Add(new RunEvent
+        {
+            Id = Guid.NewGuid(), RunId = run.Id, EventId = "evt-started",
+            Type = RunEventTypes.AgentStarted, OccurredAt = DateTime.UtcNow, ReceivedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
         await NewConsumer().RunCycleAsync(default);
 
-        // the generic task-failure notification template is ticket 15's — codes outside the
-        // decision-29/69 notify set (github_publication_failed / reconciled timeouts / permission
-        // denial / reconciled runtime_failure) take that path, not this one
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        // ticket 15 (decision 29): the generic 06 §13 template now covers every finally-failed Task —
+        // codes outside the exhausted-retries/publication cases get the plain resubmit closing
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.Contains("Task failed: /plan", text, StringComparison.Ordinal);
+        Assert.Contains("manifest_invalid", text, StringComparison.Ordinal);
+        Assert.Contains("| Stage: Execution", text, StringComparison.Ordinal); // post-execution
+        Assert.Contains("The Workflow is waiting for human input", text, StringComparison.Ordinal);
+        Assert.Contains("(or use /retry)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Automatic retries exhausted", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("The produced artifacts are kept", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -258,5 +273,180 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         db.SaveChanges();
         var outcome2 = await RunTerminalConsumer.CompletedOutcomeAsync(db, run, default);
         Assert.Equal("completed", outcome2);
+    }
+
+    // ---- ticket 15: automatic pre-execution retry (decisions 28/70) ----
+
+    /// <summary>Seeds a terminal-failed attempt over SeedStartingRunAsync: the given error code, attempt
+    /// number and spent automatic-retry budget; no `agent_started` event (pre-execution) unless
+    /// `executionStarted` adds one.</summary>
+    private async Task<(OrchestrationTask Task, Run Run)> SeedFailedAttemptAsync(
+        string? errorCode, int attemptNumber = 1, int automaticRetriesUsed = 0,
+        bool executionStarted = false, string? retryPolicy = null)
+    {
+        var db = postgres.NewDbContext();
+        var (task, run) = await SeedStartingRunAsync(RunStatuses.Failed);
+        await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(r => r.ErrorCode, errorCode)
+            .SetProperty(r => r.ErrorMessage, "seed failure")
+            .SetProperty(r => r.AttemptNumber, attemptNumber));
+        await db.OrchestrationTasks.Where(t => t.Id == task.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(t => t.AutomaticRetriesUsed, automaticRetriesUsed)
+            .SetProperty(t => t.RetryPolicy, retryPolicy ?? "{}"));
+        if (executionStarted)
+            db.RunEvents.Add(new RunEvent
+            {
+                Id = Guid.NewGuid(), RunId = run.Id, EventId = "evt-started",
+                Type = RunEventTypes.AgentStarted, OccurredAt = DateTime.UtcNow, ReceivedAt = DateTime.UtcNow,
+            });
+        await db.SaveChangesAsync();
+        return (task, run);
+    }
+
+    [Fact]
+    public async Task StartupTimeout_PreExecution_WithBudget_RequeuesSilently()
+    {
+        await postgres.ResetAsync();
+        var (originalTask, originalRun) = await SeedFailedAttemptAsync(RunErrorCodes.StartupTimeout);
+        await NewConsumer().RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == originalTask.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status); // Failed → Queued, same Task (03 §2)
+        Assert.Null(task.FailureReason);
+        Assert.Null(task.CompletedAt);
+        Assert.Equal(1, task.AutomaticRetriesUsed); // decision 28 budget spent
+        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
+        Assert.Equal(WorkflowStatuses.Active, workflow.Status); // retried Task still occupies the Workflow
+        Assert.Equal(task.Id, workflow.CurrentTaskId);
+        // silent: the trigger command stays queued, no notification (06 §13)
+        var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == task.TriggerCommandId);
+        Assert.Equal(AgentCommandStatuses.Queued, command.Status);
+        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        // no new Run until the claim flow recreates it at attempt_number+1
+        Assert.Single(await db.Runs.AsNoTracking().Where(r => r.TaskId == task.Id).ToListAsync());
+        // the failed attempt's job is closed and exactly one fresh pending job schedules the retry
+        var jobs = await db.OrchestrationJobs.AsNoTracking().Where(j => j.TaskId == task.Id).ToListAsync();
+        Assert.Equal(2, jobs.Count);
+        Assert.Single(jobs, j => j.Status == OrchestrationJobStatuses.Completed);
+        var retryJob = Assert.Single(jobs, j => j.Status == OrchestrationJobStatuses.Pending);
+        Assert.Equal(OrchestrationJobTypes.RunTask, retryJob.JobType);
+        var backoffStart = retryJob.AvailableAt - DateTime.UtcNow;
+        Assert.InRange(backoffStart.TotalSeconds, 25, 35); // pinned initial_backoff (30 s)
+        // the failed attempt's container goes to desired `stopped`
+        var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == originalRun.Id);
+        Assert.Equal(ContainerDesiredStates.Stopped, container.DesiredState);
+    }
+
+    [Fact]
+    public async Task RuntimeFailure_PreExecution_WithBudget_RequeuesSilently()
+    {
+        await postgres.ResetAsync();
+        // reconciler case: the container died while the Run was still `starting` — no agent_started
+        await SeedFailedAttemptAsync(RunErrorCodes.RuntimeFailure);
+        await NewConsumer().RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Status == OrchestrationTaskStatuses.Queued);
+        Assert.Equal(1, task.AutomaticRetriesUsed);
+        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task StartupTimeout_BudgetExhausted_FinallyFailsWithExhaustedNotification()
+    {
+        await postgres.ResetAsync();
+        var (originalTask, originalRun) = await SeedFailedAttemptAsync(
+            RunErrorCodes.StartupTimeout, attemptNumber: 2, automaticRetriesUsed: 1);
+        await NewConsumer().RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == originalTask.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Failed, task.Status);
+        Assert.Equal(RunErrorCodes.StartupTimeout, task.FailureReason);
+        Assert.NotNull(task.CompletedAt);
+        Assert.Equal(1, task.AutomaticRetriesUsed); // never grew past the exhausted budget
+        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
+        Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
+        Assert.Null(workflow.CurrentTaskId);
+        var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == task.TriggerCommandId);
+        Assert.Equal(AgentCommandStatuses.Failed, command.Status);
+        // no fresh job was created behind the exhausted budget
+        Assert.Single(await db.OrchestrationJobs.AsNoTracking().Where(j => j.TaskId == task.Id).ToListAsync());
+        // one notification in the 06 §13 template, exhausted-retries closing
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        Assert.Equal(originalRun.Id.ToString(), notification.IdempotencyKey);
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.Contains("Task failed: /plan", text, StringComparison.Ordinal);
+        Assert.Contains("| Attempt: #2 | Stage: Startup (never became ready)", text, StringComparison.Ordinal);
+        Assert.Contains("startup_timeout", text, StringComparison.Ordinal);
+        Assert.Contains("Automatic retries exhausted.", text, StringComparison.Ordinal);
+        Assert.Contains("(or use /retry)", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StartupTimeout_ZeroBudget_FinallyFailsWithPlainClosing()
+    {
+        await postgres.ResetAsync();
+        var (originalTask, _) = await SeedFailedAttemptAsync(RunErrorCodes.StartupTimeout,
+            retryPolicy: """{"max_automatic_retries": 0, "initial_backoff_seconds": 5}""");
+        await NewConsumer().RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var reloaded = await ReloadTaskAsync(originalTask.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Failed, reloaded.Status);
+        Assert.Equal(0, reloaded.AutomaticRetriesUsed);
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.DoesNotContain("Automatic retries exhausted", text, StringComparison.Ordinal); // nothing was ever retried
+        Assert.Contains("The Workflow is waiting for human input", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RuntimeFailure_AfterExecutionBegan_NeverAutoRetries()
+    {
+        await postgres.ResetAsync();
+        // the agent STARTED (agent_started persisted) — decision 70: /retry is the only recovery path
+        await SeedFailedAttemptAsync(RunErrorCodes.RuntimeFailure, executionStarted: true);
+        await NewConsumer().RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Status == OrchestrationTaskStatuses.Failed);
+        Assert.Equal(0, task.AutomaticRetriesUsed);
+        Assert.Equal(WorkflowStatuses.WaitingForHuman,
+            (await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId)).Status);
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.Contains("| Stage: Execution", text, StringComparison.Ordinal); // post-execution stage
+        Assert.DoesNotContain("Automatic retries exhausted", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TimedOutRun_FinallyFailsWithNotification()
+    {
+        await postgres.ResetAsync();
+        var db = postgres.NewDbContext();
+        var (originalTask, originalRun) = await SeedStartingRunAsync(RunStatuses.Succeeded);
+        await db.Runs.Where(r => r.Id == originalRun.Id).ExecuteUpdateAsync(set =>
+        {
+            set.SetProperty(r => r.Status, RunStatuses.TimedOut);
+            set.SetProperty(r => r.ErrorMessage, "reconciled: the run exceeded max_run_duration");
+        });
+        db.ChangeTracker.Clear();
+        await NewConsumer().RunCycleAsync(default);
+
+        var reloaded = await ReloadTaskAsync(originalTask.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Failed, reloaded.Status);
+        Assert.Equal("max_run_duration", reloaded.FailureReason);
+        Assert.Equal(0, reloaded.AutomaticRetriesUsed); // never retried (03 §3)
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
+        var text = body.RootElement.GetProperty("text").GetString()!;
+        Assert.Contains("Failure: max_run_duration", text, StringComparison.Ordinal);
+        Assert.Contains("| Attempt: #1 | Stage: Execution", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Automatic retries exhausted", text, StringComparison.Ordinal);
     }
 }

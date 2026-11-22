@@ -274,6 +274,15 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         await postgres.ResetAsync();
         await using var scope = NewScope();
         var run = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(5), progressAgo: TimeSpan.FromSeconds(1), heartbeatAgo: TimeSpan.FromSeconds(1));
+        // the run WAS executing (the real pipeline persists agent_started before `running`) — a death
+        // after execution began is final: notification, never an automatic retry (decisions 70/29)
+        var dbSeed = postgres.NewDbContext();
+        dbSeed.RunEvents.Add(new RunEvent
+        {
+            Id = Guid.NewGuid(), RunId = run.Id, EventId = "evt-started",
+            Type = RunEventTypes.AgentStarted, OccurredAt = DateTime.UtcNow.AddMinutes(5), ReceivedAt = DateTime.UtcNow.AddMinutes(5),
+        });
+        await dbSeed.SaveChangesAsync();
         // the container died (observed by Komodo) and never emitted a terminal callback
         scope.Komodo.States[$"pi-session-{run.Id}"] = "exited";
 

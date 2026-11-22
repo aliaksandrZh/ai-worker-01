@@ -45,11 +45,37 @@ public static class RetryPolicies
             initial_backoff_seconds = (int)backoff.TotalSeconds,
         });
     }
+
+    /// <summary>Reads a pinned policy back (inverse of `Effective`, same defaults on missing/invalid).</summary>
+    public static RetryPolicyValues Parse(string? json)
+    {
+        var values = new RetryPolicyValues(DefaultMaxAutomaticRetries, (int)DefaultInitialBackoff.TotalSeconds);
+        if (string.IsNullOrWhiteSpace(json))
+            return values;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.TryGetProperty("max_automatic_retries", out var max) && max.TryGetInt32(out var retries) && retries >= 0)
+                values = values with { MaxAutomaticRetries = retries };
+            if (root.TryGetProperty("initial_backoff_seconds", out var backoffSeconds) && backoffSeconds.TryGetInt32(out var seconds) && seconds >= 0)
+                values = values with { InitialBackoffSeconds = seconds };
+            return values;
+        }
+        catch (JsonException)
+        {
+            return new RetryPolicyValues(DefaultMaxAutomaticRetries, (int)DefaultInitialBackoff.TotalSeconds);
+        }
+    }
 }
 
 /// <summary>Non-null = rejection (reason + short detail) for the processor's RejectAsync path; null =
 /// admitted (Task+Job written) or the command stayed untouched (control commands, non-failed /retry).</summary>
 public sealed record AdmissionOutcome(string Reason, string Detail);
+
+/// <summary>The pinned effective policy a consumer acts on (decision 28: repository override not
+/// representable in the V1 configuration shape — profile level only).</summary>
+public sealed record RetryPolicyValues(int MaxAutomaticRetries, int InitialBackoffSeconds);
 
 /// <summary>
 /// The admission stage (04 §2, 06 §12, task 07): gates an authorized task-producing command, then

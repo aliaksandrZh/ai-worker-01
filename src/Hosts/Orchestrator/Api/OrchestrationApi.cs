@@ -265,11 +265,12 @@ public static class OrchestrationApi
                         AgentCommandRejectionReplies.Text(rejection.Reason, rejection.Detail), Guid.NewGuid()),
                     cancellationToken);
             }
-            else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop)
+            else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
             {
-                // ticket 14: /stop is a state-changing control command (StopCommandHandler); the runtime-signal
-                // client is a decision-65 dependency of the same transactional path.
-                await ControlCommandHandler.HandleAsync(db, command, workItem, repository, runtimeApi, cancellationToken);
+                // ticket 14: /stop is a state-changing control command (StopCommandHandler), ticket 15:
+                // /retry too (RetryCommandHandler); the runtime-signal client is a decision-65 dependency
+                // of the same transactional path.
+                await ControlCommandHandler.HandleAsync(db, command, workItem, repository, runtimeApi, metrics, cancellationToken);
             }
         }
 

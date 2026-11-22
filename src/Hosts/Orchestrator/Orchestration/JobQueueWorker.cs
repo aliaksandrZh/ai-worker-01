@@ -104,9 +104,9 @@ public sealed class JobQueueWorker(
         var skip = skipped.ToArray();
         // Paused repositories are skipped in the claim query itself (decision 75: queued Tasks stay
         // unclaimed, never claimed-and-released); `skipped` keeps jobs released/swept earlier this tick
-        // from being instantly re-claimed.
+        // from being instantly re-claimed; future `available_at` (retry backoff, ticket 15) waits.
         var candidates = await db.OrchestrationJobs
-            .FromSqlInterpolated($"SELECT j.* FROM orchestration_job j JOIN task t ON t.id = j.task_id JOIN workflow w ON w.id = t.workflow_id JOIN work_item wi ON wi.id = w.work_item_id JOIN repository r ON r.id = wi.repository_id WHERE j.status = {OrchestrationJobStatuses.Pending} AND r.is_enabled AND NOT (j.id = ANY({skip})) ORDER BY j.available_at, j.priority DESC LIMIT {limit} FOR UPDATE SKIP LOCKED")
+            .FromSqlInterpolated($"SELECT j.* FROM orchestration_job j JOIN task t ON t.id = j.task_id JOIN workflow w ON w.id = t.workflow_id JOIN work_item wi ON wi.id = w.work_item_id JOIN repository r ON r.id = wi.repository_id WHERE j.status = {OrchestrationJobStatuses.Pending} AND j.available_at <= {now} AND r.is_enabled AND NOT (j.id = ANY({skip})) ORDER BY j.available_at, j.priority DESC LIMIT {limit} FOR UPDATE SKIP LOCKED")
             .ToListAsync(cancellationToken);
 
         var claimed = new List<(Guid, Guid)>();

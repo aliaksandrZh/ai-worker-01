@@ -70,11 +70,12 @@ public class OrchestratorCoreModelTests
         Assert.Equal("task", entity.GetTableName());
 
         var properties = entity.GetProperties().ToDictionary(p => p.Name);
-        Assert.Equal(16, properties.Count);
+        Assert.Equal(17, properties.Count);
         foreach (var required in new[] { nameof(OrchestrationTask.Id), nameof(OrchestrationTask.WorkflowId),
                      nameof(OrchestrationTask.Sequence), nameof(OrchestrationTask.Type),
                      nameof(OrchestrationTask.AgentProfileVersionId), nameof(OrchestrationTask.Status),
-                     nameof(OrchestrationTask.CreatedAt), nameof(OrchestrationTask.RetryPolicy) })
+                     nameof(OrchestrationTask.CreatedAt), nameof(OrchestrationTask.RetryPolicy),
+                     nameof(OrchestrationTask.AutomaticRetriesUsed) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");
         foreach (var nullable in new[] { nameof(OrchestrationTask.TriggerCommandId),
                      nameof(OrchestrationTask.TargetHeadSha), nameof(OrchestrationTask.TargetBaseSha),

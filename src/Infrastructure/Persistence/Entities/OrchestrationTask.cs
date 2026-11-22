@@ -57,4 +57,7 @@ public class OrchestrationTask
     public string? FailureReason { get; set; }
     /// <summary>Effective retry policy pinned at Task creation, jsonb (02 §10, decision 28).</summary>
     public string RetryPolicy { get; set; } = null!;
+    /// <summary>Decision 28 budget: automatic retries spent over the Task's lifetime (manual /retry
+    /// attempts never consume it). Checked and incremented by the terminal-Run consumer (ticket 15).</summary>
+    public int AutomaticRetriesUsed { get; set; }
 }

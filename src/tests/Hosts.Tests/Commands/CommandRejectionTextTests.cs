@@ -33,6 +33,14 @@ public class CommandRejectionTextTests
         const string planMissing = AgentCommandRejectionReasons.PlanNotAvailable;
         Assert.Contains("no completed plan", AgentCommandRejectionReplies.Text(planMissing, ""), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("/plan", AgentCommandRejectionReplies.Text(planMissing, ""), StringComparison.Ordinal);
+
+        // ticket 15 (06 §9a): /retry rejections get distinct actionable lines
+        const string notRetryable = AgentCommandRejectionReasons.TaskNotRetryable;
+        Assert.Contains("no failed task to retry", AgentCommandRejectionReplies.Text(notRetryable, ""), StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(AgentCommandRejectionReplies.Text(AgentCommandRejectionReasons.UnfinishedTaskExists, ""),
+            AgentCommandRejectionReplies.Text(notRetryable, ""));
+        const string profileNotReady = AgentCommandRejectionReasons.AgentProfileNotReady;
+        Assert.Contains("disabled or its image is not ready", AgentCommandRejectionReplies.Text(profileNotReady, ""), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -29,6 +29,10 @@ public static class AgentCommandRejectionReasons
     public const string AgentProfileNotConfigured = "agent_profile_not_configured";
     public const string AgentImageNotReady = "agent_image_not_ready";
     public const string PlanNotAvailable = "plan_not_available";
+    /// <summary>Ticket 15 (06 §9a, 04 §7): /retry rejected — the most recent non-cancelled task is not a failed one.</summary>
+    public const string TaskNotRetryable = "task_not_retryable";
+    /// <summary>Ticket 15 (06 §9a, 04 §7): /retry rejected — the pinned profile version is disabled or not `ready`.</summary>
+    public const string AgentProfileNotReady = "agent_profile_not_ready";
     /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued (decision 31, 04 §7).</summary>
     public const string ReviewHeadChanged = "review_head_changed_before_execution";
     /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx, ticket 09).</summary>
@@ -83,6 +87,13 @@ public static class AgentCommandRejectionReplies
             "Command rejected: the agent image for this operation is not ready (still building or failed to build). Try again later.",
         AgentCommandRejectionReasons.PlanNotAvailable =>
             "Command rejected: there is no completed plan to approve — run /plan first.",
+        AgentCommandRejectionReasons.TaskNotRetryable =>
+            "Command rejected: there is no failed task to retry — /retry repeats this work item's most recent "
+            + "non-cancelled task (cancelled ones are skipped) and it must have failed. "
+            + "To run new work, post the original command again.",
+        AgentCommandRejectionReasons.AgentProfileNotReady =>
+            "Command rejected: the failed task's agent profile version is disabled or its image is not ready "
+            + "(still building or failed to build). Restore the version, then post /retry again.",
         _ => "Command rejected.",
     };
 

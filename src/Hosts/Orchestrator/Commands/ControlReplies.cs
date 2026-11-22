@@ -290,14 +290,14 @@ public static class HelpAvailability
 /// Executes an authorized control command inside the caller's (processor's) transaction: renders the
 /// reply from current rows and enqueues exactly one Outbox comment (decision 29), then marks the
 /// command `processed`. /status and /help create no Workflow, Task, Run, Session or Container row;
-/// /stop (ticket 14) is a state-changing control command handed to StopCommandHandler — it cancels
-/// queued work and signals the runtime for the active run in the same transaction.
+/// /stop (ticket 14) and /retry (ticket 15) are state-changing control paths — StopCommandHandler
+/// cancels queued work and signals the runtime; RetryCommandHandler requeues the last failed Task.
 /// </summary>
 public static class ControlCommandHandler
 {
     public static async Task HandleAsync(
         AppDbContext db, AgentCommand command, WorkItem workItem, Repository repository,
-        RuntimeApiClient? runtimeApi, CancellationToken cancellationToken)
+        RuntimeApiClient? runtimeApi, CommandMetrics metrics, CancellationToken cancellationToken)
     {
         if (command.CommandName == AgentCommandNames.Stop)
         {
@@ -305,6 +305,13 @@ public static class ControlCommandHandler
             await StopCommandHandler.HandleAsync(db, command, workItem, repository,
                 runtimeApi ?? throw new InvalidOperationException("the /stop control path requires the Runtime API client"),
                 cancellationToken);
+            return;
+        }
+        if (command.CommandName == AgentCommandNames.Retry)
+        {
+            // ticket 15: a state-changing control path too — RetryCommandHandler marks the command
+            // processed (accepted silently) or rejected with exactly one reply
+            await RetryCommandHandler.HandleAsync(db, command, workItem, repository, metrics, cancellationToken);
             return;
         }
 

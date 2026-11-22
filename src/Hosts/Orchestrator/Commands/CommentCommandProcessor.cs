@@ -200,13 +200,13 @@ public sealed class CommentCommandProcessor(
                 : null;
             if (outcome is { } rejection)
                 await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);
-            else if (command.Status == AgentCommandStatuses.Authorized && command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop)
+            else if (command.Status == AgentCommandStatuses.Authorized && command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
                 // Control commands: /status//help answered in place (task 08, decisions 29/71/75); /stop is
-                // a state-changing control path handled by StopCommandHandler (ticket 14, decisions 38/61).
-                // The runtime-signal client rides the scope (same transaction precedent as the
-                // collaborator permission lookup HTTP).
+                // a state-changing control path handled by StopCommandHandler (ticket 14, decisions 38/61)
+                // and /retry by RetryCommandHandler (ticket 15, decisions 27/65/70). The runtime-signal
+                // client rides the scope (same transaction precedent as the collaborator permission lookup HTTP).
                 await ControlCommandHandler.HandleAsync(db, command, workItem, repository,
-                    scope.ServiceProvider.GetService<RuntimeApiClient>(), cancellationToken);
+                    scope.ServiceProvider.GetService<RuntimeApiClient>(), metrics, cancellationToken);
 
             MarkProcessed(githubEvent);
             await db.SaveChangesAsync(cancellationToken);

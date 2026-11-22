@@ -616,4 +616,29 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal(OrchestrationJobStatuses.Pending, job.Status);
         Assert.Equal(0, harness.Metrics.JobsClaimedTotal);
     }
+
+    [Fact]
+    public async Task Claim_WaitsForJobsAvailableInTheFuture()
+    {
+        // ticket 15: the automatic retry's backoff rides job.available_at — a pending job scheduled in
+        // the future is never claimed before its time (02 §19 FIFO by available_at)
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false,
+            availableAt: DateTime.UtcNow.AddSeconds(30));
+        db.ChangeTracker.Clear();
+        var harness = OrchestrationTestSupport.NewWorker(postgres);
+        StubPermission200(harness.Handler);
+
+        await harness.Worker.RunCycleAsync(TestToken);
+
+        db.ChangeTracker.Clear();
+        var job = await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.Id == seeded.Job.Id);
+        Assert.Equal(OrchestrationJobStatuses.Pending, job.Status);
+        Assert.Equal(0, harness.Metrics.JobsClaimedTotal);
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status);
+    }
 }

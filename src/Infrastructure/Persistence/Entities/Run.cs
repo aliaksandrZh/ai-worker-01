@@ -27,10 +27,11 @@ public static class RunErrorCodes
     public const string IdleTimeout = "idle_timeout";
     public const string RequiredPermissionDenied = "required_permission_denied";
 
-    /// <summary>Failure codes whose terminal notification must reach the owner immediately (decision
-    /// 29/69: reconciled timeouts, the permission denial, and reconciled container deaths are
-    /// operator-actionable — the generic task-failure notification template remains ticket 15's).</summary>
-    public static readonly string[] NotifyOn = [GithubPublicationFailed, RuntimeFailure, StartupTimeout, IdleTimeout, RequiredPermissionDenied];
+    /// <summary>Transient pre-execution infrastructure codes (decision 70, ticket 15): automatic retry
+    /// applies only to these and only when the Run never began executing (no `agent_started` event).
+    /// `startup_timeout` is pre-execution by definition; `runtime_failure` is retried pre-execution only
+    /// (a container death before the agent started — RunReconciler), never after execution began.</summary>
+    public static readonly string[] TransientPreExecution = [StartupTimeout, RuntimeFailure];
 }
 
 /// <summary>

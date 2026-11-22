@@ -888,6 +888,10 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("agent_profile_version_id");
 
+                    b.Property<int>("AutomaticRetriesUsed")
+                        .HasColumnType("integer")
+                        .HasColumnName("automatic_retries_used");
+
                     b.Property<DateTime?>("CancelledAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("cancelled_at");
