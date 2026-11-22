@@ -162,7 +162,8 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
             // Atomic write-back: a fast-settling container (cached image) can deliver the terminal callback
             // before this lands — the WHERE keeps `starting` from ever clobbering a terminal Run state.
             await db.Runs
-                .Where(r => r.Id == run.Id && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting))
+                .Where(r => r.Id == run.Id && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting)
+                    && r.Status != RunStatuses.Running) // ticket 13: never downgrade an event-driven Running run
                 .ExecuteUpdateAsync(set => set
                     .SetProperty(r => r.Status, RunStatuses.Starting)
                     .SetProperty(r => r.StartedAt, now), cancellationToken);

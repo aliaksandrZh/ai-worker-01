@@ -215,12 +215,14 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set =>
         {
             set.SetProperty(r => r.Status, RunStatuses.Failed);
-            set.SetProperty(r => r.ErrorCode, RunErrorCodes.RuntimeFailure);
+            set.SetProperty(r => r.ErrorCode, "manifest_invalid");
         });
         db.ChangeTracker.Clear();
         await NewConsumer().RunCycleAsync(default);
 
-        // the generic task-failure notification template is ticket 15's — not this path
+        // the generic task-failure notification template is ticket 15's — codes outside the
+        // decision-29/69 notify set (github_publication_failed / reconciled timeouts / permission
+        // denial / reconciled runtime_failure) take that path, not this one
         Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
     }
 

@@ -21,12 +21,20 @@ builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection("Sto
 builder.Services.AddHttpClient("komodo");
 builder.Services.AddHttpClient<IKomodoClient, KomodoHttpClient>();
 builder.Services.AddSingleton<IReadinessCheck, KomodoReadinessCheck>();
+// Ticket 13: the §16 knobs (from the configuration plane's system.yaml) the reconcilers enforce.
+builder.Services.AddSingleton(RuntimeLimits.Load(builder.Configuration["PI_AGENT_CONFIG_DIR"]));
 builder.Services.AddSingleton<RuntimeStorageService>();
 builder.Services.AddSingleton<RunCallbackTokenFilter>();
 builder.Services.AddSingleton<DbSizeCycle>();
 builder.Services.AddSingleton<IWorkerCycle>(serviceProvider => serviceProvider.GetRequiredService<DbSizeCycle>());
 builder.Services.AddSingleton<RunReconcilerCycle>();
 builder.Services.AddSingleton<IWorkerCycle>(serviceProvider => serviceProvider.GetRequiredService<RunReconcilerCycle>());
+// Ticket 13: the execution-limit reconciler (startup/idle/max_run_duration) + the decision-77 orphan
+// reconciler (grace/quarantine/delete behind Host-Monitor telemetry).
+builder.Services.AddSingleton<TimeoutSweeper>();
+builder.Services.AddSingleton<IWorkerCycle, TimeoutSweeper>();
+builder.Services.AddSingleton<OrphanReconciler>();
+builder.Services.AddSingleton<IWorkerCycle, OrphanReconciler>();
 // Ticket 14: reconciliation leg of the graceful stop — Runs never confirming their stop are cancelled.
 builder.Services.AddSingleton<StopConfirmSweeper>();
 builder.Services.AddSingleton<IWorkerCycle, StopConfirmSweeper>();
@@ -36,6 +44,7 @@ builder.Services.AddSingleton<IWorkerMetrics, RuntimeApiMetrics>();
 var app = builder.Build();
 app.MapPiEndpoints();
 app.MapRunPipelineApi();
+app.MapMonitorTelemetryApi();
 app.Run();
 
 public partial class Program;

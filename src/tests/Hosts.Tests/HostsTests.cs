@@ -117,11 +117,14 @@ public class WorkerMetricKeyTests
     {
         var collect = new HostMonitorMetrics(
                 Microsoft.Extensions.Options.Options.Create(new HostMonitorOptions { ManagedRoot = Path.GetTempPath() }),
-                State())
+                State(), null!)
             .Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("storageFreeBytes"));
         Assert.True(collect.ContainsKey("storageManagedUsageBytes"));
-        Assert.True(collect.ContainsKey("reconciliationDesiredObservedMismatchCount"));
+        // ticket 13: the monitor's last-cycle observation counts + the orphan gauge the Runtime API owns
+        Assert.True(collect.ContainsKey("containersObserved"));
+        Assert.True(collect.ContainsKey("busyContainers"));
+        Assert.True(collect.ContainsKey("workflowDirectories"));
         Assert.True(collect.ContainsKey("reconciliationOrphanCandidateCount"));
         Assert.True((long?)collect["storageFreeBytes"] > 0);
     }

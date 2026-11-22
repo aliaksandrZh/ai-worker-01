@@ -403,11 +403,12 @@ async function main() {
 
   // ---- result manifest: validate in place, derive Git facts, correlate publications ----
   const manifest = loadManifest(workspace, log);
-  const invalid = validateManifest(manifest, workspace, observedCompletedToolCalls, requiredPublicationKinds);
+  const invalid = validateManifest(manifest, workspace, observedCompletedToolCalls, requiredPublicationKinds, mapper.deniedToolCallIds);
   if (invalid !== null) {
     log(`result manifest invalid: ${invalid}\n`);
     const code = invalid.startsWith("artifact_too_large") ? "artifact_too_large"
       : invalid.startsWith("github_publication_failed") ? "github_publication_failed"
+      : invalid.startsWith("required_permission_denied") ? "required_permission_denied"
       : "manifest_invalid";
     return await spoolFailure(code, `result manifest invalid — ${invalid}`);
   }

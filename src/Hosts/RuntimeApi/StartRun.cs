@@ -118,7 +118,8 @@ public static class StartRunHandler
             workspace.Status = WorkspaceStatuses.InUse;
             workspace.LastUsedAt = now;
             await db.Runs
-                .Where(r => r.Id == runId && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting))
+                // ticket 13: never downgrade a Run that already went `running` (an event arrived mid-provisioning)
+                .Where(r => r.Id == runId && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting) && r.Status != RunStatuses.Running)
                 .ExecuteUpdateAsync(set => set
                     .SetProperty(r => r.Status, RunStatuses.Starting)
                     .SetProperty(r => r.StartedAt, now), cancellationToken);

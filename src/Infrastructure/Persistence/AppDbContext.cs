@@ -34,6 +34,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<RunCredential> RunCredentials => Set<RunCredential>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<RunContextSnapshot> RunContextSnapshots => Set<RunContextSnapshot>();
+    public DbSet<MonitorObservation> MonitorObservations => Set<MonitorObservation>();
+    public DbSet<OrphanCandidate> OrphanCandidates => Set<OrphanCandidate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -387,6 +389,23 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(s => s.TaskId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- host monitor + reconciliation (task 13, decisions 62/68/77) ----
+
+        modelBuilder.Entity<MonitorObservation>(entity =>
+        {
+            entity.ToTable("monitor_observation");
+            // Latest-facts store (single row): reconciliation reads only the newest observation.
+            entity.Property(o => o.Containers).HasColumnType("jsonb");
+            entity.Property(o => o.Storage).HasColumnType("jsonb");
+        });
+
+        modelBuilder.Entity<OrphanCandidate>(entity =>
+        {
+            entity.ToTable("orphan_candidate");
+            entity.HasIndex(c => c.DirectoryName).IsUnique();
+            entity.HasIndex(c => new { c.Status, c.UpdatedAt });
         });
     }
 }

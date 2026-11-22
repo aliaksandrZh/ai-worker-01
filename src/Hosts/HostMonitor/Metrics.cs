@@ -25,16 +25,21 @@ public sealed class StorageReadinessCheck(IOptions<HostMonitorOptions> options) 
     }
 }
 
-/// <summary>§14 baseline: storage telemetry + reconciliation counters (placeholders until later tasks).</summary>
-public sealed class HostMonitorMetrics(IOptions<HostMonitorOptions> options, WorkerLoopState state)
+/// <summary>§14 baseline: storage + last-cycle observation counts (ticket 13).</summary>
+public sealed class HostMonitorMetrics(IOptions<HostMonitorOptions> options, WorkerLoopState state, HostMonitorCycle? cycle)
     : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()
     {
         yield return new KeyValuePair<string, object?>("storageFreeBytes", TryFreeBytes());
-        yield return new KeyValuePair<string, object?>("storageManagedUsageBytes", null);
-        yield return new KeyValuePair<string, object?>("reconciliationDesiredObservedMismatchCount", 0L);
-        yield return new KeyValuePair<string, object?>("reconciliationOrphanCandidateCount", 0L);
+        var last = cycle?.LastCycle;
+        yield return new KeyValuePair<string, object?>("storageManagedUsageBytes", last is null ? null : HostMonitorCycle.DirectorySize(options.Value.ManagedRoot));
+        yield return new KeyValuePair<string, object?>("containersObserved", last?.ContainersObserved);
+        yield return new KeyValuePair<string, object?>("busyContainers", last?.BusyContainers);
+        yield return new KeyValuePair<string, object?>("workflowDirectories", last?.WorkflowDirectories);
+        // orphan decisions live in the Runtime API's orphan_candidate table (decision 77); the monitor
+        // only reports the tree, so this gauge is the Runtime API's to publish
+        yield return new KeyValuePair<string, object?>("reconciliationOrphanCandidateCount", null);
     }
 
     private long? TryFreeBytes()

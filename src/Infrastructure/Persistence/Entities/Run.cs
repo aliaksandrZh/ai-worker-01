@@ -22,6 +22,15 @@ public static class RunErrorCodes
     public const string RuntimeFailure = "runtime_failure";
     public const string ArtifactTooLarge = "artifact_too_large";
     public const string ManifestInvalid = "manifest_invalid";
+    // Ticket 13 (04 §7): the three execution-limit codes + the decision-69 permission denial.
+    public const string StartupTimeout = "startup_timeout";
+    public const string IdleTimeout = "idle_timeout";
+    public const string RequiredPermissionDenied = "required_permission_denied";
+
+    /// <summary>Failure codes whose terminal notification must reach the owner immediately (decision
+    /// 29/69: reconciled timeouts, the permission denial, and reconciled container deaths are
+    /// operator-actionable — the generic task-failure notification template remains ticket 15's).</summary>
+    public static readonly string[] NotifyOn = [GithubPublicationFailed, RuntimeFailure, StartupTimeout, IdleTimeout, RequiredPermissionDenied];
 }
 
 /// <summary>

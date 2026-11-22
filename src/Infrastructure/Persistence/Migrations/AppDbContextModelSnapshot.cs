@@ -779,6 +779,39 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("github_review", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.MonitorObservation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Containers")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("containers");
+
+                    b.Property<DateTime>("ObservedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("observed_at");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("Storage")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("storage");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_monitor_observation");
+
+                    b.ToTable("monitor_observation", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrchestrationJob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -938,6 +971,61 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_task_workflow_id_sequence");
 
                     b.ToTable("task", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrphanCandidate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("Details")
+                        .HasColumnType("text")
+                        .HasColumnName("details");
+
+                    b.Property<string>("DirectoryName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("directory_name");
+
+                    b.Property<DateTime>("FirstSeenAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_at");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("path");
+
+                    b.Property<DateTime?>("QuarantinedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("quarantined_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_orphan_candidate");
+
+                    b.HasIndex("DirectoryName")
+                        .IsUnique()
+                        .HasDatabaseName("ix_orphan_candidate_directory_name");
+
+                    b.HasIndex("Status", "UpdatedAt")
+                        .HasDatabaseName("ix_orphan_candidate_status_updated_at");
+
+                    b.ToTable("orphan_candidate", (string)null);
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OutboxAction", b =>

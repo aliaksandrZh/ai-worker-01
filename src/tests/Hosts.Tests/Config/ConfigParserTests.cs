@@ -463,7 +463,7 @@ public class ConfigParserTests : IDisposable
         Assert.Contains(parsed.Profiles, p => p.Name == "planner");
         var planner = parsed.Profiles.Single(p => p.Name == "planner");
         Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
-        Assert.Equal("1.1.1", planner.BridgeVersion); // ticket 14 bumped the shared bridge (graceful stop)
+        Assert.Equal("1.2.0", planner.BridgeVersion); // ticket 13 bumped the shared bridge (permission_blocked recording)
     }
 
     private static string? FindShippedConfigRoot()

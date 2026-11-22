@@ -68,6 +68,21 @@ public static class CallbackHandler
             await db.AgentSessions.Where(s => s.RunId == runId)
                 .ExecuteUpdateAsync(set => set.SetProperty(s => s.LastActivityAt, now), cancellationToken);
         }
+        // Ticket 13 (03 §3): `agent_started` is the readiness fact — the Run leaves `starting` (or the
+        // still-dispatching `pending`) for `running` here; the sweeper's startup_timeout judges exactly
+        // the runs that never emitted it. Events can legitimately arrive WHILE /start is still
+        // provisioning (observed live: a fast container emits agent_start before /start returns), so
+        // the transition must cover both pre-dispatch states and pin StartedAt when it is still unset.
+        if (request.Type == RunEventTypes.AgentStarted)
+        {
+            var now = DateTime.UtcNow;
+            await db.Runs.Where(r => r.Id == runId
+                    && (r.Status == RunStatuses.Starting || r.Status == RunStatuses.Pending))
+                .ExecuteUpdateAsync(set => set
+                    .SetProperty(r => r.Status, RunStatuses.Running)
+                    .SetProperty(r => r.LastProgressAt, now)
+                    .SetProperty(r => r.StartedAt, r => r.StartedAt ?? now), cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
         return Results.Json(new { persisted = true });
     }

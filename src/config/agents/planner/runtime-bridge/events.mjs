@@ -4,6 +4,13 @@
  * deltas accumulate and flush as `assistant_output` on the event cadence or at any turn/tool boundary.
  * Heartbeats, thinking deltas, and queue updates are never progress and are not produced here.
  *
+ * Ticket 13 (decision 69, fail-closed): a `permission_denied` stream record (the unattended
+ * permission policy's denial of a tool/MCP operation) maps to the `permission_blocked` RunEvent and
+ * is collected in `deniedToolCallIds` — the manifest validation turns a REQUIRED publication whose
+ * tool call was denied into a terminal `required_permission_denied` failure. The denial itself is
+ * answered to the agent by the permission layer (never a parked dialog); the Bridge only records and
+ * verifies.
+ *
  * Two record shapes share this mapper (decision 56: the image owns the agent):
  * - real Pi (pi 04 §4 shapes): `message_update` carries `usage` + the nested `assistantMessageEvent`
  *   (`{type:"text_delta", delta}`); tool/agent events carry their fields at the record top level
@@ -22,6 +29,7 @@ export class EventMapper {
     this.sequence = 0;
     this.pending = []; // [{id, text}] — deltas since the last flush
     this.settled = false;
+    this.deniedToolCallIds = new Set(); // decision 69: tool calls denied by the permission policy
   }
 
   nextEventId(prefix = "evt") {
@@ -70,6 +78,17 @@ export class EventMapper {
       case "tool_execution_end":
         this.flushAggregated();
         this.push("tool_completed", endPayload(data));
+        break;
+      case "permission_denied":
+        // decision 69: recorded as `permission_blocked` (never progress, never a timer reset) and
+        // tracked so the manifest validation can fail the mandatory work as `required_permission_denied`
+        this.flushAggregated();
+        if (typeof data.toolCallId === "string") this.deniedToolCallIds.add(data.toolCallId);
+        this.push("permission_blocked", {
+          ...(typeof data.toolCallId === "string" ? { toolCallId: data.toolCallId } : {}),
+          ...(typeof data.toolName === "string" ? { toolName: data.toolName } : {}),
+          ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+        });
         break;
       case "agent_settled":
         this.flushAggregated();

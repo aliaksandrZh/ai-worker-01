@@ -99,11 +99,13 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     command.RejectionReason = task.FailureReason;
                     command.ProcessedAt = now;
                 }
-                // decision 42 (06 §13, ticket 12): the unconfirmed mandatory publication is the one
-                // failure the OWNER must hear about immediately with the artifacts-kept note — the
-                // generic task-failure notification template remains ticket 15's.
-                if (run.ErrorCode == RunErrorCodes.GithubPublicationFailed)
-                    await EnqueuePublicationFailedNotificationAsync(db, task, run, workflow, cancellationToken);
+                // Owner-facing failure notifications (decision 29): the unconfirmed mandatory
+                // publication (decision 42, ticket 12) and — ticket 13 — the reconciled execution
+                // limits (`startup_timeout`/`idle_timeout`), the decision-69 permission denial, and
+                // any failure reason the terminal consumer reads. The generic task-failure
+                // notification template remains ticket 15's.
+                if (RunErrorCodes.NotifyOn.Contains(run.ErrorCode))
+                    await EnqueueFailureNotificationAsync(db, task, run, workflow, cancellationToken);
                 break;
 
             case RunStatuses.Cancelled:
@@ -162,11 +164,11 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
         return true;
     }
 
-    /// <summary>The decision-42 failure notification (06 §13): command, agent, attempt, the publication
-    /// stage and the error with a diagnostic id — never re-publishes the agent's result; the artifacts
-    /// stay. The terminal consumer transitions each Task exactly once, and the enqueue rides the same
-    /// change set, so one failed Run produces at most one notification.</summary>
-    private static async Task EnqueuePublicationFailedNotificationAsync(
+    /// <summary>The failure notification (06 §13): command, agent, attempt, stage and the error with a
+    /// diagnostic id — never re-publishes the agent's result; the artifacts stay. The terminal
+    /// consumer transitions each Task exactly once, and the enqueue rides the same change set, so one
+    /// failed Run produces at most one notification.</summary>
+    private static async Task EnqueueFailureNotificationAsync(
         AppDbContext db, OrchestrationTask task, Run run, Workflow workflow, CancellationToken cancellationToken)
     {
         var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
@@ -182,11 +184,18 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
             OrchestrationTaskTypes.TestDesign => "/test-cases",
             _ => $"/{task.Type.Replace('_', '-')}",
         };
+        var stage = run.ErrorCode switch
+        {
+            RunErrorCodes.GithubPublicationFailed => "Required GitHub publication",
+            RunErrorCodes.StartupTimeout => "Startup (never became ready)",
+            RunErrorCodes.IdleTimeout => "Idle reconciliation (confirmed hang)",
+            RunErrorCodes.RequiredPermissionDenied => "Required permission denied",
+            _ => "Execution",
+        };
         var text =
             $"Task failed: {commandToken}\n" +
-            $"Agent: {profileName ?? "unknown"} | Attempt: #{run.AttemptNumber} | Stage: Required GitHub publication\n" +
-            $"Failure: the run could not confirm its mandatory GitHub publication " +
-            $"({RunErrorCodes.GithubPublicationFailed}) (id: run_{run.Id})\n\n" +
+            $"Agent: {profileName ?? "unknown"} | Attempt: #{run.AttemptNumber} | Stage: {stage}\n" +
+            $"Failure: {run.ErrorCode} — {run.ErrorMessage ?? "see the run's logs"} (id: run_{run.Id})\n\n" +
             "The produced artifacts are kept. The Workflow is waiting for human input.\n" +
             "Check for an already-posted result comment, resolve the underlying issue and submit the command again (or use /retry).";
         await new OutboxActionStore(db).EnqueueAsync(

@@ -57,3 +57,23 @@ public static class DockerRegistrationExtensions
         return services;
     }
 }
+
+/// <summary>HTTP over the docker unix socket, shared by every socket-mounted component (readiness
+/// check, Build Worker engine client, Host Monitor observer) — one connect callback, no duplication.</summary>
+public static class SocketHttpClient
+{
+    public static HttpClient Create(IOptions<DockerOptions> options, int connectTimeoutSeconds = 5)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            ConnectCallback = async (_, token) =>
+            {
+                var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.IP);
+                await socket.ConnectAsync(new UnixDomainSocketEndPoint(options.Value.SocketPath), token);
+                return new NetworkStream(socket, ownsSocket: true);
+            },
+            ConnectTimeout = TimeSpan.FromSeconds(connectTimeoutSeconds),
+        };
+        return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }; // callers bound via cancellation/timeout
+    }
+}

@@ -106,8 +106,9 @@ public static class ConfigValidator
                     $"{file}: bridge.event_cadence must be positive");
             }
             if (profile.BridgeBehavior is { } behavior)
-                Check(behavior is "succeed" or "fail" or "needs_human" or "hang",
-                    $"{file}: bridge.behavior '{behavior}' must be succeed|fail|needs_human|hang (stub scenario lever, ticket 09)");
+                Check(behavior is "succeed" or "fail" or "needs_human" or "hang"
+                    or "never_start" or "permission_denied", // ticket 13's startup_timeout / decision-69 levers
+                    $"{file}: bridge.behavior '{behavior}' must be succeed|fail|needs_human|hang|never_start|permission_denied (stub scenario lever)");
 
             // decision 54: secrets are name-only references to host-managed files; the grammar is also
             // enforced by the Runtime API at plan build (frozen rows) — this is the early check.

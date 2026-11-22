@@ -33,7 +33,7 @@ export function loadManifest(workspace, log = () => {}) {
  * `observedCompletedToolCalls` is the Bridge-built set of error-free completed tool call ids.
  * @returns null when valid, else the diagnosable reason string.
  */
-export function validateManifest(manifest, workspace, observedCompletedToolCalls = new Set(), requiredPublicationKinds = []) {
+export function validateManifest(manifest, workspace, observedCompletedToolCalls = new Set(), requiredPublicationKinds = [], deniedToolCallIds = new Set()) {
   if (manifest === null) return "manifest_invalid: the agent did not write a result.json";
   if (manifest.schemaVersion !== 1) return "manifest_invalid: schemaVersion must be 1";
   if (typeof manifest.summary !== "string" || manifest.summary.length === 0)
@@ -59,14 +59,23 @@ export function validateManifest(manifest, workspace, observedCompletedToolCalls
   for (const publication of publications) {
     if (!publication || typeof publication.toolCallId !== "string" || typeof publication.kind !== "string")
       return "manifest_invalid: requiredPublications[] entries need toolCallId/kind";
-    if (!observedCompletedToolCalls.has(publication.toolCallId))
-      return `github_publication_failed: required publication '${publication.toolCallId}' (${publication.kind}) had no completed tool execution`;
+    if (observedCompletedToolCalls.has(publication.toolCallId)) continue;
+    // Ticket 13 (decision 69): the mandatory operation was DENIED by the unattended permission
+    // policy — a fundamentally different failure from a transport/GitHub one: fail the run with
+    // `required_permission_denied` (Task Failed → Workflow waiting_for_human → notification).
+    if (deniedToolCallIds.has(publication.toolCallId))
+      return `required_permission_denied: required publication '${publication.toolCallId}' (${publication.kind}) was denied by the run's permission policy`;
+    return `github_publication_failed: required publication '${publication.toolCallId}' (${publication.kind}) had no completed tool execution`;
   }
   for (const kind of requiredPublicationKinds) {
     const confirmed = publications.some(
       (publication) => publication?.kind === kind && observedCompletedToolCalls.has(publication.toolCallId));
-    if (!confirmed)
-      return `github_publication_failed: required publication kind '${kind}' has no confirmed successful tool execution`;
+    if (confirmed) continue;
+    const denied = publications.some(
+      (publication) => publication?.kind === kind && deniedToolCallIds.has(publication.toolCallId));
+    if (denied)
+      return `required_permission_denied: required publication kind '${kind}' was denied by the run's permission policy`;
+    return `github_publication_failed: required publication kind '${kind}' has no confirmed successful tool execution`;
   }
   return null;
 }

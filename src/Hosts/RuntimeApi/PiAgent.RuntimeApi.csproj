@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
     <ProjectReference Include="..\..\Platform\PiAgent.Platform.csproj" />
     <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
   </ItemGroup>

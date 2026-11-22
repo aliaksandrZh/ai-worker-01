@@ -63,11 +63,16 @@ services:
       Storage__SecretsHostDir: ${PI_AGENT_SECRETS_HOST_DIR:-/etc/pi-agent/secrets}
       Storage__MaxLogMegabytes: ${PI_AGENT_MAX_LOG_MB:-50}
       WorkerLoop__IntervalSeconds: 5
+      # Ticket 13: the §16 knobs (startup/idle/max_run_duration, orphan windows) come from the
+      # configuration plane's system.yaml, read by the reconcilers at startup.
+      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
     volumes:
       # The managed storage root (decision 52) — writable so /start provisioning can create trees.
       - ${STORAGE_ROOT:-./storage}:/var/lib/pi-agent/workflows
       # Profile-secret existence checks (decision 54): read-only view of the host-managed files.
       - ${SECRETS_DIR:-./secrets}:/etc/pi-agent/secrets:ro
+      # The configuration plane (system.yaml) for the reconcilers' §16 knobs.
+      - ./config:/etc/pi-agent/config:ro
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -87,6 +92,9 @@ services:
     restart: unless-stopped
     environment:
       Storage__ManagedRoot: /var/lib/pi-agent/workflows
+      # Ticket 13 (decision 62): telemetry destination + the dedicated host credential.
+      RuntimeApi__BaseUrl: ${RUNTIME_API_URL:-http://runtime-api:8080}
+      RuntimeApi__ServiceToken: ${SERVICE_TOKEN_HOST_MONITOR}
       WorkerLoop__IntervalSeconds: 5
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

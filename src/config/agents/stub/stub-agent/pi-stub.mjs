@@ -3,7 +3,10 @@
  * Stub agent CLI (ticket 09): the pi-RPC-shaped fake headless agent (04 §4 protocol shape, decision 33).
  * Reads JSON objects on stdin (one per line), answers one `prompt` with the 04 §4 event set on stdout,
  * writes a session `.jsonl` (history) plus `result.json` + the manifest's artifact files into the
- * workspace, then exits. Behavior (env STUB_BEHAVIOR): succeed (default) | fail | needs_human | hang.
+ * workspace, then exits. Behavior (env STUB_BEHAVIOR): succeed (default) | fail | needs_human | hang
+ * | never_start (ticket 13: accepts the prompt, then never emits anything — startup_timeout) |
+ * permission_denied (ticket 13: the run's mandatory publication tool call is denied by the
+ * unattended permission policy — decision 69's fail-closed path).
  *
  * The scenario lever exists only to make the failure/needs-human/hang paths testable; in the real
  * profiles (ticket 12) these paths come from real agent work and MCP failures.
@@ -67,6 +70,11 @@ function settleWithManifest(outcome = "completed") {
 
 function answerPrompt() {
   runInFlight = true;
+  if (behavior === "never_start") {
+    // ticket 13's startup_timeout lever: the process stays alive (heartbeats continue) but never
+    // emits ANYTHING — not even agent_start — so the Run never became ready
+    return;
+  }
   emit({ id: "e1", type: "agent_start", data: { sessionId } });
   const toolCallId = "call-1";
   if (behavior === "fail") {
@@ -79,6 +87,21 @@ function answerPrompt() {
     process.exit(3);
   }
   emit({ id: "e2", type: "turn_start" });
+  if (behavior === "permission_denied") {
+    // ticket 13's decision-69 lever: the mandatory publication tool call is denied by the
+    // permission policy — the agent answers the denial itself (no dialog), the Bridge records the
+    // `permission_blocked` RunEvent and verifies the required publication in the manifest
+    const deniedToolCallId = "call-1";
+    emit({ id: "e3", type: "message_update", data: { delta: "Trying to publish (stub)." } });
+    emit({ id: "e4", type: "tool_execution_start", data: { toolCallId: deniedToolCallId, toolName: "stub_publish" } });
+    emit({ id: "e5", type: "permission_denied", data: { toolCallId: deniedToolCallId, toolName: "stub_publish", reason: "not on the profile's permission allow-list" } });
+    emit({ id: "e6", type: "tool_execution_end", data: { toolCallId: deniedToolCallId, status: "denied" } });
+    emit({ id: "e7", type: "turn_end" });
+    settleWithManifest("completed");
+    emit({ id: "e8", type: "agent_settled", data: { sessionId } });
+    setTimeout(() => process.exit(0), 200);
+    return;
+  }
   if (behavior === "hang") {
     // agent_started, then never settles again while the process stays alive (ticket 13's timeouts;
     // ticket 14's stop lever — an `abort` RPC settles the run with aborted=true and exits)

@@ -702,8 +702,14 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
 
         var db = postgres.NewDbContext();
         var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id);
-        Assert.Equal(ContainerObservedStates.Failed, container.ObservedState); // observed fact; Run failing is ticket 13
-        Assert.Equal(RunStatuses.Starting, (await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
+        // observed: the death was confirmed (failed) and the reconciled terminal stopped it
+        Assert.Equal(ContainerObservedStates.Stopped, container.ObservedState);
+        Assert.NotNull(container.LastStoppedAt);
+        // ticket 13: the container died without a terminal callback — the reconciler finalizes the Run
+        var reloadedRun = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(RunStatuses.Failed, reloadedRun.Status);
+        Assert.Equal(RunErrorCodes.RuntimeFailure, reloadedRun.ErrorCode);
+        Assert.StartsWith("reconciled:", reloadedRun.ErrorMessage);
     }
 }
 

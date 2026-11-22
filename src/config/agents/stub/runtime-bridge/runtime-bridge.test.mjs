@@ -649,3 +649,78 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   rmSync(spoolDir, { recursive: true, force: true });
   rmSync(dirname(tokenFile), { recursive: true, force: true });
 });
+
+// ---- ticket 13: permission_blocked / required_permission_denied (decision 69) ----
+
+test("EventMapper maps permission_denied to permission_blocked and collects the denial", () => {
+  const emitted = [];
+  const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
+  for (const line of [
+    JSON.stringify({ type: "agent_start", data: { sessionId: "s" } }),
+    JSON.stringify({ type: "permission_denied", data: { toolCallId: "call-1", toolName: "stub_publish", reason: "not allow-listed" } }),
+    JSON.stringify({ type: "agent_settled", data: {} }),
+  ]) mapper.onLine(line);
+
+  const blocked = emitted.find((e) => e.type === "permission_blocked");
+  assert.ok(blocked, "permission_blocked RunEvent emitted");
+  assert.deepEqual(blocked.payload, { toolCallId: "call-1", toolName: "stub_publish", reason: "not allow-listed" });
+  assert.equal(mapper.settled, true);
+  assert.deepEqual([...mapper.deniedToolCallIds], ["call-1"]);
+});
+
+test("validateManifest: a required publication denied by the permission policy fails required_permission_denied", () => {
+  const workspace = tempDir("ws-denied-");
+  const manifest = {
+    schemaVersion: 1, summary: "done", artifacts: [],
+    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "p1" }],
+  };
+  const reason = validateManifest(manifest, workspace, new Set(), [], new Set(["call-1"]));
+  assert.match(reason ?? "", /required_permission_denied/);
+  // a non-mandated publication that was merely attempted still fails as github_publication_failed
+  const transportReason = validateManifest(manifest, workspace, new Set(), [], new Set());
+  assert.match(transportReason ?? "", /github_publication_failed/);
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("stub agent permission_denied behavior denies the publication tool call", () => {
+  const workspace = tempDir("ws-perm-");
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
+    "--session-id", "r", "--workspace", workspace], {
+    env: { ...process.env, STUB_BEHAVIOR: "permission_denied" },
+    input: '{"type":"prompt","message":"publish"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const events = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(events.some((e) => e.type === "permission_denied" && e.data.toolCallId === "call-1"));
+  const deniedEnd = events.find((e) => e.type === "tool_execution_end" && e.data.toolCallId === "call-1");
+  assert.equal(deniedEnd.data.status, "denied"); // never observed as a completed tool call
+  const manifest = JSON.parse(readFileSync(join(workspace, "result.json"), "utf8"));
+  assert.ok(manifest.requiredPublications.some((p) => p.toolCallId === "call-1" && p.kind === "issue_comment"));
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("stub agent never_start behavior accepts the prompt and emits nothing (startup_timeout lever)", async () => {
+  const child = spawn(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
+    "--session-id", "r", "--workspace", tempDir("ws-ns-")], {
+    env: { ...process.env, STUB_BEHAVIOR: "never_start" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdin.write('{"type":"prompt","message":"work"}\n');
+  // the response record means accepted — then no agent_start ever arrives
+  let accepted = false;
+  let sawAgentStart = false;
+  const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
+  for await (const chunk of child.stdout) {
+    for (const line of String(chunk).split("\n").filter(Boolean)) {
+      const record = JSON.parse(line);
+      if (record.type === "response") accepted = true;
+      if (record.type === "agent_start") sawAgentStart = true;
+    }
+    if (accepted) break;
+  }
+  clearTimeout(timer);
+  child.kill("SIGKILL");
+  assert.equal(accepted, true);
+  assert.equal(sawAgentStart, false); // the readiness fact never comes — ticket 13's sweeper judges it
+});
