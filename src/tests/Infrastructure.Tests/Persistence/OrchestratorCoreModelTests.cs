@@ -134,7 +134,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal("run", entity.GetTableName());
 
         var properties = entity.GetProperties().ToDictionary(p => p.Name);
-        Assert.Equal(16, properties.Count);
+        Assert.Equal(18, properties.Count); // ticket 14: +stop_requested_at, +stop_reason
         foreach (var required in new[] { nameof(Run.Id), nameof(Run.TaskId),
                      nameof(Run.AttemptNumber), nameof(Run.Status) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");

@@ -51,6 +51,17 @@ public class OrchestrationApiTests(PostgresFixture postgres) : IClassFixture<Pos
         builder.Services.AddSingleton(new CommandMetrics());
         builder.Services.AddSingleton(new CollaboratorPermissionGate(
             new HttpClient(), "unused-pat")); // the hook never performs GitHub permission lookups
+        // ticket 14: /stop is a control command that signals the Runtime API — the test app registers a
+        // stub-backed client so the minimal-API binding matches the production registration
+        var runtimeStub = new PiAgent.Hosts.Tests.Runtime.DirectHttpStub(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"status":"stopping"}""", Encoding.UTF8, "application/json"),
+            });
+        builder.Services.AddSingleton(new PiAgent.Orchestrator.Orchestration.RuntimeApiClient(
+            new HttpClient(runtimeStub) { BaseAddress = new Uri("http://runtime-api.test") },
+            Microsoft.Extensions.Options.Options.Create(new PiAgent.Orchestrator.Orchestration.RuntimeApiOptions
+                { BaseUrl = "http://runtime-api.test", ServiceToken = Token })));
         builder.Services.Configure<ServiceTokenOptions>(options => options.Orchestrator = Token);
         builder.Services.AddSingleton<ServiceTokenFilter>();
         builder.Services.AddDbContext<AppDbContext>(options => options

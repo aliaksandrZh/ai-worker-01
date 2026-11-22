@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Context;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.RuntimeApi;
@@ -505,29 +506,163 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     // ---- stop + status ----
 
     [Fact]
-    public async Task StopRun_StopsTheContainer_AndIsIdempotent()
+    public async Task StopRun_RecordsTheSignalAndMovesRunStopping_ContainerStaysUntilCallback()
     {
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
-        var (preparation, client, _) = await SeedWithStart(api);
+        var (preparation, client, callbackToken) = await SeedWithStart(api);
 
         var stop = await client.PostStop(preparation.Run.Id);
         Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
-        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single());
+        using var stopped = JsonDocument.Parse(await stop.Content.ReadAsStringAsync());
+        Assert.Equal("stopping", stopped.RootElement.GetProperty("status").GetString());
+        // ticket 14: the signal is recorded (decision-61 timeline) but the container is NOT stopped —
+        // the Bridge performs the graceful sequence and the terminal cancelled callback stops it
+        Assert.Empty(api.Komodo.Stopped);
 
         var db = postgres.NewDbContext();
-        var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id);
-        Assert.Equal(ContainerObservedStates.Stopped, container.ObservedState);
-        Assert.NotNull(container.LastStoppedAt);
+        var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(RunStatuses.Stopping, run.Status);
+        Assert.NotNull(run.StopRequestedAt);
+        Assert.Equal(AgentCommandRejectionReasons.StopRequested, run.StopReason);
 
+        // idempotent replay: the signal timestamp is recorded once
+        var firstSignal = run.StopRequestedAt;
+        await Task.Delay(5);
         var again = await client.PostStop(preparation.Run.Id);
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
-        Assert.Single(api.Komodo.Stopped);
+        var replayed = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(firstSignal, replayed.StopRequestedAt);
 
         var unknown = await client.PostAsJsonAsync($"/internal/runtime/runs/{Guid.NewGuid()}/stop", new { reason = "x" });
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
 
-        var withoutToken = await api.App.GetTestClient().PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop", new { reason = "x" });
-        Assert.Equal(HttpStatusCode.Unauthorized, withoutToken.StatusCode); // callback tokens can never stop containers
+        var withoutReason = await client.PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop", new { });
+        Assert.Equal(HttpStatusCode.BadRequest, withoutReason.StatusCode);
+
+        var withCallbackToken = api.App.GetTestClient();
+        withCallbackToken.DefaultRequestHeaders.Authorization = new("Bearer", callbackToken);
+        var notService = await withCallbackToken.PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop", new { reason = "x" });
+        Assert.Equal(HttpStatusCode.Unauthorized, notService.StatusCode); // per-Run callback tokens can never stop runs
+    }
+
+    [Fact]
+    public async Task StopRequestPull_IsTheBridgeControlChannel()
+    {
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var (preparation, client, callbackToken) = await SeedWithStart(api);
+
+        var bearer = api.App.GetTestClient();
+        bearer.DefaultRequestHeaders.Authorization = new("Bearer", callbackToken);
+
+        var before = await bearer.GetAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop-request");
+        Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        using (var body = JsonDocument.Parse(await before.Content.ReadAsStringAsync()))
+        {
+            Assert.False(body.RootElement.GetProperty("requested").GetBoolean());
+        }
+
+        await client.PostStop(preparation.Run.Id);
+        var after = await bearer.GetAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop-request");
+        using (var body = JsonDocument.Parse(await after.Content.ReadAsStringAsync()))
+        {
+            Assert.True(body.RootElement.GetProperty("requested").GetBoolean());
+            Assert.Equal(AgentCommandRejectionReasons.StopRequested, body.RootElement.GetProperty("reason").GetString());
+        }
+
+        var unknown = await bearer.GetAsync($"/internal/runtime/runs/{Guid.NewGuid()}/stop-request");
+        // the valid per-Run credential is scoped to run A — presented against another runId it is refused
+        // as callback_scope_denied (decision 60 scoping; the route 404 applies to unauthenticated callers)
+        Assert.Equal(HttpStatusCode.Forbidden, unknown.StatusCode);
+        Assert.Contains("another run", await unknown.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        var bare = await api.App.GetTestClient().GetAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop-request");
+        Assert.Equal(HttpStatusCode.Unauthorized, bare.StatusCode);
+    }
+
+    [Fact]
+    public async Task CancelledCallback_MarksRunCancelled_WithAllTerminalFacts()
+    {
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var (preparation, client, callbackToken) = await SeedWithStart(api);
+        await client.PostStop(preparation.Run.Id);
+
+        var bearer = api.App.GetTestClient();
+        bearer.DefaultRequestHeaders.Authorization = new("Bearer", callbackToken);
+        var cancelled = await bearer.PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/cancelled", new
+        {
+            eventId = "evt-terminal-cancelled",
+            occurredAt = DateTime.UtcNow,
+            reason = AgentCommandRejectionReasons.StopRequested,
+            sessionFilePath = "/session/discovered.jsonl",
+        });
+        Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
+
+        var db = postgres.NewDbContext();
+        var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(RunStatuses.Cancelled, run.Status);
+        Assert.NotNull(run.CompletedAt);
+        // the cancelled delivery is a RunEvent (02 §18 vocabulary) with the delivered body persisted
+        var cancelledEvent = await db.RunEvents.AsNoTracking().SingleAsync(e => e.RunId == preparation.Run.Id && e.Type == RunEventTypes.Cancelled);
+        Assert.Contains("evt-terminal-cancelled", cancelledEvent.Payload, StringComparison.Ordinal);
+        // terminal facts: log trio reference artifact, credential revoked, session terminated
+        Assert.True(await db.Artifacts.AsNoTracking().AnyAsync(a => a.TaskId == preparation.Task.Id && a.Type == ArtifactTypes.LogReference));
+        Assert.NotNull((await db.RunCredentials.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id)).RevokedAt);
+        var session = await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
+        Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
+        Assert.Equal("/session/discovered.jsonl", session.SessionFilePath); // the decision-57 path write-back
+        // decision 75: terminal delivery stops the container and releases the workspace
+        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single());
+        Assert.Equal(RunStatuses.Cancelled, run.Status);
+
+        var redelivery = await bearer.PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/cancelled", new
+        {
+            eventId = "evt-terminal-cancelled",
+            occurredAt = DateTime.UtcNow,
+            reason = AgentCommandRejectionReasons.StopRequested,
+        });
+        // decision 60: the per-Run credential was revoked at confirmed terminal delivery — every later
+        // callback (even an idempotent replay) is refused; the Bridge tolerates the refusal on the
+        // cancelled route because the terminal state already exists.
+        Assert.Equal(HttpStatusCode.Forbidden, redelivery.StatusCode);
+        Assert.Contains("token_revoked", await redelivery.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StopConfirmSweeper_ReconcilesRunsThatNeverConfirmedTheirStop()
+    {
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var (preparation, client, callbackToken) = await SeedWithStart(api);
+        await client.PostStop(preparation.Run.Id);
+
+        // fresh signal (< grace window): untouched
+        var sweeper = new StopConfirmSweeper(api.App.Services.GetRequiredService<IServiceScopeFactory>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<StopConfirmSweeper>.Instance);
+        await sweeper.RunCycleAsync(default);
+        Assert.Equal(RunStatuses.Stopping,
+            (await api.Db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
+        Assert.Empty(api.Komodo.Stopped);
+
+        // Komodo outage: desired state preserved, nothing corrupted, the sweep retries (decision 22)
+        await api.Db.Runs.Where(r => r.Id == preparation.Run.Id)
+            .ExecuteUpdateAsync(u => u.SetProperty(r => r.StopRequestedAt, DateTime.UtcNow - StopConfirmSweeper.GraceWindow - TimeSpan.FromSeconds(10)));
+        api.Komodo.StopSucceeds = false;
+        await sweeper.RunCycleAsync(default);
+        Assert.Equal(RunStatuses.Stopping,
+            (await api.Db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
+        api.Komodo.StopSucceeds = true;
+
+        await sweeper.RunCycleAsync(default);
+        var db = postgres.NewDbContext();
+        var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(RunStatuses.Cancelled, run.Status); // reconciled cancellation (06 §8: "or reconciliation")
+        Assert.Contains("stop unconfirmed", run.ErrorMessage ?? "", StringComparison.Ordinal);
+        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single()); // the hard backstop
+        Assert.True(await db.Artifacts.AsNoTracking().AnyAsync(a => a.TaskId == preparation.Task.Id && a.Type == ArtifactTypes.LogReference));
+        Assert.Equal(WorkspaceStatuses.Ready,
+            (await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == preparation.Task.Id)).Status);
+        Assert.Equal(AgentSessionStatuses.Terminated,
+            (await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id)).Status);
+        Assert.NotNull((await db.RunCredentials.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id)).RevokedAt);
+        // the reconciled run is terminal — the Orchestrator's terminal consumer picks it up next tick
     }
 
     [Fact]
@@ -576,7 +711,7 @@ internal static class RuntimeHttpClientExtensions
 {
     public static Task<HttpResponseMessage> PostStop(this HttpClient client, Guid runId) =>
         client.PostAsync($"/internal/runtime/runs/{runId}/stop",
-            new StringContent("""{"reason":"task finished"}""", Encoding.UTF8, "application/json"));
+            new StringContent("""{"reason":"stop_requested"}""", Encoding.UTF8, "application/json"));
 }
 
 // ---- secret mounting (decision 54, exercised by the provisioning path) ----

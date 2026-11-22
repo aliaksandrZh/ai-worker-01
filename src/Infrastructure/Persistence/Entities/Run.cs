@@ -52,4 +52,10 @@ public class Run
     public long? LogSizeBytes { get; set; }
     public DateTime? LogsCompletedAt { get; set; }
     public DateTime? LogsDeletedAt { get; set; }
+
+    /// <summary>Stop-signal timeline (decision 61, reconciliation hook): when the Runtime API recorded
+    /// the Orchestrator's /stop request; null until then. Set with `stop_reason` in one update.</summary>
+    public DateTime? StopRequestedAt { get; set; }
+    /// <summary>Free-form reason delivered with the stop request (e.g. `stop_requested`).</summary>
+    public string? StopReason { get; set; }
 }

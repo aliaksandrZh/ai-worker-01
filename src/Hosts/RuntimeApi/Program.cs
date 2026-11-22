@@ -27,6 +27,9 @@ builder.Services.AddSingleton<DbSizeCycle>();
 builder.Services.AddSingleton<IWorkerCycle>(serviceProvider => serviceProvider.GetRequiredService<DbSizeCycle>());
 builder.Services.AddSingleton<RunReconcilerCycle>();
 builder.Services.AddSingleton<IWorkerCycle>(serviceProvider => serviceProvider.GetRequiredService<RunReconcilerCycle>());
+// Ticket 14: reconciliation leg of the graceful stop — Runs never confirming their stop are cancelled.
+builder.Services.AddSingleton<StopConfirmSweeper>();
+builder.Services.AddSingleton<IWorkerCycle, StopConfirmSweeper>();
 builder.Services.AddSingleton<RunPipelineMetrics>();
 builder.Services.AddSingleton<IWorkerMetrics, RuntimeApiMetrics>();
 

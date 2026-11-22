@@ -5,6 +5,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Orchestration;
 using Xunit;
 
@@ -122,6 +123,30 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         var db = postgres.NewDbContext();
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
+    }
+
+    [Fact]
+    public async Task CancelledRun_MarksTaskCancelledWithTheStopReason_WaitingForHuman()
+    {
+        await postgres.ResetAsync();
+        // ticket 14: the graceful stop confirmed by the terminal `cancelled` callback (06 §8.2)
+        var (task, run) = await SeedStartingRunAsync(RunStatuses.Cancelled);
+        await NewConsumer().RunCycleAsync(default);
+
+        var reloaded = await ReloadTaskAsync(task.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Cancelled, reloaded.Status);
+        Assert.NotNull(reloaded.CancelledAt);
+        Assert.Equal(AgentCommandRejectionReasons.StopRequested, reloaded.FailureReason); // the only V1 canceller
+        var db = postgres.NewDbContext();
+        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
+        Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
+        Assert.Null(workflow.CurrentTaskId);
+        // the trigger command failed as run_cancelled (the job was completed at dispatch — nothing to cancel)
+        var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == task.TriggerCommandId);
+        Assert.Equal(AgentCommandStatuses.Failed, command.Status);
+        Assert.Equal("run_cancelled", command.RejectionReason);
+        var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == run.Id);
+        Assert.Equal(ContainerDesiredStates.Stopped, container.DesiredState);
     }
 
     [Fact]

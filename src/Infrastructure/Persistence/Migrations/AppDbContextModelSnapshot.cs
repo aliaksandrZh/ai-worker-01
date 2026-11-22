@@ -1153,6 +1153,14 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.Property<string>("StopReason")
+                        .HasColumnType("text")
+                        .HasColumnName("stop_reason");
+
+                    b.Property<DateTime?>("StopRequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("stop_requested_at");
+
                     b.Property<Guid>("TaskId")
                         .HasColumnType("uuid")
                         .HasColumnName("task_id");

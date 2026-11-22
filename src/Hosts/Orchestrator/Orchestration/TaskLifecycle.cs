@@ -66,6 +66,15 @@ public static class TaskLifecycle
         JobQueueMetrics metrics,
         CancellationToken cancellationToken)
     {
+        // ticket 14: /stop may have cancelled this claimed Task while its claim was in flight — a fresh
+        // read makes the racing cancellation a no-op (no spurious notice, no resurrected rows).
+        var currentStatus = await db.OrchestrationTasks.AsNoTracking()
+            .Where(t => t.Id == task.Id)
+            .Select(t => t.Status)
+            .SingleAsync(cancellationToken);
+        if (!OrchestrationTaskStatuses.Unfinished.Contains(currentStatus))
+            return;
+
         var now = DateTime.UtcNow;
         await db.Runs
             .Where(r => r.TaskId == task.Id && r.Status == RunStatuses.Pending)

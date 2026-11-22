@@ -27,6 +27,8 @@ public sealed class FakeKomodo : IKomodoClient
     public Dictionary<string, string> States { get; } = [];
     public List<string> Stopped { get; } = [];
     public bool DeploySucceeds { get; set; } = true;
+    /// <summary>False simulates a Komodo outage at stop time (ticket 14: the sweeper retries).</summary>
+    public bool StopSucceeds { get; set; } = true;
 
     public Task<string?> CreateDeploymentAsync(KomodoDeploymentPlan plan, CancellationToken cancellationToken)
     {
@@ -52,6 +54,8 @@ public sealed class FakeKomodo : IKomodoClient
     public async Task<bool> StopAsync(string deployment, CancellationToken cancellationToken)
     {
         await Task.Yield();
+        if (!StopSucceeds)
+            return false;
         Stopped.Add(deployment);
         States[deployment] = "stopped";
         return true;

@@ -66,6 +66,7 @@ function settleWithManifest(outcome = "completed") {
 }
 
 function answerPrompt() {
+  runInFlight = true;
   emit({ id: "e1", type: "agent_start", data: { sessionId } });
   const toolCallId = "call-1";
   if (behavior === "fail") {
@@ -79,7 +80,8 @@ function answerPrompt() {
   }
   emit({ id: "e2", type: "turn_start" });
   if (behavior === "hang") {
-    // agent_started, then never settles again while the process stays alive (ticket 13's timeouts)
+    // agent_started, then never settles again while the process stays alive (ticket 13's timeouts;
+    // ticket 14's stop lever — an `abort` RPC settles the run with aborted=true and exits)
     return;
   }
   emit({ id: "e3", type: "message_update", data: { delta: "Analyzing the received prompt (stub)." } });
@@ -95,6 +97,7 @@ function answerPrompt() {
 }
 
 let buffer = "";
+let runInFlight = false; // a prompt is executing and has not settled yet (the `abort` lever)
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
@@ -125,8 +128,15 @@ process.stdin.on("data", (chunk) => {
         });
         break;
       default:
-        // clear_queue / abort / anything else: acknowledged by ignoring; stdin EOF then ends the process
-        process.stderr.write(`pi-stub: unhandled rpc type ${rpc.type} (stub ignores it)\n`);
+        // ticket 14: pi-shaped RPCs the Bridge's stop sequence sends. `abort` settles an in-flight run
+        // with aborted=true and exits (the aborted run never writes a manifest); stdin EOF then ends
+        // the process like a normal settle.
+        respond(rpc.id, rpc.type);
+        if (rpc.type === "abort" && runInFlight) {
+          runInFlight = false;
+          emit({ id: "abort-1", type: "agent_settled", data: { sessionId, aborted: true } });
+          setTimeout(() => process.exit(0), 100);
+        }
         break;
     }
   }

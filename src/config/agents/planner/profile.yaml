@@ -13,7 +13,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.1.0"
+  version: "1.1.1"
   heartbeat_interval: 15s
   event_cadence: 5s
 # Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image (decision 56); this field

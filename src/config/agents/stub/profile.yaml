@@ -18,7 +18,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.1.0" # shared with the planner copy (byte-identical runtime-bridge modules)
+  version: "1.1.1" # shared with the planner copy (byte-identical runtime-bridge modules; 1.1.1 = graceful stop, ticket 14)
   heartbeat_interval: 15s
   event_cadence: 5s
   behavior: succeed   # stub-only scenario lever: succeed | fail | needs_human | hang

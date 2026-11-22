@@ -20,6 +20,7 @@ import { openSpool } from "./spool.mjs";
 import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
+import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
 import { loadManifest, renderPrompt, terminalFromManifest, validateManifest } from "./manifest.mjs";
 
 const env = process.env;
@@ -107,10 +108,19 @@ const backoffs = [1, 2, 4, 8, 16, 30];
 async function deliverNext() {
   const entry = await spool.next();
   if (!entry) return null;
-  const unbounded = entry.route === "completed" || entry.route === "failed"; // terminal: never dropped
+  // terminal routes (incl. the ticket-14 `cancelled`): never dropped
+  const unbounded = entry.route === "completed" || entry.route === "failed" || entry.route === "cancelled";
   for (let attempt = 0; ; attempt++) {
     const result = await post(entry.route, entry.body);
     if (result.ok) {
+      spool.remove(entry);
+      return true;
+    }
+    // `cancelled` delivered into an already-terminal run (e.g. the Runtime API's stop-confirm sweeper
+    // reconciled the cancellation first): the terminal state exists — treat 409 (already terminal) and
+    // 403 token_revoked (post-terminal callback refusal) as "done" and move on
+    if (entry.route === "cancelled" && (result.status === 409 || result.status === 403)) {
+      log(`terminal cancelled refused (already terminal: ${result.detail}) — accepted\n`);
       spool.remove(entry);
       return true;
     }
@@ -245,6 +255,70 @@ async function main() {
   agent.stderr.setEncoding("utf8");
   agent.stderr.on("data", (chunk) => logs.write("stderr.log", chunk));
 
+  // heartbeat cadence → coalesced single-slot spool entry (decision 60); heartbeat proves liveness
+  // only and never counts as progress (decision 58). Declared before the launch handshake so the
+  // stop path (which may fire before/while the handshake runs) can clear them from anywhere.
+  const beats = spool.coalescingHeartbeats(`hb-${runId}-${Date.now()}`);
+  const heartbeatTimer = setInterval(() => {
+    if (!settled) beats({ occurredAt: new Date().toISOString() });
+  }, heartbeatSeconds * 1000);
+  // event cadence → flush aggregated assistant text as ONE assistant_output RunEvent (decision 58)
+  const flushTimer = setInterval(() => mapper.flushAggregated(), eventCadenceSeconds * 1000);
+
+  // ---- graceful stop control (04 §4 step sequence, decision 61, ticket 14) ----
+  // The signal lives in PostgreSQL (`run.stop_requested_at`); this Bridge pulls it every 2 s once the
+  // agent is spawned. Once observed, the stop path owns the terminal: every other lifecycle branch
+  // below defers to it and must never post another terminal around it.
+  let stopSignal = null; // { reason } once requested
+  let promptStageRelease = () => {}; // resolved when the RPC channel is free of the prompt handshake
+  const promptStageDone = new Promise((resolve) => { promptStageRelease = resolve; });
+  let stopSequenceStarted = false;
+  let cancelledPosted = false;
+
+  async function pollStopSignal() {
+    if (stopSignal) return;
+    const { requested, reason } = await pollStopRequest({ runId, baseUrl, tokenFile, log });
+    if (!requested || stopSignal) return;
+    stopSignal = { reason: reason ?? "stop_requested" };
+    clearInterval(stopWatch);
+    log(`stop signal observed (${stopSignal.reason})\n`);
+    startStopSequence();
+  }
+
+  const stopWatch = setInterval(() => void pollStopSignal(), POLL_INTERVAL_MS);
+
+  function startStopSequence() {
+    if (stopSequenceStarted) return;
+    stopSequenceStarted = true;
+    void (async () => {
+      await promptStageDone; // the RPC correlator allows one outstanding command
+      await gracefulStopSequence({
+        agent,
+        sendCommand: (type) => correlator.command(type),
+        isSettled: () => settled,
+        waitForExit: (ms) => Promise.race([onAgentExit, sleep(ms)]),
+        log,
+      });
+      await finishCancelled();
+    })().catch((error) => {
+      log(`stop path crashed: ${error?.stack ?? error}\n`);
+      process.exit(4);
+    });
+  }
+
+  /** Terminal `cancelled` (idempotent append, then the standard terminal ack wait). */
+  async function finishCancelled() {
+    if (!cancelledPosted) {
+      cancelledPosted = true;
+      clearInterval(heartbeatTimer);
+      clearInterval(flushTimer);
+      clearInterval(stopWatch);
+      mapper.flushAggregated();
+      spool.append(cancelledTerminal(runId, stopSignal?.reason ?? "stop_requested", sessionFilePath));
+    }
+    await finishWait();
+  }
+
   // ---- launch handshake: discover the real session path, then deliver the ONE task prompt ----
   try {
     const state = await Promise.race([
@@ -256,32 +330,38 @@ async function main() {
     sessionFilePath = typeof state.data?.sessionFile === "string" ? state.data.sessionFile : null;
     log(`pi session file: ${sessionFilePath ?? "not reported by the agent"}\n`);
 
+    if (stopSignal) {
+      // stop already requested: the task prompt is never delivered — the sequence owns the exit
+      promptStageRelease();
+      startStopSequence();
+      return;
+    }
+
     const promptResponse = await Promise.race([
       correlator.command("prompt", { message: prompt }),
       onAgentExit.then((code) => {
         throw new Error(`agent exited during prompt acceptance (code ${code})`);
       }),
     ]);
+    promptStageRelease(); // the RPC channel is free from here on — the stop sequence may command it
     const disposition = promptDisposition(promptResponse);
     if (disposition !== "started") {
       // rpc-commands.md: "queued"/"handled" prompts start no run — nothing will settle afterwards
       agent.kill("SIGTERM");
+      if (stopSignal) return await finishCancelled();
       return await spoolFailure("runtime_failure",
         `the task prompt did not start a run (disposition ${JSON.stringify(disposition)})`);
     }
   } catch (error) {
+    promptStageRelease();
+    if (stopSignal) {
+      // the agent died while a stop was pending — the stop path owns the terminal (never `failed`)
+      startStopSequence();
+      return;
+    }
     agent.kill("SIGTERM");
     return await spoolFailure("runtime_failure", `agent launch failed — ${error.message}`);
   }
-
-  // heartbeat cadence → coalesced single-slot spool entry (decision 60); heartbeat proves liveness
-  // only and never counts as progress (decision 58)
-  const beats = spool.coalescingHeartbeats(`hb-${runId}-${Date.now()}`);
-  const heartbeatTimer = setInterval(() => {
-    if (!settled) beats({ occurredAt: new Date().toISOString() });
-  }, heartbeatSeconds * 1000);
-  // event cadence → flush aggregated assistant text as ONE assistant_output RunEvent (decision 58)
-  const flushTimer = setInterval(() => mapper.flushAggregated(), eventCadenceSeconds * 1000);
 
   const exitCode = await new Promise((resolve) => {
     let grace = null;
@@ -310,6 +390,10 @@ async function main() {
   clearInterval(flushTimer);
   mapper.flushAggregated();
   log(`agent lifecycle done (exit ${exitCode}, settled ${settled})\n`);
+
+  // the stop path owns the terminal: a run interrupted by /stop is `cancelled` regardless of the
+  // exit shape (settled or killed) — no failed report, no manifest
+  if (stopSignal) return await finishCancelled();
 
   if (exitCode !== 0 || !settled) {
     // on a crash the Bridge reports failure with the agent's exit code (decision 33)

@@ -266,6 +266,8 @@ public sealed class JobQueueWorker(
             case DispatchOutcome.Permanent:
                 await CancelAsync(AgentCommandRejectionReasons.RuntimeDispatchFailed);
                 break;
+            case DispatchOutcome.Superseded:
+                break; // ticket 14: the claim lost to /stop mid-flight — prepared rows removed, nothing to release
         }
     }
 

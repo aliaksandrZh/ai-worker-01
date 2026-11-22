@@ -474,3 +474,178 @@ test("stub agent needs_human behavior writes the outcome flag", async () => {
   assert.equal(manifest.outcome, "needs_human_input");
   rmSync(workspace, { recursive: true, force: true });
 });
+
+// ---- graceful stop (ticket 14, decision 61) ----
+
+import { cancelledTerminal, listChildPids } from "./stop.mjs";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { dirname } from "node:path";
+
+test("cancelledTerminal: deterministic id, reason and session path carried", () => {
+  const entry = cancelledTerminal("run-7", "stop_requested", "/session/2026-11-21T15-31-18-187Z_run-7.jsonl");
+  assert.equal(entry.id, "evt-run-7-cancelled");
+  assert.equal(entry.route, "cancelled");
+  assert.equal(entry.body.eventId, "evt-run-7-cancelled");
+  assert.equal(entry.body.reason, "stop_requested");
+  assert.equal(entry.body.sessionFilePath, "/session/2026-11-21T15-31-18-187Z_run-7.jsonl");
+  // the session path is absent when the handshake never discovered one
+  const bare = cancelledTerminal("run-8", null);
+  assert.equal(bare.body.sessionFilePath, undefined);
+  assert.equal(bare.body.reason, undefined);
+});
+
+test("listChildPids: detects children via /proc, degrades to empty without it", async () => {
+  // ticket 14's (6) verification works on Linux hosts with /proc; macOS/other hosts degrade to []
+  const hasProc = existsSync("/proc");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const children = listChildPids(process.pid);
+    if (hasProc) {
+      assert.ok(children.includes(child.pid), `expected ${child.pid} among ${children}`);
+    } else {
+      assert.deepEqual(children, []); // graceful /proc absence — the sequence logs and continues
+    }
+  } finally {
+    child.kill("SIGKILL"); // never orphan the probe child (an assert must not immortalize it)
+    await new Promise((resolve) => child.on("exit", resolve));
+  }
+  assert.equal(listChildPids(-1).length, 0);
+});
+
+test("spool treats the cancelled route as terminal (done marker)", async () => {
+  const spoolDir = tempDir("spool-cancelled-");
+  const markers = [];
+  const spool = openSpool(spoolDir, { onTerminalDelivered: () => markers.push(1) });
+  spool.append({ id: "c1", route: "cancelled", body: { eventId: "c1" } });
+  const entry = await spool.next();
+  spool.remove(entry);
+  assert.equal(markers.length, 1);
+  rmSync(spoolDir, { recursive: true, force: true });
+});
+
+test("stub agent: abort settles an in-flight run with aborted=true; clear_queue/abort_bash respond", () => {
+  const sessionDir = tempDir("session-abort-");
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", sessionDir, "--session-id", "r"], {
+    env: { ...process.env, STUB_BEHAVIOR: "hang", PI_WORKSPACE: tempDir("ws-abort-") },
+    input: [
+      '{"id":"req-1","type":"clear_queue"}',
+      '{"id":"req-2","type":"prompt","message":"long work"}',
+      '{"id":"req-3","type":"abort_bash"}',
+      '{"id":"req-4","type":"abort"}',
+    ].join("\n") + "\n",
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  // every stop RPC got its pi-shaped response
+  assert.deepEqual(records.filter((r) => r.type === "response").map((r) => r.id), ["req-1", "req-2", "req-3", "req-4"]);
+  // the abort settled the hanging run (aborted flag) — the run never settles on its own in hang mode
+  const settled = records.filter((r) => r.type === "agent_settled");
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].data.aborted, true);
+  const session = readFileSync(join(sessionDir, "r.jsonl"), "utf8");
+  assert.match(session, /"aborted":true/);
+});
+
+/** Minimal fake of the Runtime API surface the Bridge touches during a stop. */
+function fakeRuntimeApi(stopReason) {
+  const cancelledBodies = [];
+  const completedBodies = [];
+  let stopPolls = 0;
+  const server = createServer((request, response) => {
+    const respond = (status, body = { persisted: true }) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      if (request.method === "GET" && request.url.endsWith("/input")) {
+        respond(200, {});
+        return;
+      }
+      if (request.method === "GET" && request.url.endsWith("/stop-request")) {
+        stopPolls += 1;
+        const requested = stopPolls > 2; // requested only after a couple of 2 s polls
+        respond(200, { requested, reason: requested ? stopReason : null });
+        return;
+      }
+      if (request.method === "POST" && request.url.endsWith("/cancelled")) {
+        cancelledBodies.push(JSON.parse(raw));
+        respond(200);
+        return;
+      }
+      if (request.method === "POST" && request.url.endsWith("/completed")) {
+        completedBodies.push(JSON.parse(raw));
+        respond(200);
+        return;
+      }
+      respond(200); // events, heartbeat
+    });
+  });
+  return { server, cancelledBodies, completedBodies };
+}
+
+test("bridge end-to-end stop: signal observed → clear_queue/abort settle → terminal cancelled delivered", async () => {
+  const runId = "stop-e2e-run";
+  const workspace = tempDir("ws-e2e-");
+  const sessionDir = tempDir("session-e2e-");
+  const logsDir = tempDir("logs-e2e-");
+  const spoolDir = tempDir("spool-e2e-");
+  const tokenFile = join(tempDir("tok-"), "callback-token");
+  writeFileSync(tokenFile, "per-run-callback-token");
+
+  const fake = fakeRuntimeApi("stop_requested");
+  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
+  const port = fake.server.address().port;
+
+  const bridge = spawn(process.execPath, [
+    fileURLToPath(new URL("./bridge.mjs", import.meta.url)),
+  ], {
+    env: {
+      ...process.env,
+      PI_RUN_ID: runId,
+      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
+      PI_CALLBACK_TOKEN_FILE: tokenFile,
+      PI_WORKSPACE: workspace,
+      PI_SESSION_DIR: sessionDir,
+      PI_LOGS_DIR: logsDir,
+      PI_SPOOL_DIR: spoolDir,
+      PI_AGENT_BIN: process.execPath,
+      PI_AGENT_ARGS: AGENT,
+      STUB_BEHAVIOR: "hang",
+      PI_HEARTBEAT_SECONDS: "300",
+      PI_EVENT_CADENCE_SECONDS: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let bridgeStderr = "";
+  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
+
+  const exitCode = await Promise.race([
+    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
+  ]);
+  fake.server.close();
+
+  assert.equal(exitCode, 0, bridgeStderr);
+  // the terminal is `cancelled` exactly once — never `completed`
+  assert.equal(fake.cancelledBodies.length, 1);
+  assert.deepEqual(fake.completedBodies, []);
+  const cancelled = fake.cancelledBodies[0];
+  assert.equal(cancelled.eventId, `evt-${runId}-cancelled`);
+  assert.equal(cancelled.reason, "stop_requested");
+  assert.match(cancelled.sessionFilePath ?? "", /\.jsonl$/); // the discovered session path rides along
+  // the abort settled the agent: the session history carries it
+  const session = readFileSync(join(sessionDir, `${runId}.jsonl`), "utf8");
+  assert.match(session, /"aborted":true/);
+  // the bridge recorded its terminal marker
+  assert.ok(existsSync(join(spoolDir, ".terminal-delivered")));
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(sessionDir, { recursive: true, force: true });
+  rmSync(logsDir, { recursive: true, force: true });
+  rmSync(spoolDir, { recursive: true, force: true });
+  rmSync(dirname(tokenFile), { recursive: true, force: true });
+});

@@ -77,7 +77,8 @@ export function openSpool(spoolDir, options = {}) {
     /** 2xx answered → the callback is durably delivered; the entry leaves the spool. */
     remove(entry) {
       rmSync(entry.path, { force: true });
-      if (entry.route === "completed" || entry.route === "failed") onTerminalDelivered();
+      // terminal routes (incl. the ticket-14 `cancelled`) write the done marker
+      if (entry.route === "completed" || entry.route === "failed" || entry.route === "cancelled") onTerminalDelivered();
       if (serving === entry) serving = null;
     },
 

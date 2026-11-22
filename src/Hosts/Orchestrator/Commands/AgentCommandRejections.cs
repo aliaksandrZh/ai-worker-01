@@ -33,6 +33,9 @@ public static class AgentCommandRejectionReasons
     public const string ReviewHeadChanged = "review_head_changed_before_execution";
     /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx, ticket 09).</summary>
     public const string RuntimeDispatchFailed = "runtime_dispatch_failed";
+    /// <summary>Not a rejection: the reason code recorded on Tasks/commands cancelled by `/stop`
+    /// (06 §8, ticket 14) and passed to the Runtime API as the stop-signal reason (decision 61).</summary>
+    public const string StopRequested = "stop_requested";
 }
 
 public static class AgentCommandRejectionReplies

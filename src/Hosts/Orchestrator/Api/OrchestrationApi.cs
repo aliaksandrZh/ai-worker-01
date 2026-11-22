@@ -38,9 +38,10 @@ public static class OrchestrationApi
             InternalCommandRequest request,
             AppDbContext db,
             ConfigurationState configurationState,
+            RuntimeApiClient runtimeApi,
             CommandMetrics metrics,
             CancellationToken ct) =>
-            InjectCommandAsync(request, db, configurationState, metrics, ct)).RequireServiceToken();
+            InjectCommandAsync(request, db, configurationState, runtimeApi, metrics, ct)).RequireServiceToken();
         return app;
     }
 
@@ -180,6 +181,7 @@ public static class OrchestrationApi
         InternalCommandRequest request,
         AppDbContext db,
         ConfigurationState configurationState,
+        RuntimeApiClient runtimeApi,
         CommandMetrics metrics,
         CancellationToken cancellationToken)
     {
@@ -263,9 +265,11 @@ public static class OrchestrationApi
                         AgentCommandRejectionReplies.Text(rejection.Reason, rejection.Detail), Guid.NewGuid()),
                     cancellationToken);
             }
-            else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help)
+            else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop)
             {
-                await ControlCommandHandler.HandleAsync(db, command, workItem, repository, cancellationToken);
+                // ticket 14: /stop is a state-changing control command (StopCommandHandler); the runtime-signal
+                // client is a decision-65 dependency of the same transactional path.
+                await ControlCommandHandler.HandleAsync(db, command, workItem, repository, runtimeApi, cancellationToken);
             }
         }
 

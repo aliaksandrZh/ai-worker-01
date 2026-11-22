@@ -38,6 +38,9 @@ public enum DispatchOutcome
     HandedOff,
     Transient,
     Permanent,
+    /// <summary>The claim was superseded mid-flight (ticket 14: /stop cancelled the claimed Task and
+    /// its prepared pending Run rows) — nothing was handed off; the worker releases nothing.</summary>
+    Superseded,
 }
 
 public interface IRunDispatcher
@@ -65,6 +68,19 @@ public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions
             $"{options.Value.BaseUrl.TrimEnd('/')}/internal/runtime/runs/{runId}/start")
         {
             Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add("X-Service-Token", options.Value.ServiceToken);
+        return await http.SendAsync(request, cancellationToken);
+    }
+
+    /// <summary>`POST /internal/runtime/runs/{runId}/stop` (ticket 14, decision 61): the graceful-stop
+    /// control signal — the Runtime API records it and hands the sequence to the Bridge.</summary>
+    public async Task<HttpResponseMessage> StopRunAsync(Guid runId, string reason, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"{options.Value.BaseUrl.TrimEnd('/')}/internal/runtime/runs/{runId}/stop")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { reason }), Encoding.UTF8, "application/json"),
         };
         request.Headers.Add("X-Service-Token", options.Value.ServiceToken);
         return await http.SendAsync(request, cancellationToken);
@@ -101,6 +117,23 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
         if (assembled is null)
             throw new InvalidOperationException(
                 $"run {run.Id} dispatch requires the assembled context — the claim path assembles before RunPrepare (ticket 11)");
+
+        // Ticket 14: /stop cancels a claimed Task (and deletes its pending Run rows) while the claim
+        // worker may still be mid-flight between claim and handoff — re-verify before the freeze/POST;
+        // a superseded claim removes its just-prepared rows and never touches the Runtime API.
+        var freshTaskStatus = await db.OrchestrationTasks.AsNoTracking()
+            .Where(t => t.Id == task.Id)
+            .Select(t => t.Status)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (!OrchestrationTaskStatuses.Unfinished.Contains(freshTaskStatus ?? OrchestrationTaskStatuses.Cancelled))
+        {
+            logger.LogInformation("run {runId} dispatch superseded — task {taskId} is '{status}' (cancelled mid-claim)",
+                run.Id, task.Id, freshTaskStatus ?? "missing");
+            await db.Runs
+                .Where(r => r.TaskId == task.Id && r.Status == RunStatuses.Pending)
+                .ExecuteDeleteAsync(cancellationToken);
+            return DispatchOutcome.Superseded;
+        }
 
         // The /start payload carries the SAME frozen content (the Runtime API serves /input from the
         // snapshot row, so this field is transport duplication; keeping them byte-identical is tested).

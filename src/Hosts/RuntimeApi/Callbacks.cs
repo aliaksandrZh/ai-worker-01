@@ -97,6 +97,24 @@ public static class CallbackHandler
             }, cancellationToken);
     }
 
+    /// <summary>Terminal callback of the graceful stop sequence (04 §4 step 7, decision 61, ticket 14):
+    /// the Bridge posts `cancelled` after clearing the queue, aborting, and verifying the process tree is
+    /// gone — Run → `cancelled` with the same terminal facts as every terminal delivery (no error code;
+    /// the reason is the stop signal's, kept in ErrorMessage for /status).</summary>
+    public static async Task<IResult> CancelledAsync(
+        Guid runId, CancelledRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
+    {
+        return await TerminalAsync(runId, RunStatuses.Cancelled, RunEventTypes.Cancelled, request.EventId,
+            () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
+            db, storage, komodo,
+            run =>
+            {
+                if (request.Reason is { } reason)
+                    run.ErrorMessage = reason;
+                return Task.FromResult<IResult?>(null);
+            }, cancellationToken);
+    }
+
     private static async Task<IResult> TerminalAsync(
         Guid runId,
         string runStatus,
@@ -286,8 +304,9 @@ public static class CallbackHandler
     }
 
     /// <summary>Terminal facts every terminal callback records: log trio fields, the `log_reference` Artifact,
-    /// credential revocation (decision 60), and the session's `terminated` state.</summary>
-    private static async Task FinalizeTerminalRunAsync(
+    /// credential revocation (decision 60), and the session's `terminated` state. Internal so the
+    /// ticket-14 stop-confirm sweeper can finalize a reconciled cancellation with identical facts.</summary>
+    internal static async Task FinalizeTerminalRunAsync(
         AppDbContext db, Run run, RuntimeStorageService storage, CancellationToken cancellationToken)
     {
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == run.TaskId, cancellationToken);

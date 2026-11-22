@@ -34,4 +34,9 @@ public sealed record FailedRequest(string EventId, DateTime OccurredAt, FailedEr
 
 public sealed record FailedError(string Code, string Message);
 
+/// <summary>Terminal callback for a gracefully stopped run (04 §4 graceful stop, step 7 / decision 61,
+/// ticket 14): the Bridge posts it after the stop sequence — Run → `cancelled`.
+/// `sessionFilePath` is the decision-57 discovered path; `reason` is the stop signal's reason.</summary>
+public sealed record CancelledRequest(string EventId, DateTime OccurredAt, string? Reason, string? SessionFilePath = null);
+
 public sealed record StopRunRequest(string Reason);

@@ -443,15 +443,18 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
     // ---- untouched /stop (tickets 14/15) + reply dedupe ----
 
     [Fact]
-    public async Task StopCommand_StaysAuthorized_NoReply_NoRows()
+    public async Task StopCommand_IsHandledAsAControlCommand_NothingToStopWithoutWorkflow()
     {
+        // ticket 14: /stop became a state-changing control command (StopCommandHandler); on this
+        // workflow-less surface it answers "nothing to stop" and still creates no rows
         var (db, harness, comment, _) = await NewCaseAsync("@jsxhuz /stop");
         AuthStub200(harness.Handler);
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Authorized, command.Status); // ticket 14 replaces this
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        Assert.Equal(AgentCommandStatuses.Processed, command.Status);
+        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        Assert.Contains("nothing to stop", payload, StringComparison.Ordinal);
         Assert.Empty(await db.Workflows.AsNoTracking().ToListAsync());
     }
 
@@ -495,7 +498,15 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
             db, pullRequest: pullRequest, configuration: configuration, enabled: enabled, body: body);
         await CommandTestSupport.SeedCommandEventAsync(db, comment, workItem);
         db.ChangeTracker.Clear();
-        var harness = CommandTestSupport.NewProcessor(postgres.ConnectionString);
+        // ticket 14: the harness registers a default Runtime API stub so the /stop control path can run;
+        // /status and /help never touch it
+        var harness = CommandTestSupport.NewProcessor(postgres.ConnectionString,
+            runtimeStub: new PiAgent.Hosts.Tests.Runtime.DirectHttpStub(_ =>
+                new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new System.Net.Http.StringContent("""{"status":"stopping"}""",
+                        System.Text.Encoding.UTF8, "application/json"),
+                }));
         return (db, harness, comment, workItem);
     }
 

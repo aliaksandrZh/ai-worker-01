@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Platform.Workers;
@@ -108,6 +109,9 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
             case RunStatuses.Cancelled:
                 task.Status = OrchestrationTaskStatuses.Cancelled;
                 task.CancelledAt = now;
+                // ticket 14: the only V1 Run canceller is /stop (decision 61) — the reason rides the
+                // run's stop signal, not the trigger command's own rejection.
+                task.FailureReason = AgentCommandRejectionReasons.StopRequested;
                 if (command is not null)
                 {
                     command.Status = AgentCommandStatuses.Failed;

@@ -19,16 +19,18 @@ namespace PiAgent.Hosts.Tests.Runtime;
 /// 04 §3 payload shape). Outcome mapping: 2xx → HandedOff (job completed, Task starting), 4xx →
 /// Permanent (claim-time cancel), 429/5xx/network → Transient (claim released), 409-with-terminal-run →
 /// HandedOff (idempotent, restart recovery).
-internal sealed class DirectHttpStub(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
+public sealed class DirectHttpStub(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
 {
     public List<HttpRequestMessage> Requests { get; } = [];
     public List<string> Bodies { get; } = [];
+    /// <summary>Mutable default responder (ticket 14 stop tests flip success/failure between cycles).</summary>
+    public Func<HttpRequestMessage, HttpResponseMessage>? Fallback { get; set; }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
         Bodies.Add(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
-        return Task.FromResult(answer(request));
+        return Task.FromResult((Fallback ?? answer)(request));
     }
 }
 
@@ -97,6 +99,44 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
             source => source.GetProperty("kind").GetString() == ContextAssembler.SourceKinds.WorkItem);
         Assert.Contains(includedSources.EnumerateArray(),
             source => source.GetProperty("kind").GetString() == ContextAssembler.SourceKinds.CommandComment);
+    }
+
+    /// <summary>Ticket 14: /stop cancelled the claimed Task while this claim was mid-flight — the
+    /// fresh-state guard removes the just-prepared pending Run rows and never touches the Runtime API.</summary>
+    [Fact]
+    public async Task Dispatch_SupersededWhenTheTaskWasCancelledMidClaim()
+    {
+        await postgres.ResetAsync();
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
+        await api.Db.SaveChangesAsync();
+
+        // the /stop cancellation landed between the snapshot read and the handoff: Task cancelled,
+        // Job cancelled — the prepared pending Run rows still exist and must go, unsent
+        await api.Db.OrchestrationTasks
+            .Where(t => t.Id == preparation.Task.Id)
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(t => t.Status, OrchestrationTaskStatuses.Cancelled)
+                .SetProperty(t => t.FailureReason, AgentCommandRejectionReasons.StopRequested));
+        await api.Db.OrchestrationJobs
+            .Where(j => j.TaskId == preparation.Task.Id)
+            .ExecuteUpdateAsync(u => u.SetProperty(j => j.Status, OrchestrationJobStatuses.Cancelled));
+
+        var stub = new DirectHttpStub(_ => throw new InvalidOperationException("a superseded claim must never reach the Runtime API"));
+        var outcome = await NewDispatcher(stub).DispatchAsync(api.Db, preparation, TestToken);
+
+        Assert.Equal(DispatchOutcome.Superseded, outcome);
+        Assert.Empty(stub.Requests);
+        var db = postgres.NewDbContext();
+        Assert.Empty(await db.Runs.AsNoTracking().Where(r => r.TaskId == preparation.Task.Id).ToListAsync());
+        Assert.Empty(await db.AgentSessions.AsNoTracking().ToListAsync()); // cascaded
+        Assert.Empty(await db.ContainerInstances.AsNoTracking().ToListAsync()); // cascaded
+        Assert.Empty(await db.RunContextSnapshots.AsNoTracking().ToListAsync()); // cascaded
+        // the terminal task/job rows are untouched (already cancelled by /stop)
+        Assert.Equal(OrchestrationTaskStatuses.Cancelled,
+            (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == preparation.Task.Id)).Status);
+        Assert.Equal(OrchestrationJobStatuses.Cancelled,
+            (await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.TaskId == preparation.Task.Id)).Status);
     }
 
     [Fact]

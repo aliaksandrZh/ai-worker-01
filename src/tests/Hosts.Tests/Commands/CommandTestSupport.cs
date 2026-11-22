@@ -5,10 +5,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Poller;
+using PiAgent.Hosts.Tests.Runtime;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
+using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Poller;
 
 namespace PiAgent.Hosts.Tests.Commands;
@@ -130,8 +132,10 @@ public static class CommandTestSupport
         return db.SaveChangesAsync().ContinueWith(_ => created);
     }
 
-    /// <summary>A processor wired against the real postgres fixture with a stubbed GitHub handler.</summary>
-    public static ProcessorHarness NewProcessor(string connectionString, ConfigurationState? configurationState = null)
+    /// <summary>A processor wired against the real postgres fixture with a stubbed GitHub handler.
+    /// `runtimeStub` (optional, ticket 14) wires a stubbed Runtime API for the /stop control path.
+    /// </summary>
+    public static ProcessorHarness NewProcessor(string connectionString, ConfigurationState? configurationState = null, DirectHttpStub? runtimeStub = null)
     {
         var services = new ServiceCollection();
         services.AddDbContext<AppDbContext>(options => options
@@ -149,6 +153,10 @@ public static class CommandTestSupport
         services.AddSingleton(configuration);
         services.AddSingleton(gate);
         services.AddSingleton(metrics);
+        if (runtimeStub is { } stub)
+            services.AddSingleton(new RuntimeApiClient(
+                new System.Net.Http.HttpClient(stub) { BaseAddress = new Uri("http://runtime-api.test") },
+                Microsoft.Extensions.Options.Options.Create(new RuntimeApiOptions { BaseUrl = "http://runtime-api.test", ServiceToken = "tok-orch" })));
         services.AddLogging(logging => logging.AddSimpleConsole().SetMinimumLevel(LogLevel.Debug));
 
         var provider = services.BuildServiceProvider();
