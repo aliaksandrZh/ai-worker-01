@@ -19,10 +19,10 @@ namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
 /// Ticket 09: the Runtime Run Pipeline API — the single Orchestrator-owned `/start` provisioning
-/// endpoint (per-Run tree, per-Run credential, container via Komodo with the profile version's
+/// endpoint (per-Run tree, per-Run credential, container via Docker with the profile version's
 /// resource limits), the four callback routes persisting RunEvents before acknowledgement (idempotent
 /// by eventId, scoped to the runId, revoked after terminal delivery), the input pull channel, stop,
-/// status, and the restart reconciler. FakeKomodo stands in for Komodo Core.
+/// status, and the restart reconciler. FakeDocker stands in for the Docker Engine socket.
 /// </summary>
 public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -41,11 +41,11 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(preparation.Run.Id, body.RootElement.GetProperty("runId").GetGuid());
         Assert.Equal("starting", body.RootElement.GetProperty("status").GetString());
-        Assert.Equal($"pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("deploymentName").GetString());
+        Assert.Equal($"pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("containerName").GetString());
         Assert.Contains("pi-session-", body.RootElement.GetProperty("sessionFilePath").GetString());
-        Assert.Equal($"komodo-pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("komodoDeploymentId").GetString());
+        Assert.Equal($"docker-pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("dockerContainerId").GetString());
 
-        // container row: komodo metadata + observed machine
+        // container row: docker metadata + observed machine
         var db = postgres.NewDbContext();
         var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id);
         Assert.Equal(ContainerObservedStates.Running, container.ObservedState);
@@ -74,19 +74,19 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.True(Directory.Exists(Path.Combine(runRoot, "callback-spool")));
         Assert.True(File.Exists(Path.Combine(runRoot, "callback-token")));
 
-        // komodo deployment config: pinned image, resource limits from resource_configuration, mounts
-        var plan = api.Komodo.Created.Single();
+        // docker create config: pinned image, resource limits from resource_configuration, mounts
+        var plan = api.Docker.Created.Single();
         Assert.Equal("agent-stub:v1", plan.Image);
-        Assert.Contains("--memory=512m", plan.ExtraArgs);
-        Assert.Contains("--cpus=1.0", plan.ExtraArgs);
+        Assert.Equal(512L * 1024 * 1024, plan.MemoryBytes);
+        Assert.Equal(1.0m, plan.Cpus);
         Assert.Contains("pi-agent-net", plan.Network);
-        var volumes = plan.Volumes.Split('\n');
+        var volumes = plan.Binds;
         Assert.Contains(volumes, v => v.EndsWith("/workspace"));
         Assert.Contains(volumes, v => v.EndsWith("/session"));
         Assert.Contains(volumes, v => v.EndsWith("/logs"));
         Assert.Contains(volumes, v => v.EndsWith("/spool"));
         Assert.Contains(volumes, v => v.EndsWith("/run/secrets/callback-token:ro"));
-        var environment = plan.Environment!.Split('\n');
+        var environment = plan.Env;
         Assert.Contains(environment, e => e.StartsWith("PI_RUN_ID="));
         Assert.Contains(environment, e => e.StartsWith("PI_CALLBACK_BASE_URL=http://runtime-api:8080"));
         Assert.Contains(environment, e => e == "PI_HEARTBEAT_SECONDS=15");
@@ -107,7 +107,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         using var body = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
         Assert.Equal("starting", body.RootElement.GetProperty("status").GetString());
-        Assert.Single(api.Komodo.Created); // one deployment, never duplicated
+        Assert.Single(api.Docker.Created); // one container, never duplicated
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Contains("revoked", await revokedHeartbeat.Content.ReadAsStringAsync());
 
         // container stopped + workspace released + session terminated
-        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single());
+        Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single());
         var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id);
         Assert.Equal(ContainerObservedStates.Stopped, container.ObservedState);
         var workspace = await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == preparation.Task.Id);
@@ -359,7 +359,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
             RuntimeTestSupport.CallbackToken(api, preparation.Run.Id), "events",
             $@"{{""eventId"":""late-event"",""type"":""{RunEventTypes.AgentStarted}"",""occurredAt"":""{DateTime.UtcNow:O}""}}");
         Assert.Equal(HttpStatusCode.Forbidden, after.StatusCode);
-        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single());
+        Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single());
     }
 
     [Fact]
@@ -517,7 +517,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal("stopping", stopped.RootElement.GetProperty("status").GetString());
         // ticket 14: the signal is recorded (decision-61 timeline) but the container is NOT stopped —
         // the Bridge performs the graceful sequence and the terminal cancelled callback stops it
-        Assert.Empty(api.Komodo.Stopped);
+        Assert.Empty(api.Docker.Stopped);
 
         var db = postgres.NewDbContext();
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
@@ -610,7 +610,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
         Assert.Equal("/session/discovered.jsonl", session.SessionFilePath); // the decision-57 path write-back
         // decision 75: terminal delivery stops the container and releases the workspace
-        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single());
+        Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single());
         Assert.Equal(RunStatuses.Cancelled, run.Status);
 
         var redelivery = await bearer.PostAsJsonAsync($"/internal/runtime/runs/{preparation.Run.Id}/cancelled", new
@@ -639,23 +639,23 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         await sweeper.RunCycleAsync(default);
         Assert.Equal(RunStatuses.Stopping,
             (await api.Db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
-        Assert.Empty(api.Komodo.Stopped);
+        Assert.Empty(api.Docker.Stopped);
 
-        // Komodo outage: desired state preserved, nothing corrupted, the sweep retries (decision 22)
+        // Docker outage: desired state preserved, nothing corrupted, the sweep retries (decision 22)
         await api.Db.Runs.Where(r => r.Id == preparation.Run.Id)
             .ExecuteUpdateAsync(u => u.SetProperty(r => r.StopRequestedAt, DateTime.UtcNow - StopConfirmSweeper.GraceWindow - TimeSpan.FromSeconds(10)));
-        api.Komodo.StopSucceeds = false;
+        api.Docker.StopSucceeds = false;
         await sweeper.RunCycleAsync(default);
         Assert.Equal(RunStatuses.Stopping,
             (await api.Db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
-        api.Komodo.StopSucceeds = true;
+        api.Docker.StopSucceeds = true;
 
         await sweeper.RunCycleAsync(default);
         var db = postgres.NewDbContext();
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
         Assert.Equal(RunStatuses.Cancelled, run.Status); // reconciled cancellation (06 §8: "or reconciliation")
         Assert.Contains("stop unconfirmed", run.ErrorMessage ?? "", StringComparison.Ordinal);
-        Assert.Contains(preparation.Run.Id.ToString(), api.Komodo.Stopped.Single()); // the hard backstop
+        Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single()); // the hard backstop
         Assert.True(await db.Artifacts.AsNoTracking().AnyAsync(a => a.TaskId == preparation.Task.Id && a.Type == ArtifactTypes.LogReference));
         Assert.Equal(WorkspaceStatuses.Ready,
             (await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == preparation.Task.Id)).Status);
@@ -677,7 +677,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal("starting", body.RootElement.GetProperty("status").GetString());
         Assert.Equal("running", body.RootElement.GetProperty("container").GetProperty("observedState").GetString());
         Assert.Equal("running", body.RootElement.GetProperty("container").GetProperty("desiredState").GetString());
-        Assert.Equal($"pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("container").GetProperty("deploymentName").GetString());
+        Assert.Equal($"pi-session-{preparation.Run.Id}", body.RootElement.GetProperty("container").GetProperty("containerName").GetString());
         Assert.Equal("in_use", body.RootElement.GetProperty("session").GetProperty("status").GetString());
 
         var unknown = await client.GetAsync($"/internal/runtime/runs/{Guid.NewGuid()}");
@@ -690,12 +690,12 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     // ---- reconciler (restart recovery) ----
 
     [Fact]
-    public async Task Reconciler_RefreshesObservedState_FromKomodo()
+    public async Task Reconciler_RefreshesObservedState_FromDocker()
     {
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
         var (preparation, client, _) = await SeedWithStart(api);
 
-        api.Komodo.States[$"pi-session-{preparation.Run.Id}"] = "exited"; // the container died after start
+        api.Docker.States[$"pi-session-{preparation.Run.Id}"] = "exited"; // the container died after start
         var reconciler = new RunReconcilerCycle(api.App.Services.GetRequiredService<IServiceScopeFactory>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<RunReconcilerCycle>.Instance);
         await reconciler.RunCycleAsync(default);
@@ -710,6 +710,46 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(RunStatuses.Failed, reloadedRun.Status);
         Assert.Equal(RunErrorCodes.RuntimeFailure, reloadedRun.ErrorCode);
         Assert.StartsWith("reconciled:", reloadedRun.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Reconciler_Inspect404_IsRemoved_RunsTheDeathReconciliation()
+    {
+        // decision 82: Docker inspect 404 = the container is GONE (observed `removed`), never an outage —
+        // a running Run whose container vanished is reconciled failed like any other silent death.
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var (preparation, client, _) = await SeedWithStart(api);
+
+        api.Docker.States.Remove($"pi-session-{preparation.Run.Id}"); // the fake returns `removed` for unknown containers (the inspect-404 shape)
+        var reconciler = new RunReconcilerCycle(api.App.Services.GetRequiredService<IServiceScopeFactory>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RunReconcilerCycle>.Instance);
+        await reconciler.RunCycleAsync(default);
+
+        var db = postgres.NewDbContext();
+        var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id);
+        Assert.Equal(ContainerObservedStates.Stopped, container.ObservedState); // removed → reconciled terminal stop
+        Assert.NotNull(container.RemovedAt);
+        var reloadedRun = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Equal(RunStatuses.Failed, reloadedRun.Status);
+        Assert.Equal(RunErrorCodes.RuntimeFailure, reloadedRun.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Reconciler_DiesWithExitFacts_RecordsDockerExitCode()
+    {
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var (preparation, client, _) = await SeedWithStart(api);
+
+        var name = $"pi-session-{preparation.Run.Id}";
+        api.Docker.States[name] = "exited";
+        api.Docker.ExitFacts[name] = (137, true); // docker inspect State.ExitCode/OOMKilled
+        var reconciler = new RunReconcilerCycle(api.App.Services.GetRequiredService<IServiceScopeFactory>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RunReconcilerCycle>.Instance);
+        await reconciler.RunCycleAsync(default);
+
+        var run = await postgres.NewDbContext().Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
+        Assert.Contains("docker exit 137", run.ErrorMessage);
+        Assert.Contains("OOMKilled", run.ErrorMessage);
     }
 }
 
@@ -747,7 +787,7 @@ public class StartContainerPlanTests
         Directory.CreateDirectory(secretsDir);
         var plan = StartPlan(secretsDir, environmentConfiguration: null, out var error);
         Assert.Null(error);
-        Assert.DoesNotContain(plan!.Volumes.Split('\n'), v => v.Contains("/run/secrets/") && !v.Contains("callback-token"));
+        Assert.DoesNotContain(plan!.Binds, v => v.Contains("/run/secrets/") && !v.Contains("callback-token"));
     }
 
     [Fact]
@@ -788,7 +828,7 @@ public class StartContainerPlanTests
         File.WriteAllText(Path.Combine(secretsDir, "github_agent_pat"), "pat-bytes");
         var plan = StartPlan(secretsDir, """{"secret_references":["github_agent_pat","github_agent_pat"]}""", out var error);
         Assert.Null(error);
-        Assert.Single(plan!.Volumes.Split('\n'), v => v.EndsWith(":/run/secrets/github_agent_pat:ro"));
+        Assert.Single(plan!.Binds, v => v.EndsWith(":/run/secrets/github_agent_pat:ro"));
     }
 
     // ---- mount-source hygiene (decision 54 fail-closed; ticket 11b review) ----
@@ -829,7 +869,7 @@ public class StartContainerPlanTests
         Directory.CreateDirectory(secretsDir);
         var plan = StartPlan(secretsDir, """{"secret_references":null}""", out var error);
         Assert.Null(error);
-        Assert.DoesNotContain(plan!.Volumes.Split('\n'), v => v.Contains("/run/secrets/") && !v.Contains("callback-token"));
+        Assert.DoesNotContain(plan!.Binds, v => v.Contains("/run/secrets/") && !v.Contains("callback-token"));
     }
 
     [Fact]
@@ -841,15 +881,15 @@ public class StartContainerPlanTests
         File.WriteAllText(Path.Combine(secretsDir, "mcp-github.token"), "other-bytes");
         var plan = StartPlan(secretsDir, """{"secret_references":["github_agent_pat"]}""", out var error);
         Assert.Null(error);
-        var secretMounts = plan!.Volumes.Split('\n').Where(v => v.Contains("/run/secrets/") && !v.Contains("callback-token")).ToList();
+        var secretMounts = plan!.Binds.Where(v => v.Contains("/run/secrets/") && !v.Contains("callback-token")).ToList();
         Assert.Single(secretMounts);
         // read-only host-managed file — only the profile's referenced name, path shape per decision 54
         Assert.EndsWith("/etc/pi-agent/secrets/github_agent_pat:/run/secrets/github_agent_pat:ro", secretMounts[0]);
         // decision 54: values travel by file mount only — the name must not leak into the environment either
-        Assert.DoesNotContain("github_agent_pat", plan.Environment ?? "");
+        Assert.DoesNotContain("github_agent_pat", plan.Env ?? []);
     }
 
-    private static KomodoDeploymentPlan? StartPlan(string secretsDir, string? environmentConfiguration, out string? error) =>
+    private static ContainerPlan? StartPlan(string secretsDir, string? environmentConfiguration, out string? error) =>
         StartContainerPlan(
             Version(environmentConfiguration, """{"cpu":1.0,"memory":"512MiB"}"""),
             Storage(secretsDir, "/etc/pi-agent/secrets"), out error);
@@ -858,11 +898,11 @@ public class StartContainerPlanTests
         StartContainerPlan(Version(environmentConfiguration, null), Storage(secretsDir, "/etc/pi-agent/secrets"), out var error) is null
             ? error! : "";
 
-    private static KomodoDeploymentPlan? StartContainerPlan(
+    private static ContainerPlan? StartContainerPlan(
         AgentProfileVersion version, RuntimeStorageService storage, out string? error,
         string? workItemRepository = "aliaksandrZh/04") =>
         StartRunHandler.TryBuildContainerPlan(Run(), Task(), version, storage,
-            new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository, reviewPullRequestNumber: null,
+            new ContainerProvisionerOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository, reviewPullRequestNumber: null,
             out var plan, out error) ? plan : null;
 
     [Fact]
@@ -873,11 +913,11 @@ public class StartContainerPlanTests
         var plan = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
             out var error, workItemRepository: "aliaksandrZh/04");
         Assert.Null(error);
-        Assert.Contains("GIT_CLONE_REPO=aliaksandrZh/04", plan!.Environment);
+        Assert.Contains("GIT_CLONE_REPO=aliaksandrZh/04", plan!.Env);
         // profiles without a clone need no env at all
         var bare = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
             out _, workItemRepository: null);
-        Assert.DoesNotContain("GIT_CLONE_REPO", bare!.Environment ?? "");
+        Assert.DoesNotContain("GIT_CLONE_REPO", bare!.Env ?? []);
     }
 
     [Fact]
@@ -891,12 +931,12 @@ public class StartContainerPlanTests
             TargetHeadSha = "head-sha-1", TargetBaseSha = "base-sha-1",
         };
         var plan = StartRunHandler.TryBuildContainerPlan(Run(), review, Version(null, """{"cpu":1.0,"memory":"512MiB"}"""),
-            Storage(secretsDir, "/etc/pi-agent/secrets"), new KomodoOptions(), "/tmp/host/workspace", "/tmp/host/runs",
+            Storage(secretsDir, "/etc/pi-agent/secrets"), new ContainerProvisionerOptions(), "/tmp/host/workspace", "/tmp/host/runs",
             "aliaksandrZh/04", reviewPullRequestNumber: 13, out var built, out var error) ? built : null;
         Assert.Null(error);
-        Assert.Contains("REVIEW_HEAD_SHA=head-sha-1", plan!.Environment);
-        Assert.Contains("REVIEW_BASE_SHA=base-sha-1", plan.Environment);
-        Assert.Contains("REVIEW_PR_NUMBER=13", plan.Environment);
+        Assert.Contains("REVIEW_HEAD_SHA=head-sha-1", plan!.Env);
+        Assert.Contains("REVIEW_BASE_SHA=base-sha-1", plan.Env);
+        Assert.Contains("REVIEW_PR_NUMBER=13", plan.Env);
     }
 
     [Fact]
@@ -906,7 +946,7 @@ public class StartContainerPlanTests
         Directory.CreateDirectory(secretsDir);
         var plan = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
             out _, workItemRepository: "aliaksandrZh/04");
-        Assert.DoesNotContain("REVIEW_HEAD_SHA", plan!.Environment ?? "");
-        Assert.DoesNotContain("REVIEW_PR_NUMBER", plan.Environment ?? "");
+        Assert.DoesNotContain("REVIEW_HEAD_SHA", plan!.Env ?? []);
+        Assert.DoesNotContain("REVIEW_PR_NUMBER", plan.Env ?? []);
     }
 }

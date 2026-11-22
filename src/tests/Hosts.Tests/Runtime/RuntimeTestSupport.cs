@@ -20,63 +20,66 @@ using Xunit;
 
 namespace PiAgent.Hosts.Tests.Runtime;
 
-/// <summary>The fake IKomodoClient: records provisioning calls, drives observable container states.</summary>
-public sealed class FakeKomodo : IKomodoClient
+/// <summary>The fake IContainerProvisioner: records provisioning calls, drives observable container states.</summary>
+public sealed class FakeDocker : IContainerProvisioner
 {
-    public List<KomodoDeploymentPlan> Created { get; } = [];
+    public List<ContainerPlan> Created { get; } = [];
     public Dictionary<string, string> States { get; } = [];
+    /// <summary>Per-container inspect exit facts the tests can pin (ExitCode/OOMKilled enrichment).</summary>
+    public Dictionary<string, (long? ExitCode, bool? OomKilled)> ExitFacts { get; } = [];
     public List<string> Stopped { get; } = [];
     public List<string> Removed { get; } = [];
-    public bool DeploySucceeds { get; set; } = true;
-    /// <summary>False simulates a Komodo outage at stop time (ticket 14: the sweeper retries).</summary>
+    public bool StartSucceeds { get; set; } = true;
+    /// <summary>False simulates a Docker outage at stop time (ticket 14: the sweeper retries).</summary>
     public bool StopSucceeds { get; set; } = true;
 
-    public Task<string?> CreateDeploymentAsync(KomodoDeploymentPlan plan, CancellationToken cancellationToken)
+    public Task<string?> CreateContainerAsync(ContainerPlan plan, CancellationToken cancellationToken)
     {
         Created.Add(plan);
         States[plan.Name] = "created";
-        return Task.FromResult<string?>($"komodo-{plan.Name}");
+        return Task.FromResult<string?>($"docker-{plan.Name}");
     }
 
-    public async Task<bool> DeployAndWaitRunningAsync(string deployment, TimeSpan timeout, CancellationToken cancellationToken)
+    public async Task<bool> StartAndWaitRunningAsync(string container, TimeSpan timeout, CancellationToken cancellationToken)
     {
         await Task.Yield();
-        if (!DeploySucceeds)
+        if (!StartSucceeds)
             return false;
-        States[deployment] = "running";
+        States[container] = "running";
         return true;
     }
 
-    public Task<KomodoContainerSnapshot?> GetContainerStateAsync(string deployment, CancellationToken cancellationToken) =>
-        Task.FromResult(States.TryGetValue(deployment, out var state)
-            ? new KomodoContainerSnapshot(state, null)
-            : null);
+    public Task<ContainerSnapshot> GetContainerStateAsync(string container, CancellationToken cancellationToken) =>
+        Task.FromResult(States.TryGetValue(container, out var state)
+            ? new ContainerSnapshot(state, ExitFacts.GetValueOrDefault(container).ExitCode, ExitFacts.GetValueOrDefault(container).OomKilled)
+            : new ContainerSnapshot("removed", null, null));
 
-    public async Task<bool> StopAsync(string deployment, CancellationToken cancellationToken)
+    public async Task<bool> StopAsync(string container, CancellationToken cancellationToken)
     {
         await Task.Yield();
         if (!StopSucceeds)
             return false;
-        Stopped.Add(deployment);
-        States[deployment] = "stopped";
+        Stopped.Add(container);
+        States[container] = "stopped";
         return true;
     }
 
-    public Task<bool> RemoveAsync(string deployment, CancellationToken cancellationToken)
+    public Task<bool> RemoveAsync(string container, CancellationToken cancellationToken)
     {
-        Removed.Add(deployment);
-        States.Remove(deployment);
+        Removed.Add(container);
+        States.Remove(container);
         return Task.FromResult(true);
     }
 }
 
-/// <summary>One runtime-api app against the Postgres fixture: temp storage roots, the fake Komodo, and
-/// the orchestrator service token. Run/Session/Container/Workspace rows come from production RunPrepare.</summary>
+/// <summary>One runtime-api app against the Postgres fixture: temp storage roots, the fake Docker
+/// provisioner, and the orchestrator service token. Run/Session/Container/Workspace rows come from
+/// production RunPrepare.</summary>
 public sealed record RuntimeApi(
     WebApplication App,
     HttpClient ServiceClient,
     AppDbContext Db,
-    FakeKomodo Komodo,
+    FakeDocker Docker,
     string StorageRoot) : IAsyncDisposable
 {
     public const string OrchestratorToken = "tok-orch";
@@ -179,7 +182,7 @@ public static class RuntimeTestSupport
         Directory.CreateDirectory(storageRoot);
         Directory.CreateDirectory(System.IO.Path.Combine(storageRoot, "secrets"));
 
-        var komodo = new FakeKomodo();
+        var docker = new FakeDocker();
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.WebHost.UseSetting("ConnectionStrings:DefaultDb", fixture.ConnectionString);
@@ -190,10 +193,9 @@ public static class RuntimeTestSupport
             .UseSnakeCaseNamingConvention());
         builder.Services.Configure<ServiceTokenOptions>(options => options.Orchestrator = RuntimeApi.OrchestratorToken);
         builder.Services.AddSingleton<ServiceTokenFilter>();
-        builder.Services.Configure<KomodoOptions>(options =>
+        builder.Services.Configure<ContainerProvisionerOptions>(options =>
         {
-            options.Url = "http://komodo.fake";
-            options.ServerId = "Local";
+            options.HostId = "Local";
             options.AgentNetwork = "pi-agent-net";
             options.CallbackBaseUrl = "http://runtime-api:8080";
         });
@@ -205,7 +207,7 @@ public static class RuntimeTestSupport
             options.SecretsHostDir = System.IO.Path.Combine(storageRoot, "secrets");
             options.ContainerUserId = 1000;
         });
-        builder.Services.AddSingleton<IKomodoClient>(komodo);
+        builder.Services.AddSingleton<IContainerProvisioner>(docker);
         builder.Services.AddSingleton<RuntimeStorageService>();
         builder.Services.AddSingleton<RunCallbackTokenFilter>();
 
@@ -215,6 +217,6 @@ public static class RuntimeTestSupport
         var client = app.GetTestClient();
         client.DefaultRequestHeaders.Add(ServiceAuthExtensions.HeaderName, RuntimeApi.OrchestratorToken);
         var db = app.Services.GetRequiredService<AppDbContext>();
-        return new RuntimeApi(app, client, db, komodo, storageRoot);
+        return new RuntimeApi(app, client, db, docker, storageRoot);
     }
 }

@@ -60,3 +60,24 @@ Migration sketch, if taken:
   redeploy, and (if ever remote) a docker over ssh context.
 - Keep: endpoints, `host-bridge` extension, smoke script (re-run live), log layout, pi
   session persistence.
+
+---
+
+## Decision (2026-11-22, decision 82): Komodo dropped
+
+The remote/fleet goal stayed dead and the real system (`src/`) never used Komodo's data plane — the
+Bridge speaks HTTP callbacks over the compose network, not Komodo terminals. The trade-off doc's own
+tie-breaker ("if the remote/fleet goal is dead, the swap is worth doing once and never again") applied.
+
+What was done, beyond the PoC-path sketch above (which stays frozen with the PoC):
+
+- `src/Hosts/RuntimeApi/DockerProvisioning.cs` — one container per Run over the Docker Engine HTTP
+  API on the unix socket (`containers/create` → `start` → `inspect` → `stop` → `DELETE`), same
+  raw-HTTP posture as the Build Worker and Host Monitor; no `Docker.DotNet`.
+- Komodo's implicit semantics moved in-house: inspect 404 = container gone (observed `removed`,
+  stop/remove idempotent); daemon/socket failure = transient (desired state preserved, retried);
+  create-name collision force-removes the stale container; provisioning failure paths remove
+  created-but-unconfirmed containers.
+- `ContainerInstance.komodo_deployment_id/deployment_name` → `docker_container_id/container_name`;
+  runtime-api mounts the socket read-write; `src/komodo/` and `task agent-komodo` removed;
+  decision 82 recorded in `docs/pi-agent-architecture/05-v1-decisions.md`.

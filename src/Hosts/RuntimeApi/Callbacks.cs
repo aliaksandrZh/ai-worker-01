@@ -88,21 +88,21 @@ public static class CallbackHandler
     }
 
     public static async Task<IResult> CompletedAsync(
-        Guid runId, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
+        Guid runId, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken cancellationToken)
     {
         return await TerminalAsync(runId, RunStatuses.Succeeded, RunEventTypes.Completed, request.EventId,
             () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
-            db, storage, komodo,
+            db, storage, provisioner,
             run => ValidateAndApplyCompletedAsync(run, request, db, storage, cancellationToken),
             cancellationToken);
     }
 
     public static async Task<IResult> FailedAsync(
-        Guid runId, FailedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
+        Guid runId, FailedRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken cancellationToken)
     {
         return await TerminalAsync(runId, RunStatuses.Failed, RunEventTypes.Failed, request.EventId,
             () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
-            db, storage, komodo,
+            db, storage, provisioner,
             run =>
             {
                 run.ErrorCode = request.Error.Code;
@@ -117,11 +117,11 @@ public static class CallbackHandler
     /// gone — Run → `cancelled` with the same terminal facts as every terminal delivery (no error code;
     /// the reason is the stop signal's, kept in ErrorMessage for /status).</summary>
     public static async Task<IResult> CancelledAsync(
-        Guid runId, CancelledRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken cancellationToken)
+        Guid runId, CancelledRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken cancellationToken)
     {
         return await TerminalAsync(runId, RunStatuses.Cancelled, RunEventTypes.Cancelled, request.EventId,
             () => JsonSerializer.Serialize(request, PayloadJson), request.OccurredAt, request.SessionFilePath,
-            db, storage, komodo,
+            db, storage, provisioner,
             run =>
             {
                 if (request.Reason is { } reason)
@@ -140,7 +140,7 @@ public static class CallbackHandler
         string? sessionFilePath,
         AppDbContext db,
         RuntimeStorageService storage,
-        IKomodoClient komodo,
+        IContainerProvisioner provisioner,
         Func<Run, Task<IResult?>> apply,
         CancellationToken cancellationToken)
     {
@@ -213,9 +213,13 @@ public static class CallbackHandler
             .Where(c => c.RunId == runId)
             .OrderByDescending(c => c.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
-        if (container?.DeploymentName is { } deployment)
+        if (container?.ContainerName is { } containerName)
         {
-            var stopped = await komodo.StopAsync(deployment, cancellationToken);
+            // The stop is the container's own termination: with direct docker stop (decision 82) the
+            // SIGTERM can kill the Bridge mid-response — the request aborts and the caller's token is
+            // cancelled. The observed-machine facts must not be lost to that abort (decision 22
+            // posture), so this block ignores the request cancellation entirely.
+            var stopped = await provisioner.StopAsync(containerName, CancellationToken.None);
             if (stopped)
             {
                 container.ObservedState = ContainerObservedStates.Stopped;
@@ -227,8 +231,8 @@ public static class CallbackHandler
                 {
                     set.SetProperty(w => w.Status, WorkspaceStatuses.Ready);
                     set.SetProperty(w => w.LastUsedAt, DateTime.UtcNow);
-                }, cancellationToken);
-            await db.SaveChangesAsync(cancellationToken);
+                }, CancellationToken.None);
+            await db.SaveChangesAsync(CancellationToken.None);
         }
         return Results.Json(new { persisted = true });
     }

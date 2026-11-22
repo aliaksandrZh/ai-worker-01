@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PiAgent.Hosts.Tests" />
+  </ItemGroup>
+
 </Project>

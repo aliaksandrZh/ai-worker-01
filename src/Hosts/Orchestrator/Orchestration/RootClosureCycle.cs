@@ -34,7 +34,7 @@ public sealed class RootClosureCycle(IServiceScopeFactory scopeFactory, RuntimeA
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 // Cleanup is retryable: retain the event as pending rather than losing a root when
-                // Runtime API/Komodo is temporarily unavailable.
+                // Runtime API is temporarily unavailable.
                 githubEvent.ProcessingStatus = GitHubEventStatuses.Pending;
                 githubEvent.ProcessingError = exception.ToString()[..Math.Min(exception.ToString().Length, 2000)];
             }

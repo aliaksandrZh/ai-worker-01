@@ -108,7 +108,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
 
     private sealed class Scope : IAsyncDisposable
     {
-        public required FakeKomodo Komodo;
+        public required FakeDocker Docker;
         public required string StorageRoot;
         public required RuntimeStorageService Storage;
         public TimeoutSweeper Sweeper = null!;
@@ -126,12 +126,12 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
     {
         var storageRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pi-timeout-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(System.IO.Path.Combine(storageRoot, "workflows"));
-        var komodo = new FakeKomodo();
+        var docker = new FakeDocker();
         var services = new ServiceCollection()
             .AddDbContext<AppDbContext>(options => options
                 .UseNpgsql(postgres.ConnectionString)
                 .UseSnakeCaseNamingConvention())
-            .AddSingleton<IKomodoClient>(komodo)
+            .AddSingleton<IContainerProvisioner>(docker)
             .Configure<StorageOptions>(options =>
             {
                 options.ManagedRoot = System.IO.Path.Combine(storageRoot, "workflows");
@@ -145,7 +145,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
         return new Scope
         {
-            Komodo = komodo,
+            Docker = docker,
             StorageRoot = storageRoot,
             Storage = services.GetRequiredService<RuntimeStorageService>(),
             Sweeper = new TimeoutSweeper(scopeFactory, Limits, NullLogger<TimeoutSweeper>.Instance),
@@ -168,7 +168,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         preparation!.Run.Status = status;
         preparation.Run.StartedAt = now - startedAgo;
         var container = await db.ContainerInstances.SingleAsync(c => c.RunId == preparation.Run.Id);
-        container.DeploymentName = $"pi-session-{preparation.Run.Id}"; // the Runtime API writes this at provisioning
+        container.ContainerName = $"pi-session-{preparation.Run.Id}"; // the Runtime API writes this at provisioning
         if (progressAgo is { } progress)
             preparation.Run.LastProgressAt = now - progress;
         if (heartbeatAgo is { } heartbeat)
@@ -199,7 +199,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.NotNull(reloaded.CompletedAt);
         Assert.NotNull(reloaded.LogStorageReference);
         // the container was stopped and the terminal facts recorded
-        Assert.Contains(scope.Komodo.Stopped, d => d == $"pi-session-{run.Id}");
+        Assert.Contains(scope.Docker.Stopped, d => d == $"pi-session-{run.Id}");
         var db = postgres.NewDbContext();
         var session = await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == run.Id);
         Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
@@ -299,7 +299,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         // the reconciler's stale view: the run still looks `running`
         var db = postgres.NewDbContext();
         var staleObservation = new Run { Id = run.Id, TaskId = run.TaskId, Status = RunStatuses.Running };
-        var outcome = await RunReconcileService.TerminalAsync(db, scope.Komodo, scope.Storage, staleObservation,
+        var outcome = await RunReconcileService.TerminalAsync(db, scope.Docker, scope.Storage, staleObservation,
             RunStatuses.Failed, RunErrorCodes.RuntimeFailure, "reconciled: must be suppressed", default);
 
         Assert.True(outcome); // skipped as idempotent no-op, not an error
@@ -312,7 +312,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         var second = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(5), progressAgo: TimeSpan.FromSeconds(1));
         var secondDb = postgres.NewDbContext();
         var fresh = await secondDb.Runs.SingleAsync(r => r.Id == second.Id);
-        var reconciled = await RunReconcileService.TerminalAsync(secondDb, scope.Komodo, scope.Storage, fresh,
+        var reconciled = await RunReconcileService.TerminalAsync(secondDb, scope.Docker, scope.Storage, fresh,
             RunStatuses.Failed, RunErrorCodes.RuntimeFailure, "reconciled: control", default);
         Assert.True(reconciled);
         Assert.Equal(RunStatuses.Failed, (await ReloadRunAsync(second.Id)).Status);
@@ -405,8 +405,8 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
             Type = RunEventTypes.AgentStarted, OccurredAt = DateTime.UtcNow.AddMinutes(5), ReceivedAt = DateTime.UtcNow.AddMinutes(5),
         });
         await dbSeed.SaveChangesAsync();
-        // the container died (observed by Komodo) and never emitted a terminal callback
-        scope.Komodo.States[$"pi-session-{run.Id}"] = "exited";
+        // the container died (observed by Docker) and never emitted a terminal callback
+        scope.Docker.States[$"pi-session-{run.Id}"] = "exited";
 
         await scope.DeathReconciler.RunCycleAsync(default);
 
@@ -437,12 +437,12 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
     }
 
     [Fact]
-    public async Task KomodoOutage_NothingCorrupted_RunRetriedNextTick()
+    public async Task DockerOutage_NothingCorrupted_RunRetriedNextTick()
     {
         await postgres.ResetAsync();
         await using var scope = NewScope();
         var run = await SeedRunAsync(RunStatuses.Starting, startedAgo: TimeSpan.FromMinutes(15));
-        scope.Komodo.StopSucceeds = false; // the outage
+        scope.Docker.StopSucceeds = false; // the outage
 
         await scope.Sweeper.RunCycleAsync(default);
 
@@ -450,7 +450,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(RunStatuses.Starting, reloaded.Status); // desired state preserved, nothing written
         Assert.Null(reloaded.CompletedAt);
 
-        scope.Komodo.StopSucceeds = true; // recovery
+        scope.Docker.StopSucceeds = true; // recovery
         await scope.Sweeper.RunCycleAsync(default);
         Assert.Equal(RunStatuses.Failed, (await ReloadRunAsync(run.Id)).Status);
     }

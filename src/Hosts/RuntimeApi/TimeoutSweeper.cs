@@ -95,8 +95,8 @@ public static class TimeoutEvaluator
 /// Task 16: `startup_timeout`/`idle_timeout` verdicts are suppressed while the Run's Bridge callback
 /// spool still holds undelivered entries (decision 60's spool redelivery may be in flight — e.g. right
 /// after a Runtime API restart mid-run); the facts they would adjudicate on may still be in the spool.
-/// Every reconciled terminal goes through <see cref="RunReconcileService"/> (Komodo stop confirmed →
-/// identical terminal facts), so a Komodo outage simply retries the cycle (decision 22). The Run
+/// Every reconciled terminal goes through <see cref="RunReconcileService"/> (Docker stop confirmed →
+/// identical terminal facts), so a Docker outage simply retries the cycle (decision 22). The Run
 /// `starting → running` transition itself is event-driven (`agent_started`, Callbacks.cs); business
 /// Task/Workflow transitions stay with the Orchestrator's terminal consumer.
 /// </summary>
@@ -112,7 +112,7 @@ public sealed class TimeoutSweeper(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var komodo = scope.ServiceProvider.GetRequiredService<IKomodoClient>();
+        var provisioner = scope.ServiceProvider.GetRequiredService<IContainerProvisioner>();
         var storage = scope.ServiceProvider.GetRequiredService<RuntimeStorageService>();
 
         var now = DateTime.UtcNow;
@@ -175,15 +175,15 @@ public sealed class TimeoutSweeper(
 
             var ok = verdict switch
             {
-                TimeoutVerdict.StartupTimeout => await FailAsync(db, komodo, storage, run.Id,
+                TimeoutVerdict.StartupTimeout => await FailAsync(db, provisioner, storage, run.Id,
                     RunStatuses.Failed, RunErrorCodes.StartupTimeout,
                     $"reconciled: the run never became ready within the effective startup_timeout ({startup})",
                     cancellationToken),
-                TimeoutVerdict.RunDuration => await FailAsync(db, komodo, storage, run.Id,
+                TimeoutVerdict.RunDuration => await FailAsync(db, provisioner, storage, run.Id,
                     RunStatuses.TimedOut, null,
                     $"reconciled: the run exceeded the effective max_run_duration ({duration}); /retry is the only recovery",
                     cancellationToken),
-                TimeoutVerdict.IdleConfirmed => await FailAsync(db, komodo, storage, run.Id,
+                TimeoutVerdict.IdleConfirmed => await FailAsync(db, provisioner, storage, run.Id,
                     RunStatuses.Failed, RunErrorCodes.IdleTimeout,
                     $"reconciled: no observable activity within the effective idle_timeout ({idle}) and the host monitor confirmed no active processes/CPU/session activity",
                     cancellationToken),
@@ -211,11 +211,11 @@ public sealed class TimeoutSweeper(
     }
 
     private async Task<bool> FailAsync(
-        AppDbContext db, IKomodoClient komodo, RuntimeStorageService storage, Guid runId,
+        AppDbContext db, IContainerProvisioner provisioner, RuntimeStorageService storage, Guid runId,
         string status, string? errorCode, string message, CancellationToken cancellationToken)
     {
         var run = await db.Runs.SingleAsync(r => r.Id == runId, cancellationToken);
-        return await RunReconcileService.TerminalAsync(db, komodo, storage, run, status, errorCode, message, cancellationToken);
+        return await RunReconcileService.TerminalAsync(db, provisioner, storage, run, status, errorCode, message, cancellationToken);
     }
 
     /// <summary>Extracts (observation age, per-run activity) from the persisted latest observation.

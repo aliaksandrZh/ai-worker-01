@@ -205,8 +205,8 @@ public class OrchestratorCoreModelTests
                      nameof(ContainerInstance.DesiredState), nameof(ContainerInstance.ObservedState),
                      nameof(ContainerInstance.CreatedAt) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");
-        foreach (var nullable in new[] { nameof(ContainerInstance.RunId), nameof(ContainerInstance.KomodoDeploymentId),
-                     nameof(ContainerInstance.DeploymentName), nameof(ContainerInstance.HostId),
+        foreach (var nullable in new[] { nameof(ContainerInstance.RunId), nameof(ContainerInstance.DockerContainerId),
+                     nameof(ContainerInstance.ContainerName), nameof(ContainerInstance.HostId),
                      nameof(ContainerInstance.ContainerImage), nameof(ContainerInstance.LastStartedAt),
                      nameof(ContainerInstance.LastStoppedAt), nameof(ContainerInstance.RemovedAt) })
             Assert.True(properties[nullable].IsNullable, $"{nullable} must be nullable");

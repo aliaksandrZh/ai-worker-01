@@ -17,7 +17,7 @@ GitHub ──REST poll──> Poller ─events─> PostgreSQL <────> Orc
   │                     webhooks)                        │     freezes immutable        local image store)
   │                                                      │     RunContextSnapshot
   │                                                      ▼
-  │              Outbox Worker <─notifications─ Orchestrator → Runtime API ──Komodo──> per-Run container
+  │              Outbox Worker <─notifications─ Orchestrator → Runtime API ──docker socket──> per-Run container
   │              (system comments,                      (Workflow/Task/Run      ▲         │
   │               retries, dead-letter)                  state machines,        │  Runtime Bridge:
   │                                                      one active task        │  pi --mode rpc,
@@ -61,16 +61,16 @@ Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
 |---|---|
 | `src/` | the system itself — .NET 10 + EF Core 10/Npgsql + xUnit: `Platform/` (logging, health, auth, heartbeat plumbing), `Infrastructure/` (AppDbContext + migrations), `Hosts/` (RuntimeApi, Orchestrator, Poller, OutboxWorker, HostMonitor, BuildWorker), `Migrator/`, `config/` (YAML config plane), `tests/` (Testcontainers). Details + quick start: `src/README.md` |
 | `poc/` | frozen proof of concept that validated the ideas (session RPC over Komodo terminals, GitHub polling, pi-worker image). Reference material only — see `poc/README.md` |
+| `docs/komodo-vs-manual-docker.md` | the recorded Komodo trade-off analysis + the decision to drop it (decision 82) |
 | `docs/pi-agent-architecture/` | the accepted spec: architecture + flows, data model, state machines, API contracts, decisions 26–81. Frozen |
 | `docs/tasks/` | implementation tickets (01-stack-and-skeleton … 21-acceptance-readiness) tracking what is done |
-| `Taskfile.yml` | `task stack` / `stack-rebuild` / `stack-logs` / `stack-down` (control plane), `task agent-komodo` (Komodo deployment) |
+| `Taskfile.yml` | `task stack` / `stack-rebuild` / `stack-logs` / `stack-down` (control plane) |
 
 ## Quick start
 
 See `src/README.md` for the full walkthrough; the short version:
 
 ```sh
-task agent-komodo                  # Komodo Core at localhost:9120 (admin/changeme) → create API key
 mkdir -p src/secrets               # sync PAT: its login must equal github.bot_login
 printf '<pat>' > src/secrets/github-sync-pat.txt
 printf '<write-pat>' > src/secrets/github-write-pat.txt

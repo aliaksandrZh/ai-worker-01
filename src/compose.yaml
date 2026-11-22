@@ -50,14 +50,10 @@ services:
       ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
       ServiceTokens__HostMonitor: ${SERVICE_TOKEN_HOST_MONITOR}
       ServiceTokens__BuildWorker: ${SERVICE_TOKEN_BUILD_WORKER}
-      Komodo__Url: ${KOMODO_URL:-http://komodo-core:9120}
-      Komodo__ApiKey: ${KOMODO_API_KEY:-}
-      Komodo__ApiSecret: ${KOMODO_API_SECRET:-}
-      Komodo__ServerId: ${KOMODO_SERVER_ID:-Local}
-      Komodo__CallbackBaseUrl: ${PI_CALLBACK_BASE_URL:-http://runtime-api:8080}
+      AgentContainer__CallbackBaseUrl: ${PI_CALLBACK_BASE_URL:-http://runtime-api:8080}
       Storage__ManagedRoot: /var/lib/pi-agent/workflows
       # Decision 52 tree: the Runtime API creates the physical directories; the same HOST path must
-      # reach Periphery-created agent containers via bind mounts (absolute host path of STORAGE_ROOT).
+      # reach its own created agent containers via bind mounts (absolute host path of STORAGE_ROOT).
       Storage__HostRoot: ${STORAGE_HOST_ROOT:-/var/lib/pi-agent/workflows}
       Storage__SecretsManagedDir: /etc/pi-agent/secrets
       Storage__SecretsHostDir: ${PI_AGENT_SECRETS_HOST_DIR:-/etc/pi-agent/secrets}
@@ -67,6 +63,9 @@ services:
       # configuration plane's system.yaml, read by the reconcilers at startup.
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
     volumes:
+      # Decision 82: the Runtime API provisions agent containers itself — the Docker socket, read-write
+      # (it creates/starts/stops/removes the pi-session-* containers on pi-agent-net).
+      - /var/run/docker.sock:/var/run/docker.sock
       # The managed storage root (decision 52) — writable so /start provisioning can create trees.
       - ${STORAGE_ROOT:-./storage}:/var/lib/pi-agent/workflows
       # Profile-secret existence checks (decision 54): read-only view of the host-managed files.

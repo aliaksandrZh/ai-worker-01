@@ -20,7 +20,7 @@ public class RootCleanupTests(PostgresFixture postgres) : IClassFixture<Postgres
         var response = await api.ServiceClient.PostAsync($"/internal/runtime/workflows/{workflowId}/cleanup", null);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains($"\"workflowId\":\"{workflowId}\"", await response.Content.ReadAsStringAsync());
-        Assert.Single(api.Komodo.Removed);
+        Assert.Single(api.Docker.Removed);
 
         var session = await api.Db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
         var workspace = await api.Db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == preparation.Task.Id);

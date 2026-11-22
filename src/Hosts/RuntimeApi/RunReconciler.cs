@@ -19,13 +19,13 @@ public sealed class RunPipelineMetrics(WorkerLoopState state, RunReconcilerCycle
 
 /// <summary>
 /// The Runtime restart reconciler (01 §12): recovers desired/observed runtime state from PostgreSQL by
-/// re-observing each non-terminal Run's container through Komodo. Beyond refreshing the observed
-/// machine (ticket 09), ticket 13 adds the death reconciliation: a Run still `starting`/`running`
-/// whose container is observed `stopped`/`failed`/`removed` — or whose deployment Komodo no longer
-/// knows — died without emitting a terminal callback; it is finalized `failed` with
+/// re-observing each non-terminal Run's container over the Docker socket (decision 82). Beyond refreshing
+/// the observed machine (ticket 09), ticket 13 adds the death reconciliation: a Run still `starting`/`running`
+/// whose container is observed `stopped`/`failed`/`removed` — or which Docker no longer knows (inspect 404
+/// = `removed`) — died without emitting a terminal callback; it is finalized `failed` with
 /// `runtime_failure` ("reconciled: …") so the notification path fires (01 §12: never silent
-/// recovery). Runs in `stopping` belong to the stop-confirm sweeper (ticket 14). A Komodo outage
-/// (decision 22) makes the observation fail — desired state is preserved and the cycle retries.
+/// recovery). Runs in `stopping` belong to the stop-confirm sweeper (ticket 14). A Docker outage
+/// (decision 22) makes the observation throw — desired state is preserved and the cycle retries;
 /// </summary>
 public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogger<RunReconcilerCycle> logger) : IWorkerCycle
 {
@@ -35,7 +35,7 @@ public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogge
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var komodo = scope.ServiceProvider.GetRequiredService<IKomodoClient>();
+        var provisioner = scope.ServiceProvider.GetRequiredService<IContainerProvisioner>();
 
         var unfinishedIds = await db.Runs
             .Where(r => r.Status == RunStatuses.Pending
@@ -50,21 +50,24 @@ public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogge
 
         var storage = scope.ServiceProvider.GetRequiredService<RuntimeStorageService>();
         var containers = await db.ContainerInstances
-            .Where(c => unfinishedIds.Contains(c.RunId!.Value) && c.DeploymentName != null)
+            .Where(c => unfinishedIds.Contains(c.RunId!.Value) && c.ContainerName != null)
             .ToListAsync(cancellationToken);
         var runsById = await db.Runs
             .Where(r => unfinishedIds.Contains(r.Id))
             .ToDictionaryAsync(r => r.Id, cancellationToken);
         var changed = 0;
+        var exitFactsByContainer = new Dictionary<Guid, ContainerSnapshot>();
         foreach (var container in containers)
         {
-            var observed = await komodo.GetContainerStateAsync(container.DeploymentName!, cancellationToken);
-            var mapped = MapState(observed?.State);
+            var snapshot = await provisioner.GetContainerStateAsync(container.ContainerName!, cancellationToken);
+            var mapped = MapState(snapshot.State);
             if (mapped is null || container.ObservedState == mapped)
                 continue;
+            if (mapped == ContainerObservedStates.Failed)
+                exitFactsByContainer[container.Id] = snapshot;
             logger.LogInformation(
-                "reconciler: container {deployment} observed '{observed}' (komodo '{state}')",
-                container.DeploymentName, mapped, observed?.State ?? "unknown-deployment");
+                "reconciler: container {container} observed '{observed}' (docker '{state}')",
+                container.ContainerName, mapped, snapshot.State);
             container.ObservedState = mapped;
             changed++;
             if (mapped == ContainerObservedStates.Stopped)
@@ -85,22 +88,28 @@ public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogge
         {
             var run = runsById[container.RunId!.Value];
             logger.LogWarning("run {runId} container {deployment} died without a terminal callback — reconciling failure",
-                run.Id, container.DeploymentName);
-            await RunReconcileService.TerminalAsync(db, komodo, storage, run, RunStatuses.Failed,
+                run.Id, container.ContainerName);
+            // enrich the reconciled failure with the inspect facts while we have them (docker ExitCode/OOMKilled)
+            var exitFacts = exitFactsByContainer.TryGetValue(container.Id, out var snapshot)
+                ? snapshot.ExitCode is { } exit
+                    ? snapshot.OomKilled == true ? $" (docker exit {exit}, OOMKilled)" : $" (docker exit {exit})"
+                    : string.Empty
+                : string.Empty;
+            await RunReconcileService.TerminalAsync(db, provisioner, storage, run, RunStatuses.Failed,
                 RunErrorCodes.RuntimeFailure,
-                "reconciled: the container died without emitting a terminal callback (observed by the Runtime reconciler)",
+                $"reconciled: the container died without emitting a terminal callback (observed by the Runtime reconciler){exitFacts}",
                 cancellationToken);
         }
     }
 
-    /// <summary>Komodo state → ContainerObservedStates (03 §5); unmapped states leave the row alone.</summary>
-    internal static string? MapState(string? komodoState) => komodoState switch
+    /// <summary>Docker inspect Status → ContainerObservedStates (03 §5); unmapped states leave the row alone.</summary>
+    internal static string? MapState(string? dockerState) => dockerState switch
     {
         "running" => ContainerObservedStates.Running,
         "created" => ContainerObservedStates.Created,
         "exited" or "dead" => ContainerObservedStates.Failed,
-        "stopping" or "paused" => ContainerObservedStates.Stopping,
-        "not_deployed" or "removing" => ContainerObservedStates.Removed,
+        "paused" or "restarting" => ContainerObservedStates.Stopping,
+        "removing" or "removed" => ContainerObservedStates.Removed,
         _ => null,
     };
 }

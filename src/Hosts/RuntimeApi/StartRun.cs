@@ -12,16 +12,16 @@ namespace PiAgent.RuntimeApi;
 /// `POST /internal/runtime/runs/{runId}/start` (04 §3). The Orchestrator owns the DB rows (decision 44);
 /// this endpoint provisions the physical resources: the per-Run tree (decision 52, plus the callback spool),
 /// the per-Run callback credential + its read-only secret file (decision 60), the workspace directory, and
-/// the agent container via Komodo — mounted with the per-Run/session/log/spool paths and the pinned
-/// profile version's `resource_configuration` limits. Idempotent by runId; metadata written back into
-/// Run/AgentSession/ContainerInstance/Workspace.
+/// the agent container over the Docker socket (decision 82) — mounted with the per-Run/session/log/spool
+/// paths and the pinned profile version's `resource_configuration` limits. Idempotent by runId; metadata
+/// written back into Run/AgentSession/ContainerInstance/Workspace.
 /// </summary>
 public static class StartRunHandler
 {
     public sealed class Log;
     public static async Task<IResult> HandleAsync(
-        Guid runId, StartRunRequest request, AppDbContext db, IKomodoClient komodo, RuntimeStorageService storage,
-        IOptions<KomodoOptions> komodoOptions, ILogger<Log> logger, CancellationToken cancellationToken)
+        Guid runId, StartRunRequest request, AppDbContext db, IContainerProvisioner provisioner, RuntimeStorageService storage,
+        IOptions<ContainerProvisionerOptions> provisionerOptions, ILogger<Log> logger, CancellationToken cancellationToken)
     {
         var run = await db.Runs.SingleOrDefaultAsync(r => r.Id == runId, cancellationToken);
         if (run is null)
@@ -42,8 +42,8 @@ public static class StartRunHandler
             return RunPipelineApi.Error(409, "invalid_transition", $"run {runId} has no ContainerInstance row (Orchestrator owns it)");
 
         // Idempotent replay: already provisioned → return the same runtime metadata (04 §8).
-        if (container.DeploymentName is not null)
-            return Results.Json(BuildResponse(run, container, container.KomodoDeploymentId));
+        if (container.ContainerName is not null)
+            return Results.Json(BuildResponse(run, container, container.DockerContainerId));
 
         if (run.Status is not (RunStatuses.Pending or RunStatuses.Starting))
             return RunPipelineApi.Error(409, "invalid_transition", $"run {runId} is '{run.Status}', not startable");
@@ -90,25 +90,34 @@ public static class StartRunHandler
             // 3. container plan (04 §3 provisioning): pinned image, resource_configuration limits, mounts.
             // The work item's repository name travels as GIT_CLONE_REPO (not secret — profiles whose
             // entry script clones use their mounted token file; the stub ignores it).
-            if (!TryBuildContainerPlan(run, task, version, storage, komodoOptions.Value, workspaceHost, runTreeHost,
+            if (!TryBuildContainerPlan(run, task, version, storage, provisionerOptions.Value, workspaceHost, runTreeHost,
                     repository.FullName, workItem.Number, out var plan, out var planError))
                 return RunPipelineApi.Error(400, "validation", planError!);
 
-            // 4. Komodo: create + deploy + wait running
-            var deploymentId = await komodo.CreateDeploymentAsync(plan!, cancellationToken);
-            if (deploymentId is null)
-                return RunPipelineApi.Error(502, "komodo_failure", $"Komodo did not create deployment {plan!.Name}");
-            var deployed = await komodo.DeployAndWaitRunningAsync(plan!.Name, TimeSpan.FromSeconds(90), cancellationToken);
-            if (!deployed)
-                return RunPipelineApi.Error(502, "komodo_failure", $"deployment {plan.Name} did not reach running state");
+            // 4. Docker (decision 82): create + start + wait running; a created-but-not-confirmed container
+            //    is removed best-effort on every failure path (a leftover with no ContainerInstance row is a leak)
+            var containerId = await provisioner.CreateContainerAsync(plan!, cancellationToken);
+            if (containerId is null)
+                return RunPipelineApi.Error(502, "docker_failure", $"docker did not create container {plan!.Name}");
+            var started = await provisioner.StartAndWaitRunningAsync(plan!.Name, TimeSpan.FromSeconds(90), cancellationToken);
+            if (!started)
+            {
+                try { await provisioner.RemoveAsync(plan.Name, cancellationToken); }
+                catch (DockerProvisioningException removalFailure)
+                {
+                    logger.LogWarning(removalFailure, "run {runId}: failed container {name} could not be removed",
+                        runId, plan.Name);
+                }
+                return RunPipelineApi.Error(502, "docker_failure", $"container {plan.Name} did not reach running state");
+            }
 
             // 5. metadata write-back — the Run transition is CONDITIONAL: a fail-fast stub/container can
             // deliver its terminal callback while provisioning is still in progress here (observed live);
             // `starting` must never clobber a terminal Run state.
             var now = DateTime.UtcNow;
-            container.KomodoDeploymentId = deploymentId;
-            container.DeploymentName = plan.Name;
-            container.HostId = komodoOptions.Value.ServerId;
+            container.DockerContainerId = containerId;
+            container.ContainerName = plan.Name;
+            container.HostId = provisionerOptions.Value.HostId;
             container.ObservedState = ContainerObservedStates.Running;
             container.LastStartedAt = now;
             session.RuntimeSessionId = runId.ToString(); // decision 57: --session-id <runId>
@@ -126,9 +135,9 @@ public static class StartRunHandler
             await db.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation(
-                "run {runId} started: deployment {deployment} image {image} sessionPath {sessionPath}",
+                "run {runId} started: container {container} image {image} sessionPath {sessionPath}",
                 runId, plan.Name, version.ContainerImage, session.SessionFilePath);
-            return Results.Json(BuildResponse(run, container, deploymentId));
+            return Results.Json(BuildResponse(run, container, containerId));
         }
         catch (JsonException exception)
         {
@@ -139,55 +148,55 @@ public static class StartRunHandler
             logger.LogError(exception, "storage provisioning failed for run {runId}", runId);
             return RunPipelineApi.Error(502, "storage_failure", $"storage provisioning failed: {exception.Message}");
         }
-        catch (KomodoException exception)
+        catch (DockerProvisioningException exception)
         {
-            logger.LogError(exception, "komodo provisioning failed for run {runId}", runId);
-            return RunPipelineApi.Error(502, "komodo_failure", exception.Message);
+            logger.LogError(exception, "docker provisioning failed for run {runId}", runId);
+            return RunPipelineApi.Error(502, "docker_failure", exception.Message);
         }
     }
 
-    private static StartRunResponse BuildResponse(Run run, ContainerInstance container, string? deploymentId) =>
+    private static StartRunResponse BuildResponse(Run run, ContainerInstance container, string? containerId) =>
         new(
             run.Id,
             run.Id.ToString(),
-            container.DeploymentName ?? string.Empty,
+            container.ContainerName ?? string.Empty,
             container.Id,
             // the Run row is updated via a conditional ExecuteUpdate; a fresh provisioning is always 'starting'
             RunStatuses.Starting,
-            deploymentId,
-            container.DeploymentName);
+            containerId,
+            container.ContainerName);
 
     public static bool TryBuildContainerPlan(
         Run run,
         OrchestrationTask task,
         AgentProfileVersion version,
         RuntimeStorageService storage,
-        KomodoOptions komodoOptions,
+        ContainerProvisionerOptions provisionerOptions,
         string workspaceHost,
         string runTreeHost,
         string? workItemRepository,
         long? reviewPullRequestNumber,
-        out KomodoDeploymentPlan? plan,
+        out ContainerPlan? plan,
         out string? error)
     {
         plan = null;
         error = null;
 
-        var extraArgs = new List<string> { "--init" };
+        decimal? cpus = null;
+        long? memoryBytes = null;
         if (version.ResourceConfiguration is { Length: > 0 } resourceConfig)
         {
             using var document = JsonDocument.Parse(resourceConfig);
             if (document.RootElement.TryGetProperty("cpu", out var cpu) && cpu.ValueKind == JsonValueKind.Number)
-                extraArgs.Add($"--cpus={cpu.GetDecimal().ToString(CultureInfo.InvariantCulture)}");
+                cpus = cpu.GetDecimal();
             if (document.RootElement.TryGetProperty("memory", out var memory) && memory.ValueKind == JsonValueKind.String)
             {
-                var dockerMemory = ToDockerMemoryFormat(memory.GetString());
-                if (dockerMemory is null)
+                memoryBytes = ToDockerMemoryBytes(memory.GetString());
+                if (memoryBytes is null)
                 {
                     error = $"resource_configuration.memory '{memory.GetString()}' is not a supported size (e.g. 512MiB, 2GiB)";
                     return false;
                 }
-                extraArgs.Add($"--memory={dockerMemory}");
             }
         }
 
@@ -222,7 +231,7 @@ public static class StartRunHandler
         var environment = new StringBuilder();
         void Env(string key, string value) { if (value.Length > 0) { if (environment.Length > 0) environment.Append('\n'); environment.Append(key).Append('=').Append(value); } }
         Env("PI_RUN_ID", run.Id.ToString());
-        Env("PI_CALLBACK_BASE_URL", komodoOptions.CallbackBaseUrl);
+        Env("PI_CALLBACK_BASE_URL", provisionerOptions.CallbackBaseUrl);
         Env("PI_CALLBACK_TOKEN_FILE", "/run/secrets/callback-token");
         Env("PI_HEARTBEAT_SECONDS", ParseBridgeSeconds(version.BridgeConfiguration, "heartbeat_interval", defaultValue: 15).ToString(CultureInfo.InvariantCulture));
         Env("PI_EVENT_CADENCE_SECONDS", ParseBridgeSeconds(version.BridgeConfiguration, "event_cadence", defaultValue: 5).ToString(CultureInfo.InvariantCulture));
@@ -242,14 +251,15 @@ public static class StartRunHandler
                 Env("REVIEW_PR_NUMBER", prNumber.ToString(CultureInfo.InvariantCulture));
         }
 
-        plan = new KomodoDeploymentPlan(
+        plan = new ContainerPlan(
             Name: $"pi-session-{run.Id}",
             Image: version.ContainerImage!,
-            ExtraArgs: extraArgs.ToArray(),
-            Volumes: string.Join('\n', volumes),
-            Environment: environment.Length > 0 ? environment.ToString() : null,
-            Labels: $"pi-run={run.Id}\npi-task={task.Id}",
-            Network: komodoOptions.AgentNetwork);
+            Env: environment.Length > 0 ? environment.ToString().Split('\n') : [],
+            Binds: [.. volumes],
+            Labels: new Dictionary<string, string> { ["pi-run"] = run.Id.ToString(), ["pi-task"] = task.Id.ToString() },
+            Cpus: cpus,
+            MemoryBytes: memoryBytes,
+            Network: provisionerOptions.AgentNetwork);
         return true;
     }
 
@@ -314,20 +324,21 @@ public static class StartRunHandler
             : "succeed";
     }
 
-    /// <summary>`2GiB` → `2g`, `512MiB` → `512m` (docker `--memory` shapes); null = unsupported.</summary>
-    public static string? ToDockerMemoryFormat(string? memory)
+    /// <summary>Profile memory size → bytes for docker's `Memory` limit (GiB/MiB like `2GiB`/`512MiB`,
+    /// and the same suffixes docker's binary parser accepts, `2Gb`/`512Mb`); null = unsupported.</summary>
+    public static long? ToDockerMemoryBytes(string? memory)
     {
         if (memory is null)
             return null;
         var value = memory.Trim().ToLowerInvariant();
         if (value.Length > 3 && value.EndsWith("gib") && uint.TryParse(value[..^3], NumberStyles.None, CultureInfo.InvariantCulture, out var gib))
-            return $"{gib}g";
+            return gib * 1024L * 1024 * 1024;
         if (value.Length > 3 && value.EndsWith("mib") && uint.TryParse(value[..^3], NumberStyles.None, CultureInfo.InvariantCulture, out var mib))
-            return $"{mib}m";
+            return mib * 1024L * 1024;
         if (value.Length > 2 && value.EndsWith("gb") && uint.TryParse(value[..^2], NumberStyles.None, CultureInfo.InvariantCulture, out var gb))
-            return $"{gb}g";
+            return gb * 1024L * 1024 * 1024;
         if (value.Length > 2 && value.EndsWith("mb") && uint.TryParse(value[..^2], NumberStyles.None, CultureInfo.InvariantCulture, out var mb))
-            return $"{mb}m";
+            return mb * 1024L * 1024;
         return null;
     }
 }

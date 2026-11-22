@@ -10,7 +10,7 @@ namespace PiAgent.RuntimeApi;
 /// The stop-confirm sweeper — ticket 14's reconciliation leg of "Run/Task `cancelled` after runtime
 /// confirmation OR reconciliation" (06 §8; ticket 13's general reconciler does not exist). A Run left
 /// in `stopping` whose stop signal is older than the grace window without a terminal callback gets the
-/// hard backstop: Komodo stop (idempotent) and Run `cancelled` with the identical terminal facts a
+/// hard backstop: docker stop (idempotent) and Run `cancelled` with the identical terminal facts a
 /// delivery would record (log reference, credential revocation, session terminated, workspace
 /// release). The Bridge's worst-case sequence is ~46 s + delivery retries — the window leaves
 /// headroom; a Bridge that delivers `cancelled` later meets "already terminal" and gives up cleanly.
@@ -28,7 +28,7 @@ public sealed class StopConfirmSweeper(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var komodo = scope.ServiceProvider.GetRequiredService<IKomodoClient>();
+        var provisioner = scope.ServiceProvider.GetRequiredService<IContainerProvisioner>();
         var storage = scope.ServiceProvider.GetRequiredService<RuntimeStorageService>();
 
         var deadline = DateTime.UtcNow - GraceWindow;
@@ -46,18 +46,18 @@ public sealed class StopConfirmSweeper(
                 return;
             logger.LogWarning("run {runId} never confirmed its stop (signalled {signalledAt}) — reconciling cancellation",
                 run.Id, run.StopRequestedAt);
-            await ReconcileStopAsync(db, komodo, storage, run, cancellationToken);
+            await ReconcileStopAsync(db, provisioner, storage, run, cancellationToken);
         }
     }
 
     /// <summary>One reconciled cancellation via the shared reconciled-terminal write (identical terminal
     /// facts + the conditional terminal claim so a late Bridge delivery always wins); retried on the
-    /// next tick when Komodo is unreachable.</summary>
+    /// next tick when Docker is unreachable.</summary>
     private async Task ReconcileStopAsync(
-        AppDbContext db, IKomodoClient komodo, RuntimeStorageService storage, Run run,
+        AppDbContext db, IContainerProvisioner provisioner, RuntimeStorageService storage, Run run,
         CancellationToken cancellationToken)
     {
-        var reconciled = await RunReconcileService.TerminalAsync(db, komodo, storage, run, RunStatuses.Cancelled,
+        var reconciled = await RunReconcileService.TerminalAsync(db, provisioner, storage, run, RunStatuses.Cancelled,
             null, "stop unconfirmed: the Bridge never delivered the terminal cancelled callback", cancellationToken);
         if (reconciled)
             logger.LogInformation("run {runId} reconciled to cancelled without terminal confirmation", run.Id);

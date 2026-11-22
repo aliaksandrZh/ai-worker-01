@@ -2,8 +2,8 @@
 // Uses the Docker API through the read-only socket mount (same pattern as host-monitor),
 // not the logging driver, so `docker compose logs` / `task stack-logs` keep working.
 //
-// Labels per stream: `service` = compose service name (non-compose containers, e.g. Komodo
-// agent runs, carry only `container`). The log stack's own containers are dropped so
+// Labels per stream: `service` = compose service name (non-compose containers, e.g. the
+// agent session containers carry only `container`). The log stack's own containers are dropped so
 // alloy→loki→grafana chatter never enters the log lake.
 
 discovery.docker "docker" {

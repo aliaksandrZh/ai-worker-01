@@ -35,9 +35,9 @@ public class ContainerInstance
     public Guid AgentSessionId { get; set; }
     /// <summary>The Run attempt this container executed; recreated per retry attempt.</summary>
     public Guid? RunId { get; set; }
-    /// <summary>Runtime/Komodo metadata written back after provisioning (ticket 09).</summary>
-    public string? KomodoDeploymentId { get; set; }
-    public string? DeploymentName { get; set; }
+    /// <summary>Runtime metadata written back after provisioning (ticket 09; decision 82: the Docker container id).</summary>
+    public string? DockerContainerId { get; set; }
+    public string? ContainerName { get; set; }
     /// <summary>V1: exactly one configured execution host (decision 35); records where the container was created.</summary>
     public string? HostId { get; set; }
     /// <summary>Pinned profile version's built image tag.</summary>

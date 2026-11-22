@@ -22,10 +22,3 @@ tasks:
     desc: Stop the control plane (volumes kept)
     cmds:
       - docker compose --env-file src/.env -f src/compose.yaml down
-
-  agent-komodo:
-    desc: Run the Komodo deployment for the agent system (src/komodo; on shared network pi-agent-net)
-    cmds:
-      - docker network create pi-agent-net 2>/dev/null || true
-      - test -f src/komodo/compose.env || echo "missing src/komodo/compose.env"
-      - docker compose --file src/komodo/ferretdb.compose.yaml --env-file src/komodo/compose.env up

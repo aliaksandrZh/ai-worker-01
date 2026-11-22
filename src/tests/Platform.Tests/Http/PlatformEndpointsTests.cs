@@ -74,7 +74,7 @@ public class PlatformEndpointsTests
     {
         var builder = NewBuilder();
         builder.Services.AddSingleton<IReadinessCheck>(new FakeCheck("db", ok: true));
-        builder.Services.AddSingleton<IReadinessCheck>(new FakeCheck("komodo", ok: false, error: "connection refused"));
+        builder.Services.AddSingleton<IReadinessCheck>(new FakeCheck("docker", ok: false, error: "connection refused"));
         await using var app = builder.Build();
         app.MapPiEndpoints();
         await app.StartAsync();
@@ -85,7 +85,7 @@ public class PlatformEndpointsTests
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("notReady", doc.RootElement.GetProperty("status").GetString());
         var failed = doc.RootElement.GetProperty("failed")[0];
-        Assert.Equal("komodo", failed.GetProperty("name").GetString());
+        Assert.Equal("docker", failed.GetProperty("name").GetString());
         Assert.Equal("connection refused", failed.GetProperty("error").GetString());
     }
 

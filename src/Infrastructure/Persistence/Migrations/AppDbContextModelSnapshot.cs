@@ -511,26 +511,26 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("container_image");
 
+                    b.Property<string>("ContainerName")
+                        .HasColumnType("text")
+                        .HasColumnName("container_name");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
-
-                    b.Property<string>("DeploymentName")
-                        .HasColumnType("text")
-                        .HasColumnName("deployment_name");
 
                     b.Property<string>("DesiredState")
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("desired_state");
 
+                    b.Property<string>("DockerContainerId")
+                        .HasColumnType("text")
+                        .HasColumnName("docker_container_id");
+
                     b.Property<string>("HostId")
                         .HasColumnType("text")
                         .HasColumnName("host_id");
-
-                    b.Property<string>("KomodoDeploymentId")
-                        .HasColumnType("text")
-                        .HasColumnName("komodo_deployment_id");
 
                     b.Property<DateTime?>("LastStartedAt")
                         .HasColumnType("timestamp with time zone")

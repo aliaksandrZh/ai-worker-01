@@ -15,11 +15,11 @@ namespace PiAgent.Hosts.Tests.Runtime;
 /// <summary>Ticket 13: the Host-Monitor telemetry route (decision 62: its own service credential;
 /// stored in PostgreSQL) and the decision-77 orphan reconciler (grace → quarantine → delete, never
 /// while a container binds the tree, never without fresh telemetry).</summary>
-public class MonitorTelemetryTests : IClassFixture<WebApplicationFactory<KomodoReadinessCheck>>
+public class MonitorTelemetryTests : IClassFixture<WebApplicationFactory<DockerProvisioningClient>>
 {
-    private readonly WebApplicationFactory<KomodoReadinessCheck> _factory;
+    private readonly WebApplicationFactory<DockerProvisioningClient> _factory;
 
-    public MonitorTelemetryTests(WebApplicationFactory<KomodoReadinessCheck> factory)
+    public MonitorTelemetryTests(WebApplicationFactory<DockerProvisioningClient> factory)
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {

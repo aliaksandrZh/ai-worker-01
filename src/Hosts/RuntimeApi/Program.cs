@@ -16,11 +16,12 @@ builder.Logging.AddPiJsonLogging("runtime-api");
 builder.Services.AddPiData(builder.Configuration);
 builder.Services.AddServiceTokens(builder.Configuration);
 builder.Services.AddPiWorkerLoop();
-builder.Services.Configure<KomodoOptions>(builder.Configuration.GetSection("Komodo"));
+// Decision 82: the Runtime API provisions agent containers directly over the Docker socket
+// (read-write in compose); the docker readiness check replaces the former Komodo Core check.
+builder.Services.AddDockerSocket(builder.Configuration);
+builder.Services.Configure<ContainerProvisionerOptions>(builder.Configuration.GetSection("AgentContainer"));
+builder.Services.AddSingleton<IContainerProvisioner, DockerProvisioningClient>();
 builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection("Storage"));
-builder.Services.AddHttpClient("komodo");
-builder.Services.AddHttpClient<IKomodoClient, KomodoHttpClient>();
-builder.Services.AddSingleton<IReadinessCheck, KomodoReadinessCheck>();
 // Ticket 13: the §16 knobs (from the configuration plane's system.yaml) the reconcilers enforce.
 builder.Services.AddSingleton(RuntimeLimits.Load(builder.Configuration["PI_AGENT_CONFIG_DIR"]));
 builder.Services.AddSingleton<RuntimeStorageService>();

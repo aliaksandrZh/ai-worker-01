@@ -12,8 +12,8 @@ public sealed record StartRunResponse(
     string SessionFilePath,
     Guid ContainerInstanceId,
     string Status,
-    string? KomodoDeploymentId = null,
-    string? DeploymentName = null);
+    string? DockerContainerId = null,
+    string? ContainerName = null);
 
 // ---- 04 §4: callbacks ----
 

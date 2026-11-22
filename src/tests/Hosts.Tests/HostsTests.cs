@@ -15,28 +15,28 @@ using Xunit;
 
 namespace PiAgent.Hosts.Tests;
 
-public class RuntimeApiEndpointsTests : IClassFixture<WebApplicationFactory<KomodoReadinessCheck>>
+public class RuntimeApiEndpointsTests : IClassFixture<WebApplicationFactory<DockerProvisioningClient>>
 {
-    private readonly WebApplicationFactory<KomodoReadinessCheck> _factory;
+    private readonly WebApplicationFactory<DockerProvisioningClient> _factory;
 
-    public RuntimeApiEndpointsTests(WebApplicationFactory<KomodoReadinessCheck> factory)
+    public RuntimeApiEndpointsTests(WebApplicationFactory<DockerProvisioningClient> factory)
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {
             builder.UseSetting("ConnectionStrings:DefaultDb", "Host=127.0.0.1;Database=test;Username=test;Password=test");
-            builder.UseSetting("Komodo:Url", "http://127.0.0.1:9");
+            builder.UseSetting("Docker:SocketPath", "/nonexistent/docker.sock");
         });
     }
 
     [Fact]
-    public async Task Readyz_Returns503_AndNamesKomodo_WhenKomodoUnreachable()
+    public async Task Readyz_Returns503_AndNamesDocker_WhenDockerUnreachable()
     {
         var response = await _factory.CreateClient().GetAsync("/readyz");
 
         Assert.Equal(503, (int)response.StatusCode);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var failed = doc.RootElement.GetProperty("failed");
-        Assert.Contains(failed.EnumerateArray(), f => f.GetProperty("name").GetString() == "komodo");
+        Assert.Contains(failed.EnumerateArray(), f => f.GetProperty("name").GetString() == "docker");
     }
 
     [Fact]

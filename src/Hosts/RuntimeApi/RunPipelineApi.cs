@@ -29,14 +29,14 @@ public static class RunPipelineApi
         app.MapPost("/internal/runtime/runs/{runId:guid}/events", (Guid runId, EventRequest request, AppDbContext db, CancellationToken ct) =>
                 CallbackHandler.EventAsync(runId, request, db, ct))
             .AddEndpointFilter<RunCallbackTokenFilter>();
-        app.MapPost("/internal/runtime/runs/{runId:guid}/completed", (Guid runId, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken ct) =>
-                CallbackHandler.CompletedAsync(runId, request, db, storage, komodo, ct))
+        app.MapPost("/internal/runtime/runs/{runId:guid}/completed", (Guid runId, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken ct) =>
+                CallbackHandler.CompletedAsync(runId, request, db, storage, provisioner, ct))
             .AddEndpointFilter<RunCallbackTokenFilter>();
-        app.MapPost("/internal/runtime/runs/{runId:guid}/failed", (Guid runId, FailedRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken ct) =>
-                CallbackHandler.FailedAsync(runId, request, db, storage, komodo, ct))
+        app.MapPost("/internal/runtime/runs/{runId:guid}/failed", (Guid runId, FailedRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken ct) =>
+                CallbackHandler.FailedAsync(runId, request, db, storage, provisioner, ct))
             .AddEndpointFilter<RunCallbackTokenFilter>();
-        app.MapPost("/internal/runtime/runs/{runId:guid}/cancelled", (Guid runId, CancelledRequest request, AppDbContext db, RuntimeStorageService storage, IKomodoClient komodo, CancellationToken ct) =>
-                CallbackHandler.CancelledAsync(runId, request, db, storage, komodo, ct))
+        app.MapPost("/internal/runtime/runs/{runId:guid}/cancelled", (Guid runId, CancelledRequest request, AppDbContext db, RuntimeStorageService storage, IContainerProvisioner provisioner, CancellationToken ct) =>
+                CallbackHandler.CancelledAsync(runId, request, db, storage, provisioner, ct))
             .AddEndpointFilter<RunCallbackTokenFilter>();
         app.MapPost("/internal/runtime/runs/{runId:guid}/stop", StopRunHandler.HandleAsync)
             .RequireServiceToken();
@@ -64,7 +64,7 @@ public static class RunPipelineApi
     public static class RootCleanupHandler
     {
         public static async Task<IResult> HandleAsync(Guid workflowId, AppDbContext db, RuntimeStorageService storage,
-            IKomodoClient komodo, CancellationToken cancellationToken)
+            IContainerProvisioner provisioner, CancellationToken cancellationToken)
         {
             var workflow = await db.Workflows.SingleOrDefaultAsync(w => w.Id == workflowId, cancellationToken);
             if (workflow is null)
@@ -74,12 +74,12 @@ public static class RunPipelineApi
                 .Where(c => c.RunId != null && db.Runs.Any(r => r.Id == c.RunId && db.OrchestrationTasks.Any(t => t.Id == r.TaskId && t.WorkflowId == workflowId)))
                 .ToListAsync(cancellationToken);
             var allRemoved = true;
-            foreach (var container in containers.Where(c => !string.IsNullOrWhiteSpace(c.KomodoDeploymentId)))
+            foreach (var container in containers.Where(c => !string.IsNullOrWhiteSpace(c.ContainerName)))
             {
-                var deployment = container.KomodoDeploymentId!;
+                var containerName = container.ContainerName!;
                 var stopped = container.ObservedState is ContainerObservedStates.Stopped or ContainerObservedStates.Removed
-                    || await komodo.StopAsync(deployment, cancellationToken);
-                if (stopped && await komodo.RemoveAsync(deployment, cancellationToken))
+                    || await provisioner.StopAsync(containerName, cancellationToken);
+                if (stopped && await provisioner.RemoveAsync(containerName, cancellationToken))
                 {
                     container.DesiredState = ContainerDesiredStates.Removed;
                     container.ObservedState = ContainerObservedStates.Removed;
@@ -89,7 +89,7 @@ public static class RunPipelineApi
                     allRemoved = false;
             }
             if (!allRemoved)
-                return Error(409, "cleanup_pending", "one or more deployments could not be stopped and removed");
+                return Error(409, "cleanup_pending", "one or more containers could not be stopped and removed");
 
             var deletion = storage.DeleteWorkflowTree(workflowId);
             var now = deletion.DeletedAt;
