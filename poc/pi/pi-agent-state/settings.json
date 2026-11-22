@@ -1,6 +1,0 @@
-{
-  "$schema": "https://pi.dev/schemas/settings.schema.json",
-  "defaultProvider": "ollama",
-  "defaultModel": "glm-5.3-flash:cloud",
-  "lastChangelogVersion": "1.5.2"
-}

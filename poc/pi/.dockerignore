@@ -1,3 +1,0 @@
-# Keep runtime state out of the build context
-pi-agent-state/
-.env
