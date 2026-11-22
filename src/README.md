@@ -11,8 +11,10 @@ material; everything in this directory is the new system. Repo overview + main f
 > **EF Core Migrations** (versioned schema) · **xUnit** (tests).
 > Recorded here because `docs/pi-agent-architecture/` is frozen accepted-spec material.
 > Two deployment notes travel with it: V1 is single-host, so services speak plain HTTP on the
-> private compose network (decision 65's TLS-across-hosts applies when hosts split); there is
-> **no CI** for now — development is local (`dotnet test` runs everything: 21 tests, green).
+> private compose network (decision 65's TLS-across-hosts applies when hosts split); CI runs on
+> GitHub Actions for every pull request (`.github/workflows/ci.yml`): restore, build, and
+> `dotnet test` on the full solution — the same suites you run locally with `dotnet test`
+> (Hosts.Tests spins a Testcontainers postgres; runners have Docker preinstalled).
 
 ## Layout
 
