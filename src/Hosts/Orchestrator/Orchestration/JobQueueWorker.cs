@@ -10,7 +10,9 @@ namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
 /// The durable job queue consumer (02 §19, 03 §8, task 07). Per tick: sweep expired claim leases (job
-/// `pending`, Task `claimed → queued`, never-dispatched `pending` Run rows deleted), then claim a FIFO
+/// `pending`, Task `claimed → queued`, never-dispatched `pending` Run rows deleted — but a claim whose
+/// Run was already handed off is restored to the hand-off state instead: never a rewind that would
+/// re-execute the work, task 16), then claim a FIFO
 /// batch (`available_at`, then `priority`, higher priority first) up to the global
 /// `max_concurrent_runs` cap — the claim transaction locks job rows `FOR UPDATE SKIP LOCKED` so
 /// concurrent workers never double-claim. Queued Tasks and `pending` Jobs occupy no slot; the slot
@@ -32,7 +34,8 @@ public sealed class JobQueueWorker(
     ILogger<JobQueueWorker> logger) : IWorkerCycle
 {
     /// <summary>Worker identity for `locked_by`; per-process (single-instance V1, lease-recovered).</summary>
-    private readonly string _workerId = $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
+    private readonly string _workerId =
+        $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
     private readonly JobQueueOptions _options = options.Value;
 
     public async Task RunCycleAsync(CancellationToken cancellationToken)
@@ -49,6 +52,12 @@ public sealed class JobQueueWorker(
         await RefreshGaugesAsync(cancellationToken);
     }
 
+    /// <summary>Sweeps claim leases left by a terminated Orchestrator (03 §8). An expired claim whose
+    /// Run was already handed off (the Runtime API flipped it out of `pending` inside /start) never
+    /// rewinds the Task — rewinding would re-execute the same work (task 16); it restores the hand-off
+    /// state and lets the terminal-Run consumer own the transition.
+    /// Per tick: expired `processing` leases — job `pending` (or hand-off restored), Task `claimed →
+    /// queued` only when nothing was dispatched, never-dispatched `pending` Run rows deleted.</summary>
     private async Task SweepExpiredLeasesAsync(HashSet<Guid> skipped, CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -67,9 +76,46 @@ public sealed class JobQueueWorker(
             await db.Runs
                 .Where(r => r.TaskId == task.Id && r.Status == RunStatuses.Pending)
                 .ExecuteDeleteAsync(cancellationToken); // DB cascades session + container rows
+            var lastRunStatus = await db.Runs
+                .Where(r => r.TaskId == task.Id)
+                .OrderByDescending(r => r.AttemptNumber)
+                .Select(r => (string?)r.Status)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (lastRunStatus is not null && lastRunStatus != RunStatuses.Pending)
+            {
+                // hand-off happened before the crash (RunDispatch: the Runtime API flips the Run out of
+                // `pending` inside /start, in its own request): rewinding to pending/queued would
+                // re-execute the same task — restore what the dispatcher's write-back would have
+                // persisted and let the terminal-Run consumer adopt the Run (no duplicate execution)
+                logger.LogWarning("job {jobId} lease expired after hand-off (run '{status}') — restoring hand-off state", job.Id, lastRunStatus);
+                task.Status = OrchestrationTaskStatuses.Starting;
+                task.StartedAt = task.StartedAt ?? now;
+                job.Status = OrchestrationJobStatuses.Completed;
+                job.LockedUntil = null;
+                job.LockedBy = null;
+                job.UpdatedAt = now;
+                job.LastError = null;
+                skipped.Add(job.Id);
+                metrics.RecordLeaseExpiration();
+                continue;
+            }
+            if (task.Status == OrchestrationTaskStatuses.Cancelled)
+            {
+                // /stop cancelled the claimed work while a hung claim still held the lease — never
+                // resurrect cancelled work into the queue (the consumer no longer owns this task)
+                logger.LogWarning("job {jobId} lease expired after /stop cancelled its task — job cancelled", job.Id);
+                job.Status = OrchestrationJobStatuses.Cancelled;
+                job.LockedUntil = null;
+                job.LockedBy = null;
+                job.UpdatedAt = now;
+                skipped.Add(job.Id);
+                metrics.RecordLeaseExpiration();
+                continue;
+            }
             if (task.Status == OrchestrationTaskStatuses.Claimed)
             {
-                // the only spec edge back from `claimed` (03 §2: claim lease expires)
+                // the only spec edge back from `claimed` (03 §2: claim lease expires) — the claim never
+                // handed off, so returning the work to the queue cannot duplicate execution
                 task.Status = OrchestrationTaskStatuses.Queued;
                 task.ClaimedAt = null;
             }

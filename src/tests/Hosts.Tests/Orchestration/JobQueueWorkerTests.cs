@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Poller;
@@ -238,6 +239,86 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Empty(await db.Runs.AsNoTracking().Where(r => r.TaskId == task.Id).ToListAsync());
         Assert.Empty(await db.AgentSessions.AsNoTracking().ToListAsync()); // cascaded away with the run
         Assert.Empty(await db.ContainerInstances.AsNoTracking().ToListAsync());
+        Assert.Equal(1, harness.Metrics.LeaseExpirationsTotal);
+    }
+
+    [Fact]
+    public async Task ExpiredLease_AfterHandoff_RestoresHandoffState_NeverRewinds()
+    {
+        // task 16: the crashed claim had already handed the run off (the Runtime API flipped it out of
+        // pending inside /start) — the sweep must restore the hand-off state instead of rewinding the
+        // task to queued, otherwise the settled Run would be prepared/dispatched a second time
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: true);
+        seeded.Run!.Status = RunStatuses.Starting; // the Runtime API's /start write-back
+        seeded.Run.StartedAt = DateTime.UtcNow.AddMinutes(-1);
+        seeded.Job.Status = OrchestrationJobStatuses.Processing;
+        seeded.Job.LockedUntil = DateTime.UtcNow.AddMinutes(-1);
+        seeded.Job.LockedBy = "ghost";
+        seeded.Job.Attempts = 1;
+        seeded.Task.Status = OrchestrationTaskStatuses.Claimed;
+        seeded.Task.ClaimedAt = DateTime.UtcNow.AddMinutes(-5);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var harness = OrchestrationTestSupport.NewWorker(postgres);
+
+        await harness.Worker.RunCycleAsync(default);
+
+        db.ChangeTracker.Clear();
+        var job = await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.Id == seeded.Job.Id);
+        Assert.Equal(OrchestrationJobStatuses.Completed, job.Status); // hand-off restored, not rewound
+        Assert.Null(job.LockedUntil);
+        Assert.Null(job.LastError);
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Starting, task.Status);
+        Assert.NotNull(task.StartedAt);
+        Assert.Equal(1, await db.Runs.AsNoTracking().CountAsync(r => r.TaskId == task.Id)); // no second run
+        Assert.Equal(RunStatuses.Starting, (await db.Runs.AsNoTracking().SingleAsync(r => r.TaskId == task.Id)).Status);
+        Assert.Single(await db.AgentSessions.AsNoTracking().ToListAsync()); // untouched
+
+        // the terminal-Run consumer then owns the transition — a settled Run is consumed exactly once
+        await db.Runs.Where(r => r.TaskId == task.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(r => r.Status, RunStatuses.Succeeded)
+            .SetProperty(r => r.CompletedAt, DateTime.UtcNow));
+        var consumer = new RunTerminalConsumer(harness.Services.GetRequiredService<IServiceScopeFactory>());
+        await consumer.RunCycleAsync(default);
+        db.ChangeTracker.Clear();
+        Assert.Equal(OrchestrationTaskStatuses.Succeeded, (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == task.Id)).Status);
+        Assert.Equal(WorkflowStatuses.WaitingForHuman, (await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == seeded.Workflow.Id)).Status);
+    }
+
+    [Fact]
+    public async Task ExpiredLease_StoppedTask_JobCancelledNotResurrected()
+    {
+        // task 16: /stop cancelled the claimed task while a hung claim held the lease — the sweep must
+        // not resurrect cancelled work into the queue (it would only re-fail the job on the next claim)
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: true);
+        seeded.Task.Status = OrchestrationTaskStatuses.Cancelled;
+        seeded.Task.CancelledAt = DateTime.UtcNow.AddMinutes(-4);
+        seeded.Job.Status = OrchestrationJobStatuses.Processing;
+        seeded.Job.LockedUntil = DateTime.UtcNow.AddMinutes(-1);
+        seeded.Job.LockedBy = "ghost";
+        seeded.Job.Attempts = 1;
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var harness = OrchestrationTestSupport.NewWorker(postgres);
+
+        await harness.Worker.RunCycleAsync(default);
+
+        db.ChangeTracker.Clear();
+        var job = await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.Id == seeded.Job.Id);
+        Assert.Equal(OrchestrationJobStatuses.Cancelled, job.Status);
+        Assert.Null(job.LockedUntil);
+        Assert.Equal(OrchestrationTaskStatuses.Cancelled,
+            (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id)).Status);
+        Assert.Empty(await db.Runs.AsNoTracking().Where(r => r.TaskId == seeded.Task.Id).ToListAsync());
         Assert.Equal(1, harness.Metrics.LeaseExpirationsTotal);
     }
 

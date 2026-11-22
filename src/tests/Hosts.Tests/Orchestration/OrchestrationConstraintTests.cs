@@ -183,4 +183,44 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
         Assert.NotEqual(default, prepared.Session.RunId);
         Assert.Equal(ContainerDesiredStates.Running, prepared.Container.DesiredState);
     }
+
+    /// <summary>Task 16 (decision 60, Workflow-scoped serialization across restarts): after /stop the
+    /// cancelled Task's Run stays `stopping` until the Bridge's terminal `cancelled` callback is
+    /// persisted — the next command's Task (any type) must not prepare a Run before that, even though
+    /// the Workflow no longer holds an unfinished Task; the gate reads PostgreSQL state, so it holds
+    /// across any process restart, and opens exactly when the terminal callback is persisted.</summary>
+    [Fact]
+    public async Task RunPrepare_SerializationGate_HoldsAcrossTasksAndRestarts()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        // the Workflow's stopped plan Task: /stop cancelled it; its Run awaits the terminal callback
+        var plan = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: true);
+        plan.Task.Status = OrchestrationTaskStatuses.Cancelled;
+        plan.Task.CancelledAt = DateTime.UtcNow;
+        plan.Run!.Status = RunStatuses.Stopping;
+        // a second Task of the SAME Workflow (/code) after the stop — no unfinished Task remains
+        var code = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version,
+            commandName: AgentCommandNames.Code, withCommand: true, withRun: false, linkPlanInput: true);
+        db.ChangeTracker.Clear();
+
+        var codeTask = await db.OrchestrationTasks.SingleAsync(t => t.Id == code.Task.Id);
+        var refused = await RunPrepare.PrepareAsync(db, codeTask, version, default);
+        Assert.Null(refused); // the stopping Run has not settled — the code Run never starts
+        Assert.Equal(0, await db.Runs.AsNoTracking().CountAsync(r => r.TaskId == code.Task.Id));
+
+        // the `cancelled` terminal callback was persisted → the gate opens for a different Task type
+        db.ChangeTracker.Clear();
+        await db.Runs.Where(r => r.Id == plan.Run.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(r => r.Status, RunStatuses.Cancelled)
+            .SetProperty(r => r.CompletedAt, DateTime.UtcNow));
+        db.ChangeTracker.Clear();
+        var reloadedCodeTask = await db.OrchestrationTasks.SingleAsync(t => t.Id == code.Task.Id);
+        var prepared = await RunPrepare.PrepareAsync(db, reloadedCodeTask, version, default);
+        Assert.NotNull(prepared);
+        Assert.Equal(OrchestrationTaskTypes.Implement, prepared!.Task.Type);
+        Assert.Equal(1, prepared.Run.AttemptNumber); // the new Task's first attempt
+    }
 }

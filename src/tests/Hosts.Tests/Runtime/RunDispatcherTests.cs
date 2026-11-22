@@ -184,7 +184,33 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
 
         var stub = new DirectHttpStub(_ => throw new HttpRequestException("connection refused"));
         var outcome = await NewDispatcher(stub).DispatchAsync(api.Db, preparation, TestToken);
-        Assert.Equal(DispatchOutcome.Transient, outcome);
+        Assert.Equal(DispatchOutcome.Transient, outcome); // still `pending` in PostgreSQL: nothing was accepted
+    }
+
+    /// <summary>Task 16: the Runtime API flips the Run out of `pending` inside /start before responding —
+    /// a transport failure with the row already beyond `pending` is an ACCEPTED start: recover with the
+    /// ordinary hand-off write-back instead of releasing the claim (a release would re-execute the task).</summary>
+    [Fact]
+    public async Task TransportFailure_AfterTheRuntimeAcceptedTheStart_RecoversAsHandedOff()
+    {
+        await postgres.ResetAsync();
+        await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
+        var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
+        // what /start persisted milliseconds before the response was lost
+        await api.Db.Runs.Where(r => r.Id == preparation.Run.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(r => r.Status, RunStatuses.Starting)
+            .SetProperty(r => r.StartedAt, DateTime.UtcNow));
+
+        var stub = new DirectHttpStub(_ => throw new HttpRequestException("response lost"));
+        var outcome = await NewDispatcher(stub).DispatchAsync(api.Db, preparation, TestToken);
+
+        Assert.Equal(DispatchOutcome.HandedOff, outcome);
+        var db = postgres.NewDbContext();
+        Assert.Equal(OrchestrationJobStatuses.Completed, (await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.TaskId == preparation.Task.Id)).Status);
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == preparation.Task.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Starting, task.Status);
+        Assert.NotNull(task.StartedAt);
+        Assert.Equal(RunStatuses.Starting, (await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
     }
 
     [Fact]
@@ -199,7 +225,6 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
         await api.Db.Runs
             .Where(r => r.Id == preparation.Run.Id)
             .ExecuteUpdateAsync(set => set.SetProperty(r => r.Status, RunStatuses.Succeeded));
-        api.Db.ChangeTracker.Clear();
 
         var stub = new DirectHttpStub(_ => new HttpResponseMessage(HttpStatusCode.Conflict)
         {
@@ -207,6 +232,13 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
         });
         var outcome = await NewDispatcher(stub).DispatchAsync(api.Db, preparation, TestToken);
         Assert.Equal(DispatchOutcome.HandedOff, outcome); // terminal → nothing to hand off; the consumer takes over
+
+        // task 16: the claim's write-back (Task starting, job completed) still lands so the consumer
+        // adopts the terminal Run immediately instead of waiting for a lease-expiry recovery
+        var db = postgres.NewDbContext();
+        Assert.Equal(OrchestrationJobStatuses.Completed, (await db.OrchestrationJobs.AsNoTracking().SingleAsync(j => j.TaskId == preparation.Task.Id)).Status);
+        Assert.Equal(OrchestrationTaskStatuses.Starting,
+            (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == preparation.Task.Id)).Status);
     }
 
     /// <summary>Worker-level outcomes: a Permanent dispatcher triggers the claim-time cancel contract

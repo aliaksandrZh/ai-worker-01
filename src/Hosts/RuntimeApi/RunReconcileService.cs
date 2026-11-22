@@ -21,7 +21,10 @@ public static class RunReconcileService
     /// One reconciled terminal Run: stop the container via Komodo, then record the Run terminal state
     /// + error code + the terminal facts (log reference, credential revocation, session terminated,
     /// workspace release). Returns false when the stop could not be confirmed — nothing was written
-    /// (desired state preserved, retried later).
+    /// (desired state preserved, retried later). The terminal write itself is a conditional claim from a
+    /// non-terminal status (task 16): the terminal callback that lands first wins — a stale reconciler
+    /// observation never overwrites a just-delivered `completed`/`failed`/`cancelled`; 0 rows = already
+    /// terminal = idempotent skip.
     /// </summary>
     public static async Task<bool> TerminalAsync(
         AppDbContext db, IKomodoClient komodo, RuntimeStorageService storage,
@@ -40,13 +43,26 @@ public static class RunReconcileService
             container.LastStoppedAt = DateTime.UtcNow;
         }
 
-        await CallbackHandler.FinalizeTerminalRunAsync(db, run, storage, cancellationToken);
-        run.Status = status;
-        run.ErrorCode = errorCode;
-        run.ErrorMessage = message;
-        run.CompletedAt = DateTime.UtcNow;
-        run.LastProgressAt = run.LastProgressAt ?? run.CompletedAt;
+        // conditional terminal claim FIRST (04 §8: exactly one terminal writer): run from a non-terminal
+        // status, so a callback delivery racing this reconcile is the survivor and this becomes a no-op —
+        // the terminal facts below are only applied by the actual winner
+        var now = DateTime.UtcNow;
+        var claimed = await db.Runs
+            .Where(r => r.Id == run.Id
+                && (r.Status == RunStatuses.Pending
+                    || r.Status == RunStatuses.Starting
+                    || r.Status == RunStatuses.Running
+                    || r.Status == RunStatuses.Stopping))
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(r => r.Status, status)
+                .SetProperty(r => r.ErrorCode, errorCode)
+                .SetProperty(r => r.ErrorMessage, message)
+                .SetProperty(r => r.CompletedAt, now)
+                .SetProperty(r => r.LastProgressAt, r => r.LastProgressAt ?? now), cancellationToken);
+        if (claimed == 0)
+            return true; // already terminal — the delivered callback (or a prior reconcile) owns the state
 
+        await CallbackHandler.FinalizeTerminalRunAsync(db, run, storage, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await db.Workspaces
             .Where(w => w.TaskId == run.TaskId)

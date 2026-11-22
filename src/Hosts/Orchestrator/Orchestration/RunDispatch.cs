@@ -152,29 +152,32 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or TimeoutException)
         {
-            logger.LogWarning(exception, "run {runId} dispatch transport failure — releasing the claim", run.Id);
-            return DispatchOutcome.Transient;
+            // The Runtime API flips the Run out of `pending` inside /start BEFORE responding: a transport
+            // failure with the row already beyond `pending` means the request was accepted — releasing the
+            // claim would let the lease sweep or a re-claim re-execute the same task (task 16). Recover
+            // with the ordinary hand-off write-back; the consumer takes the terminal transition from there.
+            var liveStatus = await db.Runs.AsNoTracking()
+                .Where(r => r.Id == run.Id)
+                .Select(r => r.Status)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (liveStatus == RunStatuses.Pending)
+            {
+                logger.LogWarning(exception, "run {runId} dispatch transport failure before acceptance — releasing the claim", run.Id);
+                return DispatchOutcome.Transient;
+            }
+            if (liveStatus is null)
+            {
+                logger.LogWarning(exception, "run {runId} gone during a failed dispatch (superseded mid-flight)", run.Id);
+                return DispatchOutcome.Superseded;
+            }
+            await CompleteHandoffAsync(db, run, task, job, DateTime.UtcNow, cancellationToken);
+            logger.LogWarning(exception, "run {runId} dispatch transport failure after acceptance (run '{status}') — recovered as handed off", run.Id, liveStatus);
+            return DispatchOutcome.HandedOff;
         }
 
         if (response.IsSuccessStatusCode)
         {
-            var now = DateTime.UtcNow;
-            // Atomic write-back: a fast-settling container (cached image) can deliver the terminal callback
-            // before this lands — the WHERE keeps `starting` from ever clobbering a terminal Run state.
-            await db.Runs
-                .Where(r => r.Id == run.Id && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting)
-                    && r.Status != RunStatuses.Running) // ticket 13: never downgrade an event-driven Running run
-                .ExecuteUpdateAsync(set => set
-                    .SetProperty(r => r.Status, RunStatuses.Starting)
-                    .SetProperty(r => r.StartedAt, now), cancellationToken);
-            task.Status = OrchestrationTaskStatuses.Starting; // the terminal-Run consumer applies the terminal task state
-            task.StartedAt = task.StartedAt ?? now;
-            if (job is { } dispatchJob)
-            {
-                dispatchJob.Status = OrchestrationJobStatuses.Completed;
-                dispatchJob.UpdatedAt = now;
-            }
-            await db.SaveChangesAsync(cancellationToken);
+            await CompleteHandoffAsync(db, run, task, job, DateTime.UtcNow, cancellationToken);
             logger.LogInformation("run {runId} handed off to the Runtime API (attempt {attempt})", run.Id, run.AttemptNumber);
             return DispatchOutcome.HandedOff;
         }
@@ -194,12 +197,44 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
                 .Select(r => r.Status)
                 .SingleOrDefaultAsync(cancellationToken);
             if (runTerminal is RunStatuses.Succeeded or RunStatuses.Failed or RunStatuses.Cancelled or RunStatuses.TimedOut)
+            {
+                // the Run is terminal: nothing to hand off, but the claim's own write-back (Task `starting`,
+                // job `completed`) must still land so the terminal-Run consumer adopts it (task 16) instead
+                // of waiting for a lease-expiry recovery
+                await CompleteHandoffAsync(db, run, task, job, DateTime.UtcNow, cancellationToken);
                 return DispatchOutcome.HandedOff;
+            }
             logger.LogWarning("run {runId} dispatch conflict: {body}", run.Id, errorBody);
             return DispatchOutcome.Permanent;
         }
 
         logger.LogWarning("run {runId} dispatch rejected ({statusCode}): {body}", run.Id, (int)response.StatusCode, errorBody);
         return DispatchOutcome.Permanent;
+    }
+
+    /// <summary>
+    /// The hand-off write-back every accepted dispatch must persist (task 16: identical for the success
+    /// path, the transport-failure recovery, and the 409-with-terminal-Run recovery). The Run is pinned
+    /// `starting` with a conditional WHERE — a fast-settling container (cached image) can deliver its
+    /// terminal callback before this lands, and `starting` must never clobber a terminal Run state nor an
+    /// event-driven `running`. Idempotent: re-running after a partial write-back converges.
+    /// </summary>
+    private static async Task CompleteHandoffAsync(
+        AppDbContext db, Run run, OrchestrationTask task, OrchestrationJob? job, DateTime now, CancellationToken cancellationToken)
+    {
+        await db.Runs
+            .Where(r => r.Id == run.Id && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting)
+                && r.Status != RunStatuses.Running) // ticket 13: never downgrade an event-driven Running run
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(r => r.Status, RunStatuses.Starting)
+                .SetProperty(r => r.StartedAt, now), cancellationToken);
+        task.Status = OrchestrationTaskStatuses.Starting; // the terminal-Run consumer applies the terminal task state
+        task.StartedAt = task.StartedAt ?? now;
+        if (job is { } dispatchJob)
+        {
+            dispatchJob.Status = OrchestrationJobStatuses.Completed;
+            dispatchJob.UpdatedAt = now;
+        }
+        await db.SaveChangesAsync(cancellationToken);
     }
 }

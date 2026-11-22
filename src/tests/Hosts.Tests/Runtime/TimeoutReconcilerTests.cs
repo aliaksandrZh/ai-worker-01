@@ -110,6 +110,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
     {
         public required FakeKomodo Komodo;
         public required string StorageRoot;
+        public required RuntimeStorageService Storage;
         public TimeoutSweeper Sweeper = null!;
         public RunReconcilerCycle DeathReconciler = null!;
 
@@ -146,6 +147,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         {
             Komodo = komodo,
             StorageRoot = storageRoot,
+            Storage = services.GetRequiredService<RuntimeStorageService>(),
             Sweeper = new TimeoutSweeper(scopeFactory, Limits, NullLogger<TimeoutSweeper>.Instance),
             DeathReconciler = new RunReconcilerCycle(scopeFactory, NullLogger<RunReconcilerCycle>.Instance),
         };
@@ -203,6 +205,126 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
         var workspace = await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == run.TaskId);
         Assert.Equal(WorkspaceStatuses.Ready, workspace.Status);
+    }
+
+    /// <summary>Task 16 (decision 22 posture): a Runtime API restart mid-run — the readiness fact
+    /// (`agent_started`) may still sit in the Bridge's callback spool while the API was down;
+    /// `startup_timeout` must not adjudicate the absence of a fact that is redelivery-in-flight.</summary>
+    [Fact]
+    public async Task StartupTimeout_SuppressedWhileTheCallbackSpoolHoldsUndeliveredEntries()
+    {
+        await postgres.ResetAsync();
+        await using var scope = NewScope();
+        var run = await SeedRunAsync(RunStatuses.Starting, startedAgo: TimeSpan.FromMinutes(15), heartbeatAgo: TimeSpan.FromSeconds(1));
+        var workflowId = await WorkflowIdOfTaskAsync(run.TaskId);
+        // the outage: the agent started, the entry sits undelivered in the spool (only the coalesced beat
+        // does NOT count — a spool holding ordered entries means lifecycle facts are in flight)
+        var spoolDir = Path.Combine(scope.StorageRoot, "workflows", workflowId.ToString(), "runs", run.Id.ToString(), "callback-spool");
+        Directory.CreateDirectory(spoolDir);
+        var spooledEntry = Path.Combine(spoolDir, "000001-agent-started.json");
+        await File.WriteAllTextAsync(spooledEntry, "{}");
+
+        await scope.Sweeper.RunCycleAsync(default);
+
+        Assert.Equal(RunStatuses.Starting, (await ReloadRunAsync(run.Id)).Status); // suppressed, not failed
+
+        // the Runtime API is back, the Bridge redelivered: the spool drained, but this run still never
+        // became ready (agent_started moved it `starting → running` in the real flow — absent here) → fires
+        File.Delete(spooledEntry);
+        await scope.Sweeper.RunCycleAsync(default);
+        var reloaded = await ReloadRunAsync(run.Id);
+        Assert.Equal(RunStatuses.Failed, reloaded.Status);
+        Assert.Equal(RunErrorCodes.StartupTimeout, reloaded.ErrorCode);
+    }
+
+    /// <summary>Task 16: idle_timeout adjudicates the absence of ALL activity — while ordered spool
+    /// entries are undelivered, activity may be in flight; never kill on that basis.</summary>
+    [Fact]
+    public async Task IdleConfirmed_SuppressedWhileTheCallbackSpoolHoldsUndeliveredEntries()
+    {
+        await postgres.ResetAsync();
+        await using var scope = NewScope();
+        var run = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(15),
+            progressAgo: TimeSpan.FromMinutes(15), heartbeatAgo: TimeSpan.FromSeconds(1));
+        var workflowId = await WorkflowIdOfTaskAsync(run.TaskId);
+        var db = postgres.NewDbContext(); // fresh observation reporting NO activity → would confirm a hang
+        db.MonitorObservations.Add(new MonitorObservation
+        {
+            Id = Guid.NewGuid(),
+            ObservedAt = DateTime.UtcNow,
+            ReceivedAt = DateTime.UtcNow,
+            Containers = "[{\"runId\":\"" + run.Id + "\",\"busy\":false}]",
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var spoolDir = Path.Combine(scope.StorageRoot, "workflows", workflowId.ToString(), "runs", run.Id.ToString(), "callback-spool");
+        Directory.CreateDirectory(spoolDir);
+        var spooledEntry = Path.Combine(spoolDir, "000002-tool-started.json");
+        await File.WriteAllTextAsync(spooledEntry, "{}");
+
+        await scope.Sweeper.RunCycleAsync(default);
+
+        Assert.Equal(RunStatuses.Running, (await ReloadRunAsync(run.Id)).Status); // suppressed
+
+        File.Delete(spooledEntry);
+        await scope.Sweeper.RunCycleAsync(default);
+        var reloaded = await ReloadRunAsync(run.Id);
+        Assert.Equal(RunStatuses.Failed, reloaded.Status);
+        Assert.Equal(RunErrorCodes.IdleTimeout, reloaded.ErrorCode);
+    }
+
+    /// <summary>Task 16 (04 §8: exactly one terminal writer): a terminal callback delivered while a
+    /// reconciler observed a stale state must win — the reconciled write becomes an idempotent no-op.</summary>
+    [Fact]
+    public async Task ReconciledTerminal_NeverOverwritesADeliveredTerminalCallback()
+    {
+        await postgres.ResetAsync();
+        await using var scope = NewScope();
+        var run = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(5), progressAgo: TimeSpan.FromSeconds(1));
+        var workflowId = await WorkflowIdOfTaskAsync(run.TaskId);
+        // the delivery already persisted the terminal (with its own log-reference artifact + revocation)
+        var dbSeed = postgres.NewDbContext();
+        await dbSeed.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set => set
+            .SetProperty(r => r.Status, RunStatuses.Succeeded)
+            .SetProperty(r => r.CompletedAt, DateTime.UtcNow));
+        var deliveredLog = new Artifact
+        {
+            Id = Guid.NewGuid(), TaskId = run.TaskId, WorkflowId = workflowId,
+            Type = ArtifactTypes.LogReference, Format = ArtifactFormats.Text,
+            Content = "/var/lib/pi-agent/workflows/logs", CreatedAt = DateTime.UtcNow,
+        };
+        dbSeed.Artifacts.Add(deliveredLog);
+        await dbSeed.SaveChangesAsync();
+
+        // the reconciler's stale view: the run still looks `running`
+        var db = postgres.NewDbContext();
+        var staleObservation = new Run { Id = run.Id, TaskId = run.TaskId, Status = RunStatuses.Running };
+        var outcome = await RunReconcileService.TerminalAsync(db, scope.Komodo, scope.Storage, staleObservation,
+            RunStatuses.Failed, RunErrorCodes.RuntimeFailure, "reconciled: must be suppressed", default);
+
+        Assert.True(outcome); // skipped as idempotent no-op, not an error
+        var reloaded = await ReloadRunAsync(run.Id);
+        Assert.Equal(RunStatuses.Succeeded, reloaded.Status); // the delivery owns the terminal state
+        Assert.Null(reloaded.ErrorCode);
+        Assert.Null(reloaded.ErrorMessage);
+        Assert.Equal(1, await db.Artifacts.AsNoTracking().CountAsync(a => a.TaskId == run.TaskId && a.Type == ArtifactTypes.LogReference));
+        // ...and the positive control: a genuinely non-terminal run is claimed by the reconcile
+        var second = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(5), progressAgo: TimeSpan.FromSeconds(1));
+        var secondDb = postgres.NewDbContext();
+        var fresh = await secondDb.Runs.SingleAsync(r => r.Id == second.Id);
+        var reconciled = await RunReconcileService.TerminalAsync(secondDb, scope.Komodo, scope.Storage, fresh,
+            RunStatuses.Failed, RunErrorCodes.RuntimeFailure, "reconciled: control", default);
+        Assert.True(reconciled);
+        Assert.Equal(RunStatuses.Failed, (await ReloadRunAsync(second.Id)).Status);
+    }
+
+    private async Task<Guid> WorkflowIdOfTaskAsync(Guid taskId)
+    {
+        var db = postgres.NewDbContext();
+        return await db.OrchestrationTasks.AsNoTracking()
+            .Where(t => t.Id == taskId)
+            .Select(t => t.WorkflowId)
+            .SingleAsync();
     }
 
     [Fact]

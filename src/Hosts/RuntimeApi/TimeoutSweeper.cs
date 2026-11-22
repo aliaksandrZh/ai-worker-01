@@ -92,6 +92,9 @@ public static class TimeoutEvaluator
 /// <item>`max_run_duration` — the wall-clock limit ends the Run `timed_out` independently of heartbeat
 /// or progress; no automatic retry exists for it (`/retry` is the only recovery).</item>
 /// </list>
+/// Task 16: `startup_timeout`/`idle_timeout` verdicts are suppressed while the Run's Bridge callback
+/// spool still holds undelivered entries (decision 60's spool redelivery may be in flight — e.g. right
+/// after a Runtime API restart mid-run); the facts they would adjudicate on may still be in the spool.
 /// Every reconciled terminal goes through <see cref="RunReconcileService"/> (Komodo stop confirmed →
 /// identical terminal facts), so a Komodo outage simply retries the cycle (decision 22). The Run
 /// `starting → running` transition itself is event-driven (`agent_started`, Callbacks.cs); business
@@ -122,10 +125,10 @@ public sealed class TimeoutSweeper(
 
         var versions = await db.OrchestrationTasks
             .Where(t => candidates.Select(c => c.TaskId).Contains(t.Id))
-            .Select(t => new { t.Id, t.AgentProfileVersionId })
-            .ToDictionaryAsync(t => t.Id, t => t.AgentProfileVersionId, cancellationToken);
+            .Select(t => new { t.Id, t.AgentProfileVersionId, t.WorkflowId })
+            .ToDictionaryAsync(t => t.Id, t => (Version: t.AgentProfileVersionId, Workflow: t.WorkflowId), cancellationToken);
         var limitsByTask = await db.AgentProfileVersions
-            .Where(v => versions.Values.Contains(v.Id))
+            .Where(v => versions.Values.Select(x => x.Version).Contains(v.Id))
             .Select(v => new { v.Id, v.StartupTimeout, v.IdleTimeout, v.MaxRunDuration })
             .ToDictionaryAsync(v => v.Id, v => (Startup: v.StartupTimeout, Idle: v.IdleTimeout, Duration: v.MaxRunDuration), cancellationToken);
 
@@ -139,7 +142,7 @@ public sealed class TimeoutSweeper(
         {
             if (cancellationToken.IsCancellationRequested)
                 return;
-            var pinned = limitsByTask.GetValueOrDefault(versions.GetValueOrDefault(run.TaskId));
+            var pinned = limitsByTask.GetValueOrDefault(versions.GetValueOrDefault(run.TaskId).Version);
             var startup = RunReconcileService.EffectiveLimit(pinned.Startup, limits.StartupTimeout);
             var idle = RunReconcileService.EffectiveLimit(pinned.Idle, limits.IdleTimeout);
             var duration = RunReconcileService.EffectiveLimit(pinned.Duration, limits.MaxRunDuration);
@@ -151,6 +154,24 @@ public sealed class TimeoutSweeper(
                 : null;
             var verdict = TimeoutEvaluator.Evaluate(
                 run.Status, run.StartedAt, run.LastProgressAt, run.LastHeartbeatAt, now, startup, idle, duration, activity);
+
+            // task 16 (decision 22 posture: investigate before stopping): `startup_timeout` and
+            // `idle_timeout` failures adjudicate the ABSENCE of lifecycle facts — while the Run's Bridge
+            // spool still holds undelivered entries (an outage / Runtime restart recovering via spool
+            // redelivery, decision 60), those facts may simply be in flight; skipping the tick lets the
+            // redelivery resolve the Run before any kill. `max_run_duration` stays unguarded: the wall
+            // clock is independent of delivery (decision 68).
+            if (verdict is TimeoutVerdict.StartupTimeout or TimeoutVerdict.IdleConfirmed)
+            {
+                var workflowId = versions.GetValueOrDefault(run.TaskId).Workflow;
+                if (workflowId != Guid.Empty && storage.SpoolHasUndeliveredEntries(workflowId, run.Id))
+                {
+                    logger.LogInformation(
+                        "run {runId} '{verdict}' suppressed: the callback spool still holds undelivered entries (spool redelivery in flight)",
+                        run.Id, verdict);
+                    continue;
+                }
+            }
 
             var ok = verdict switch
             {

@@ -447,11 +447,13 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         var (repo, workItem, comment) = await CommandTestSupport.SeedAsync(db, body: "@jsxhuz /plan");
         await CommandTestSupport.SeedCommandEventAsync(db, comment, workItem);
         await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
+        var commentAt = DateTime.UtcNow.AddMinutes(-5); // one captured instant: updated == created (never edited)
         var secondComment = new GitHubComment
         {
             Id = Guid.NewGuid(), WorkItemId = workItem.Id, GithubCommentId = 987654,
             Kind = GitHubCommentKinds.IssueComment, AuthorLogin = "bob", Body = "@jsxhuz /plan",
-            CreatedAtGithub = DateTime.UtcNow, UpdatedAtGithub = DateTime.UtcNow, LastSyncedAt = DateTime.UtcNow,
+            CreatedAtGithub = commentAt, UpdatedAtGithub = commentAt,
+            LastSyncedAt = DateTime.UtcNow,
         };
         db.GitHubComments.Add(secondComment);
         await CommandTestSupport.SeedCommandEventAsync(db, secondComment, workItem);

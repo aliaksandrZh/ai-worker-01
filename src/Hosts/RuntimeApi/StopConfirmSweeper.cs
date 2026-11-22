@@ -50,44 +50,16 @@ public sealed class StopConfirmSweeper(
         }
     }
 
-    /// <summary>One reconciled cancellation; retried on the next tick when Komodo is unreachable.</summary>
+    /// <summary>One reconciled cancellation via the shared reconciled-terminal write (identical terminal
+    /// facts + the conditional terminal claim so a late Bridge delivery always wins); retried on the
+    /// next tick when Komodo is unreachable.</summary>
     private async Task ReconcileStopAsync(
         AppDbContext db, IKomodoClient komodo, RuntimeStorageService storage, Run run,
         CancellationToken cancellationToken)
     {
-        var container = await db.ContainerInstances
-            .Where(c => c.RunId == run.Id)
-            .OrderByDescending(c => c.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (container?.DeploymentName is { } deployment)
-        {
-            var stopped = await komodo.StopAsync(deployment, cancellationToken);
-            if (!stopped)
-                return; // decision 22 posture: desired state preserved, nothing corrupted, retried later
-            container.ObservedState = ContainerObservedStates.Stopped;
-            container.LastStoppedAt = DateTime.UtcNow;
-        }
-
-        await CallbackHandler.FinalizeTerminalRunAsync(db, run, storage, cancellationToken);
-        run.Status = RunStatuses.Cancelled;
-        run.CompletedAt = DateTime.UtcNow;
-        run.ErrorMessage = "stop unconfirmed: the Bridge never delivered the terminal cancelled callback";
-
-        await db.SaveChangesAsync(cancellationToken);
-        await ReleaseWorkspaceAsync(db, run.TaskId, cancellationToken);
-        logger.LogInformation("run {runId} reconciled to cancelled without terminal confirmation", run.Id);
-    }
-
-    /// <summary>Mirrors the terminal-callback release (decision 75): the workspace leaves `in_use` when
-    /// the container is a factually stopped machine.</summary>
-    private static async Task ReleaseWorkspaceAsync(AppDbContext db, Guid taskId, CancellationToken cancellationToken)
-    {
-        await db.Workspaces
-            .Where(w => w.TaskId == taskId && w.Status == WorkspaceStatuses.InUse)
-            .ExecuteUpdateAsync(set =>
-            {
-                set.SetProperty(w => w.Status, WorkspaceStatuses.Ready);
-                set.SetProperty(w => w.LastUsedAt, DateTime.UtcNow);
-            }, cancellationToken);
+        var reconciled = await RunReconcileService.TerminalAsync(db, komodo, storage, run, RunStatuses.Cancelled,
+            null, "stop unconfirmed: the Bridge never delivered the terminal cancelled callback", cancellationToken);
+        if (reconciled)
+            logger.LogInformation("run {runId} reconciled to cancelled without terminal confirmation", run.Id);
     }
 }

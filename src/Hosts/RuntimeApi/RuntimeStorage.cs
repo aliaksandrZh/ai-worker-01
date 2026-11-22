@@ -50,6 +50,27 @@ public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
 
     public string WorkspaceHostPath(Guid workflowId, Guid taskId) => $"{Options.HostRoot}/{workflowId}/tasks/{taskId}/workspace";
 
+    /// <summary>Decision-60 evidence probe (task 16): the same host tree is mounted into the Runtime API and
+    /// the agent container, so the control plane can see whether a Run's Bridge still holds UNDELIVERED
+    /// ORDERED callbacks (the coalesced heartbeat slot does not count — a healthy channel empties the spool
+    /// within one sender pass, so a lingering ordered entry means delivery was interrupted and lifecycle
+    /// facts like `agent_started` may be in flight). While entries are pending, the reconcilers must not
+    /// adjudicate terminal outcomes on the ABSENCE of facts (decision 22: investigate before stopping).
+    /// Unreadable spool reads are treated as empty: adjudication proceeds as before rather than hanging.</summary>
+    public bool SpoolHasUndeliveredEntries(Guid workflowId, Guid runId)
+    {
+        var spoolDir = RunTreePaths(workflowId, runId).SpoolDir;
+        try
+        {
+            return Directory.Exists(spoolDir)
+                && Directory.EnumerateFiles(spoolDir, "*.json").Any(file => !file.EndsWith("heartbeat.json", StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Creates the per-Run tree: `pi-session/`, `logs/`, `callback-spool/` (writable by the container uid)
     /// plus the root-owned callback-token file the mount serves read-only.</summary>
     public async Task<RunTreePaths> EnsureRunTreeAsync(Guid workflowId, Guid runId, string callbackToken, CancellationToken cancellationToken)
