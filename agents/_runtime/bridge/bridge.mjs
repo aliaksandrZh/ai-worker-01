@@ -22,6 +22,7 @@ import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
 import { renderPrompt, gitFacts, checkPublications, nudgePrompt, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
+import { preflightMcp } from "./mcp-preflight.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -239,6 +240,16 @@ function spoolFailure(code, message) {
 
 async function main() {
   senderLoop(); // redelivery of pending spool entries from any earlier lifetime happens here
+
+  // ---- MCP preflight: a run without its MCP publication tools is useless — the agent either
+  // cannot publish or starts working around the dead server (bash + REST), and that work cannot
+  // be confirmed. Pi only reports "MCP connection closed" with no reason, so the Bridge verifies
+  // the baked servers itself (initialize → tools/list) and fails fast with the server's real
+  // stderr — no task prompt, no work, no nudges.
+  const mcpFailure = await preflightMcp(env.PI_CODING_AGENT_DIR || join(env.HOME || ".", ".pi/agent"), env);
+  if (mcpFailure !== null) {
+    return await spoolFailure("mcp_unavailable", `the agent's MCP servers failed their startup preflight — ${mcpFailure}`);
+  }
 
   const input = await pullInput();
   const prompt = renderPrompt(input);

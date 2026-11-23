@@ -18,6 +18,7 @@ import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
 import { checkPublications, nudgePrompt, collectArtifacts, completedTerminal, gitFacts, renderPrompt } from "./toolcheck.mjs";
+import { loadMcpServers, expandEnvValue, preflightServer, preflightMcp } from "./mcp-preflight.mjs";
 
 // The stub CLI lives in the stub profile (only agent that bakes it); cross-reference kept explicit.
 const AGENT = fileURLToPath(new URL("../../stub/stub-agent/pi-stub.mjs", import.meta.url));
@@ -237,6 +238,82 @@ test("completedTerminal carries summary, artifacts, session path and git facts",
   assert.equal(terminal.body.result.branch, "agent/pipe-stub");
   assert.match(terminal.body.result.commitSha, /^[0-9a-f]{40}$/);
   rmSync(workspace, { recursive: true, force: true });
+});
+
+// ---- MCP preflight ----
+
+/** Writes a fake stdio MCP server + mcp.json fixture. The server refuses to start without its
+ * FIXTURE_TOKEN env — proving the `!cat` expansion reached it. */
+function mcpFixture(mode) {
+  const dir = tempDir("mcp-fixture-");
+  const serverPath = join(dir, "fake-server.mjs");
+  const behavior = mode === "hang"
+    ? 'setInterval(() => {}, 1000);' // alive, never answers
+    : mode === "exit"
+      ? 'process.exit(1);'
+      : `if (!process.env.FIXTURE_TOKEN) process.exit(2);
+  let buffer = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    let i; while ((i = buffer.indexOf("\\n")) >= 0) {
+      const line = buffer.slice(0, i).trim(); buffer = buffer.slice(i + 1);
+      if (!line) continue;
+      const rpc = JSON.parse(line);
+      if (rpc.method === "initialize") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { serverInfo: { name: "fake" } } }) + "\\n");
+      else if (rpc.method === "tools/list") process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { tools: [{ name: "t" }] } }) + "\\n");
+    }
+  });`;
+  writeFileSync(serverPath, behavior);
+  writeFileSync(join(dir, "token.txt"), "tok-123");
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify({
+    mcpServers: {
+      fake: { command: process.execPath, args: [serverPath], env: { FIXTURE_TOKEN: "!cat " + join(dir, "token.txt") } },
+    },
+  }));
+  return dir;
+}
+
+test("loadMcpServers reads the baked mcp.json and skips remote entries", () => {
+  const dir = mcpFixture("ok");
+  assert.deepEqual(loadMcpServers(dir).map((s) => s.name), ["fake"]);
+  const remoteDir = tempDir("mcp-remote-");
+  writeFileSync(join(remoteDir, "mcp.json"), JSON.stringify({ mcpServers: { remote: { url: "https://example.com/mcp" } } }));
+  assert.deepEqual(loadMcpServers(remoteDir), []); // no stdio command — nothing to gate on
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(remoteDir, { recursive: true, force: true });
+});
+
+test("expandEnvValue matches pi semantics: !command and ${VAR}", () => {
+  const dir = tempDir("mcp-env-");
+  writeFileSync(join(dir, "t.txt"), "tok-123");
+  assert.equal(expandEnvValue("!cat " + join(dir, "t.txt"), {}), "tok-123");
+  assert.equal(expandEnvValue("${FOO}-x", { FOO: "bar" }), "bar-x");
+  assert.equal(expandEnvValue("plain", { FOO: "bar" }), "plain");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("preflightServer passes a healthy server and fails an exiting one with its diagnostics", async () => {
+  const healthy = mcpFixture("ok");
+  assert.equal(await preflightMcp(healthy, process.env, 5_000), null);
+
+  const exiting = mcpFixture("exit");
+  const report = await preflightMcp(exiting, process.env, 5_000);
+  assert.match(report ?? "", /fake: server exited/);
+  rmSync(healthy, { recursive: true, force: true });
+  rmSync(exiting, { recursive: true, force: true });
+});
+
+test("preflightServer times out a hanging server", async () => {
+  const hanging = mcpFixture("hang");
+  const servers = loadMcpServers(hanging);
+  const report = await preflightServer(servers[0], process.env, 300);
+  assert.match(report ?? "", /no MCP response within 300ms/);
+  rmSync(hanging, { recursive: true, force: true });
+});
+
+test("preflightMcp gates nothing when the profile bakes no mcp.json", async () => {
+  assert.equal(await preflightMcp(tempDir("mcp-absent-")), null);
 });
 
 // ---- spool: durable append, coalescing, redelivery ----
