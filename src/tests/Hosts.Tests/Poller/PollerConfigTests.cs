@@ -61,7 +61,7 @@ public class PollerConfigTests
     public void MissingSystemYaml_Throws()
     {
         var missing = Path.Combine(Path.GetTempPath(), $"poller-config-{Guid.NewGuid():N}");
-        var exception = Assert.Throws<PollerConfigException>(() => PollerConfig.Read(missing));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PollerConfig.Read(missing));
         Assert.Contains("system.yaml", exception.Message);
     }
 
@@ -71,7 +71,7 @@ public class PollerConfigTests
         var dir = ConfigDir(new Dictionary<string, string> { ["poll_interval"] = "banana" });
         try
         {
-            Assert.Throws<PollerConfigException>(() => PollerConfig.Read(dir));
+            Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PollerConfig.Read(dir));
         }
         finally { Directory.Delete(dir, true); }
     }
@@ -79,7 +79,7 @@ public class PollerConfigTests
     [Fact]
     public void NonPositivePerPage_Throws()
     {
-        Assert.Throws<PollerConfigException>(() => Read(new Dictionary<string, string> { ["per_page"] = "0" }));
-        Assert.Throws<PollerConfigException>(() => Read(new Dictionary<string, string> { ["per_page"] = "-5" }));
+        Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => Read(new Dictionary<string, string> { ["per_page"] = "0" }));
+        Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => Read(new Dictionary<string, string> { ["per_page"] = "-5" }));
     }
 }

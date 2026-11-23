@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using PiAgent.Platform.GitHub;
+using static PiAgent.Platform.GitHub.GitHubHttp;
 using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller.GitHub;
@@ -31,16 +33,8 @@ public sealed record GitHubPage(
 public sealed class GitHubReadClient(HttpClient httpClient, string pat)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly HttpClient _httpClient = Initialize(httpClient, pat);
+    private readonly HttpClient _httpClient = GitHubHttp.Initialize(httpClient, pat, "pi-agent-poller");
     private readonly string _pat = string.IsNullOrEmpty(pat) ? "<empty-pat>" : pat;
-
-    private static HttpClient Initialize(HttpClient httpClient, string pat)
-    {
-        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pat);
-        httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("pi-agent-poller");
-        return httpClient;
-    }
 
     public async Task<GitHubPage> GetPageAsync(string relativePath, string? etag, CancellationToken cancellationToken)
     {
@@ -71,11 +65,11 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
         }
         catch (HttpRequestException exception)
         {
-            throw new GitHubReadException(null, $"{relativePath}: network failure: {Redact(exception.Message)}");
+            throw new GitHubReadException(null, $"{relativePath}: network failure: {GitHubHttp.Redact(exception.Message, _pat)}");
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new GitHubReadException(null, $"{relativePath}: request timed out: {Redact(exception.Message)}");
+            throw new GitHubReadException(null, $"{relativePath}: request timed out: {GitHubHttp.Redact(exception.Message, _pat)}");
         }
     }
 
@@ -99,18 +93,18 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
         }
         catch (HttpRequestException exception)
         {
-            throw new GitHubReadException(null, $"{relativePath}: network failure: {Redact(exception.Message)}");
+            throw new GitHubReadException(null, $"{relativePath}: network failure: {GitHubHttp.Redact(exception.Message, _pat)}");
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new GitHubReadException(null, $"{relativePath}: request timed out: {Redact(exception.Message)}");
+            throw new GitHubReadException(null, $"{relativePath}: request timed out: {GitHubHttp.Redact(exception.Message, _pat)}");
         }
     }
 
     private async Task<Exception> FailureAsync(string path, HttpResponseMessage response, CancellationToken cancellationToken,
         int? remaining, DateTimeOffset? resetAt, int? retryAfter)
     {
-        var detail = Redact((await response.Content.ReadAsStringAsync(cancellationToken)).Trim());
+        var detail = GitHubHttp.Redact((await response.Content.ReadAsStringAsync(cancellationToken)).Trim(), _pat);
         var message = $"{path}: HTTP {(int)response.StatusCode}: {detail}";
         // decision 53: 403-with-primary-limit-exhausted and 429 are rate limits; every other 403 is a
         // plain error (mirrors the outbox classification precedent).
@@ -147,31 +141,4 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
         var value = response.Headers.ETag?.Tag;
         return string.IsNullOrEmpty(value) ? null : value.Trim('"');
     }
-
-    private static int? Remaining(HttpResponseMessage response)
-    {
-        var value = Header(response, "X-RateLimit-Remaining");
-        return value is { } raw && long.TryParse(raw, out var parsed) && parsed is >= int.MinValue and <= int.MaxValue
-            ? (int)parsed
-            : null;
-    }
-
-    private static DateTimeOffset? ResetAt(HttpResponseMessage response)
-    {
-        var value = Header(response, "X-RateLimit-Reset");
-        return value is { } raw && long.TryParse(raw, out var epoch)
-            ? DateTimeOffset.FromUnixTimeSeconds(epoch)
-            : null;
-    }
-
-    private static int? RetryAfter(HttpResponseMessage response)
-    {
-        var value = Header(response, "Retry-After");
-        return value is { } raw && int.TryParse(raw, out var parsed) ? parsed : null;
-    }
-
-    private static string? Header(HttpResponseMessage response, string name) =>
-        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
-
-    private string Redact(string message) => message.Replace(_pat, "<redacted>");
 }

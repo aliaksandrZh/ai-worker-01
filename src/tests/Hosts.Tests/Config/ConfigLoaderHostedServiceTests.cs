@@ -107,7 +107,9 @@ public class ConfigLoaderHostedServiceTests(PostgresFixture postgres) : IClassFi
         ConfigSamples.WriteSampleTree(root);
         var (service, state) = await BuildService(postgres, root, patFile: "/nonexistent/github-sync-pat.txt");
 
-        var exception = await Assert.ThrowsAsync<ConfigException>(() => service.StartAsync(CancellationToken.None));
+        // the PAT read is the shared Platform discipline — the platform config exception surfaces here
+        var exception = await Assert.ThrowsAsync<PiAgent.Platform.Config.ConfigException>(
+            () => service.StartAsync(CancellationToken.None));
         Assert.Contains("github-sync-pat.txt", exception.Message);
         Assert.False(state.Synchronized);
     }

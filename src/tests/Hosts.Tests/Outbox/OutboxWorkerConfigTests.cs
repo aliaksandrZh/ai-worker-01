@@ -57,7 +57,7 @@ public class OutboxWorkerConfigTests
     {
         var root = Directory.CreateTempSubdirectory("outbox-config-empty").FullName;
 
-        var exception = Assert.Throws<OutboxWorkerConfigException>(() => OutboxWorkerConfig.Read(root));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => OutboxWorkerConfig.Read(root));
 
         Assert.Contains(root, exception.Message);
         Assert.Contains("system.yaml", exception.Message);
@@ -68,7 +68,7 @@ public class OutboxWorkerConfigTests
     {
         var root = WriteConfig("outbox_retry_window: banana\n");
 
-        var exception = Assert.Throws<OutboxWorkerConfigException>(() => OutboxWorkerConfig.Read(root));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => OutboxWorkerConfig.Read(root));
 
         Assert.Contains("outbox_retry_window", exception.Message);
         Assert.Contains("banana", exception.Message);
@@ -79,7 +79,7 @@ public class OutboxWorkerConfigTests
     {
         var root = WriteConfig("outbox_retry_window: 0s\n");
 
-        var exception = Assert.Throws<OutboxWorkerConfigException>(() => OutboxWorkerConfig.Read(root));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => OutboxWorkerConfig.Read(root));
 
         Assert.Contains("outbox_retry_window", exception.Message);
     }

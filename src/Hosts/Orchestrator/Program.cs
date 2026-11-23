@@ -29,7 +29,8 @@ builder.Services.AddServiceTokens(builder.Configuration);
 builder.Services.AddSingleton(sp =>
 {
     var patFile = sp.GetRequiredService<IOptions<ConfigLoaderOptions>>().Value.PatFile;
-    var pat = SyncPat.Read(patFile); // the single read-only PAT (decision 65); missing/empty fails start
+    var pat = PiAgent.Platform.Secrets.PatFile.Read(patFile, "PI_AGENT_GITHUB_PAT_FILE",
+        "the Config Loader must verify the bot identity against GET /user (decision 66)"); // decision 65
     var httpClient = new HttpClient { BaseAddress = new Uri("https://api.github.com/") };
     return new CollaboratorPermissionGate(httpClient, pat);
 });

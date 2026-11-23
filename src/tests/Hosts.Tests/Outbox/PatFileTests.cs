@@ -1,4 +1,5 @@
 using PiAgent.OutboxWorker.GitHub;
+using PiAgent.Platform.Secrets;
 using PiAgent.BuildWorker.Docker;
 using PiAgent.BuildWorker.Builds;
 using PiAgent.BuildWorker.Api;
@@ -18,15 +19,15 @@ public class PatFileTests
     [Fact]
     public void Unset_ErrorsNamingEnvVar()
     {
-        var exception = Assert.Throws<OutboxWorkerConfigException>(() => PatFile.Read(null, EnvName));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PatFile.Read(null, EnvName, "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT (decision 50)"));
         Assert.Contains(EnvName, exception.Message);
     }
 
     [Fact]
     public void MissingFile_NamesPath()
     {
-        var exception = Assert.Throws<OutboxWorkerConfigException>(
-            () => PatFile.Read("/nonexistent/github-write-pat.txt", EnvName));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(
+            () => PatFile.Read("/nonexistent/github-write-pat.txt", EnvName, "purpose"));
         Assert.Contains("/nonexistent/github-write-pat.txt", exception.Message);
     }
 
@@ -36,7 +37,7 @@ public class PatFileTests
         var path = Path.Combine(Path.GetTempPath(), $"outbox-pat-{Guid.NewGuid():N}.txt");
         File.WriteAllText(path, "  \n");
 
-        var exception = Assert.Throws<OutboxWorkerConfigException>(() => PatFile.Read(path, EnvName));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PatFile.Read(path, EnvName, "purpose"));
 
         Assert.Contains(path, exception.Message);
     }
@@ -47,7 +48,7 @@ public class PatFileTests
         var path = Path.Combine(Path.GetTempPath(), $"outbox-pat-{Guid.NewGuid():N}.txt");
         File.WriteAllText(path, "  ghp_valid-token  \n");
 
-        var token = PatFile.Read(path, EnvName);
+        var token = PatFile.Read(path, EnvName, "purpose");
 
         Assert.Equal("ghp_valid-token", token);
         File.Delete(path);

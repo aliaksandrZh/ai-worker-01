@@ -21,7 +21,8 @@ builder.Services.AddSingleton(Options.Create(OutboxWorkerConfig.Read(
     builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config")));
 builder.Services.AddSingleton(new GitHubWriteClient(
     new HttpClient { BaseAddress = new Uri("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30) },
-    PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_WRITE_PAT_FILE"], "PI_AGENT_GITHUB_WRITE_PAT_FILE")));
+    PiAgent.Platform.Secrets.PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_WRITE_PAT_FILE"], "PI_AGENT_GITHUB_WRITE_PAT_FILE",
+    "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT (decision 50)")));
 builder.Services.AddScoped<OutboxActionStore>();
 builder.Services.AddSingleton<IWorkerCycle, OutboxDispatcher>();
 

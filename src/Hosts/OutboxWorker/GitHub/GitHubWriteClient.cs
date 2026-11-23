@@ -1,8 +1,9 @@
 using PiAgent.OutboxWorker.GitHub;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using PiAgent.Platform.GitHub;
+using static PiAgent.Platform.GitHub.GitHubHttp;
 
 namespace PiAgent.OutboxWorker.GitHub;
 
@@ -35,16 +36,8 @@ public sealed class GitHubDeliveryException(
 public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly HttpClient _httpClient = Initialize(httpClient, pat);
+    private readonly HttpClient _httpClient = GitHubHttp.Initialize(httpClient, pat, "pi-agent-outbox-worker");
     private readonly string _pat = string.IsNullOrEmpty(pat) ? "<empty-pat>" : pat;
-
-    private static HttpClient Initialize(HttpClient httpClient, string pat)
-    {
-        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pat);
-        httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("pi-agent-outbox-worker");
-        return httpClient;
-    }
     public async Task<long> CreateCommentAsync(string owner, string name, long issueNumber, string body, CancellationToken cancellationToken)
     {
         var path = $"repos/{owner}/{name}/issues/{issueNumber}/comments";
@@ -94,8 +87,7 @@ public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
 
     private async Task<GitHubDeliveryException> DeliveryFailureAsync(string path, HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        var detail = (await response.Content.ReadAsStringAsync(cancellationToken)).Trim();
-        detail = detail.Replace(_pat, "<redacted>");
+        var detail = GitHubHttp.Redact((await response.Content.ReadAsStringAsync(cancellationToken)).Trim(), _pat);
         return new GitHubDeliveryException(
             response.StatusCode,
             Remaining(response),
@@ -103,18 +95,4 @@ public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
             $"{path}: HTTP {(int)response.StatusCode}: {detail}");
     }
 
-    private static int? Remaining(HttpResponseMessage response)
-    {
-        var value = Header(response, "X-RateLimit-Remaining");
-        return value is { } raw && int.TryParse(raw, out var parsed) ? parsed : null;
-    }
-
-    private static int? RetryAfter(HttpResponseMessage response)
-    {
-        var value = Header(response, "Retry-After");
-        return value is { } raw && int.TryParse(raw, out var parsed) ? parsed : null;
-    }
-
-    private static string? Header(HttpResponseMessage response, string name) =>
-        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
 }
