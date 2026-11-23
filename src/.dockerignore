@@ -1,0 +1,20 @@
+# Build context = src/ (compose `build.context: ../src`). The Dockerfile copies only the
+# compile inputs, so the context is a whitelist of exactly those: everything else
+# (tests, local Rider build artifacts) stays on the host and never reaches the daemon.
+# Config plane, bridge, secrets and runtime state live outside src/ entirely.
+*
+!global.json
+!Directory.Build.props
+!Directory.Packages.props
+!PiAgent.slnx
+!Platform/
+!Platform/**
+!Infrastructure/
+!Infrastructure/**
+!Migrator/
+!Migrator/**
+!Hosts/
+!Hosts/**
+# build artifacts of local Rider/CLI builds inside the source tree
+**/bin/
+**/obj/
