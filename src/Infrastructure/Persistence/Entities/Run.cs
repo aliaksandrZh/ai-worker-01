@@ -21,6 +21,9 @@ public static class RunErrorCodes
     public const string GithubPublicationFailed = "github_publication_failed";
     public const string RuntimeFailure = "runtime_failure";
     public const string ArtifactTooLarge = "artifact_too_large";
+    /// <summary>The Bridge's /mcp status probe: a configured MCP server failed before the task
+    /// prompt was ever delivered (no work — the run fails with pi's full diagnostics incl. stderr).</summary>
+    public const string McpUnavailable = "mcp_unavailable";
     /// <summary>The Bridge's publication toolcheck: a mandated publication kind stayed unconfirmed
     /// after the settle/nudge rounds (the agent never self-reports — there is no result manifest).</summary>
     public const string PublicationMissing = "publication_missing";
@@ -32,8 +35,9 @@ public static class RunErrorCodes
     /// <summary>Transient pre-execution infrastructure codes: automatic retry
     /// applies only to these and only when the Run never began executing (no `agent_started` event).
     /// `startup_timeout` is pre-execution by definition; `runtime_failure` is retried pre-execution only
-    /// (a container death before the agent started — RunReconciler), never after execution began.</summary>
-    public static readonly string[] TransientPreExecution = [StartupTimeout, RuntimeFailure];
+    /// (a container death before the agent started — RunReconciler), never after execution began.
+    /// `mcp_unavailable` is pre-execution by construction (the probe runs before the task prompt).</summary>
+    public static readonly string[] TransientPreExecution = [StartupTimeout, RuntimeFailure, McpUnavailable];
 }
 
 /// <summary>

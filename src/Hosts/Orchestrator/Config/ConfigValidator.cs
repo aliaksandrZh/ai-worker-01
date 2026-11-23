@@ -107,8 +107,8 @@ public static class ConfigValidator
             }
             if (profile.BridgeBehavior is { } behavior)
                 Check(behavior is "succeed" or "fail" or "hang"
-                    or "never_start" or "permission_denied", // the startup_timeout / permission_denied levers
-                    $"{file}: bridge.behavior '{behavior}' must be succeed|fail|hang|never_start|permission_denied (stub scenario lever)");
+                    or "never_start" or "permission_denied" or "mcp_failed", // the startup_timeout / permission_denied levers
+                    $"{file}: bridge.behavior '{behavior}' must be succeed|fail|hang|never_start|permission_denied|mcp_failed (stub scenario lever)");
 
             // secrets are name-only references to host-managed files; the grammar is also
             // enforced by the Runtime API at plan build (frozen rows) — this is the early check.

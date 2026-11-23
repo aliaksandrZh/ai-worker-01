@@ -9,8 +9,10 @@
  * runs the publication toolcheck after every `agent_settled` (each mandated publication kind must
  * have an OBSERVED error-free completed tool execution; a missing mandate is nudged back to the
  * agent at most PI_PUBLICATION_NUDGES times) and delivers the terminal `completed` (or `failed`)
- * callback — the delivery cycle ends only on the Runtime API's persistence acknowledgement. It also
- * captures Pi stdout/stderr plus its own diagnostics into the per-Run log trio.
+ * callback — the delivery cycle ends only on the Runtime API's persistence acknowledgement. Before
+ * the task prompt it probes pi's `/mcp` status (the FULL failure reason incl. the server's stderr
+ * — `mcp_unavailable` on a failed server, before any work). It also captures Pi stdout/stderr plus
+ * its own diagnostics into the per-Run log trio.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -223,6 +225,7 @@ const completedToolNames = new Set(); // tool names with an error-free completed
 const toolNameByCallId = new Map(); // tool_started fallback: ends whose payload omits the name
 let lastAssistantText = null; // the last aggregated assistant_output — the run's result summary
 let sessionFilePath = null; // the actual session path, discovered via `get_state`
+let mcpProbe = null; // active while the /mcp status probe is in flight: { lines: [] }
 let settled = false;
 let resolveSettle = null; // resolves the settle wait (the toolcheck loop awaits it per turn)
 let agentExited = false;
@@ -292,6 +295,10 @@ async function main() {
         record = null; // not protocol output (e.g. pi shutdown notices) — logged verbatim only
       }
       if (correlator.onRecord(record)) continue; // a handshake response, not an event
+      // the /mcp status probe captures pi's FULL MCP server status (stderr tail included) —
+      // pi's own startup notice truncates the failure reason to the first line
+      if (mcpProbe && record?.type === "extension_ui_request" && record.method === "notify"
+          && typeof record.message === "string") mcpProbe.lines.push(record.message);
       if (mapper.onLine(line) && mapper.settled && !settled) {
         settled = true; // stdin stays open: a failed publication toolcheck nudges a follow-up prompt
         if (resolveSettle) { resolveSettle(); resolveSettle = null; }
@@ -384,6 +391,42 @@ async function main() {
       promptStageRelease();
       startStopSequence();
       return;
+    }
+
+    // ---- MCP status probe (pi-native): pi keeps a failed server's stderr in `connection.error`
+    // (up to 2000 chars) but its startup notice truncates to the first line ("MCP connection closed").
+    // The /mcp command prints the FULL status (formatStatus → the stderr tail). A run without its
+    // publication tools is useless work — a failed server fails the run BEFORE the task prompt with
+    // the exact cause; the agent process is stopped and no work is done.
+    mcpProbe = { lines: [] };
+    let probeDisposition = null;
+    try {
+      const probeResponse = await Promise.race([
+        correlator.command("prompt", { message: "/mcp" }),
+        onAgentExit.then((code) => {
+          throw new Error(`agent exited during the MCP status probe (code ${code})`);
+        }),
+      ]);
+      probeDisposition = promptDisposition(probeResponse);
+      await sleep(1_500); // the status notify may land right before or right after the response
+    } catch (error) {
+      mcpProbe = null;
+      promptStageRelease();
+      if (stopSignal) {
+        startStopSequence();
+        return;
+      }
+      agent.kill("SIGTERM");
+      return await spoolFailure("runtime_failure", `MCP status probe failed — ${error.message}`);
+    }
+    const mcpStatus = mcpProbe.lines.join("\n").trim();
+    mcpProbe = null;
+    if (mcpStatus) log(`MCP status (pi /mcp):\n${mcpStatus}\n`); // healthy runs log it too — free diagnostics
+    if (probeDisposition === "handled" && /: failed\b/m.test(mcpStatus)) {
+      promptStageRelease();
+      agent.kill("SIGTERM");
+      return await spoolFailure("mcp_unavailable",
+        `the agent's MCP servers failed to start — pi /mcp reports:\n${mcpStatus}`);
     }
 
     const promptResponse = await Promise.race([
