@@ -49,6 +49,9 @@ const publicationNudges = (() => {
   const parsed = Number(env.PI_PUBLICATION_NUDGES);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 2;
 })();
+// the /mcp status probe waits for pi's status notify EVENT-DRIVEN; the deadline only bounds the
+// pathological no-notify case (agents that never notify — e.g. the non-mcp_failed stub behaviors)
+const mcpProbeTimeoutMs = clampSeconds(env.PI_MCP_PROBE_TIMEOUT_SECONDS, 5) * 1000;
 const heartbeatSeconds = clampSeconds(env.PI_HEARTBEAT_SECONDS, 15);
 const eventCadenceSeconds = clampSeconds(env.PI_EVENT_CADENCE_SECONDS, 5);
 const maxLogBytes = Number(env.PI_MAX_LOG_MB || 50) * 1024 * 1024;
@@ -225,7 +228,7 @@ const completedToolNames = new Set(); // tool names with an error-free completed
 const toolNameByCallId = new Map(); // tool_started fallback: ends whose payload omits the name
 let lastAssistantText = null; // the last aggregated assistant_output — the run's result summary
 let sessionFilePath = null; // the actual session path, discovered via `get_state`
-let mcpProbe = null; // active while the /mcp status probe is in flight: { lines: [] }
+let mcpProbe = null; // active while the /mcp status probe is in flight: { lines, waiters }
 let settled = false;
 let resolveSettle = null; // resolves the settle wait (the toolcheck loop awaits it per turn)
 let agentExited = false;
@@ -298,7 +301,10 @@ async function main() {
       // the /mcp status probe captures pi's FULL MCP server status (stderr tail included) —
       // pi's own startup notice truncates the failure reason to the first line
       if (mcpProbe && record?.type === "extension_ui_request" && record.method === "notify"
-          && typeof record.message === "string") mcpProbe.lines.push(record.message);
+          && typeof record.message === "string") {
+        mcpProbe.lines.push(record.message);
+        for (const wake of mcpProbe.waiters.splice(0)) wake(); // the probe stops waiting on the first notify
+      }
       if (mapper.onLine(line) && mapper.settled && !settled) {
         settled = true; // stdin stays open: a failed publication toolcheck nudges a follow-up prompt
         if (resolveSettle) { resolveSettle(); resolveSettle = null; }
@@ -398,7 +404,7 @@ async function main() {
     // The /mcp command prints the FULL status (formatStatus → the stderr tail). A run without its
     // publication tools is useless work — a failed server fails the run BEFORE the task prompt with
     // the exact cause; the agent process is stopped and no work is done.
-    mcpProbe = { lines: [] };
+    mcpProbe = { lines: [], waiters: [] };
     let probeDisposition = null;
     try {
       const probeResponse = await Promise.race([
@@ -408,7 +414,14 @@ async function main() {
         }),
       ]);
       probeDisposition = promptDisposition(probeResponse);
-      await sleep(1_500); // the status notify may land right before or right after the response
+      // the status notify may land right before or right after the command response — wait for the
+      // first notify, not a fixed guess; the deadline only bounds agents that never notify
+      if (mcpProbe.lines.length === 0) {
+        await Promise.race([
+          new Promise((resolve) => mcpProbe.waiters.push(resolve)),
+          sleep(mcpProbeTimeoutMs),
+        ]);
+      }
     } catch (error) {
       mcpProbe = null;
       promptStageRelease();
