@@ -1,3 +1,6 @@
+using PiAgent.BuildWorker.Docker;
+using PiAgent.BuildWorker.Builds;
+using PiAgent.BuildWorker.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using PiAgent.BuildWorker;

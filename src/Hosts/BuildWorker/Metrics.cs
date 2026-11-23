@@ -1,3 +1,6 @@
+using PiAgent.BuildWorker.Docker;
+using PiAgent.BuildWorker.Builds;
+using PiAgent.BuildWorker.Api;
 using PiAgent.Platform.Workers;
 
 namespace PiAgent.BuildWorker;

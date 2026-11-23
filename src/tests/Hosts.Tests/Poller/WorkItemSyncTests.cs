@@ -1,3 +1,4 @@
+using PiAgent.Poller.Streams;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using PiAgent.Hosts.Tests.Config;

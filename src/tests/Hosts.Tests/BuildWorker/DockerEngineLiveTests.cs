@@ -1,3 +1,7 @@
+using PiAgent.OutboxWorker.GitHub;
+using PiAgent.BuildWorker.Docker;
+using PiAgent.BuildWorker.Builds;
+using PiAgent.BuildWorker.Api;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PiAgent.BuildWorker;

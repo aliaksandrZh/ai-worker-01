@@ -1,3 +1,4 @@
+using PiAgent.OutboxWorker.GitHub;
 namespace PiAgent.OutboxWorker;
 
 /// <summary>Outbox Worker operational options; currently the one §16 knob this host reads directly (plan ruling 5).</summary>

@@ -1,3 +1,4 @@
+using PiAgent.Poller.GitHub;
 using System.Net;
 using PiAgent.Poller;
 using Xunit;
