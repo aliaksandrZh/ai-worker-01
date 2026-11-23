@@ -3,9 +3,9 @@ using PiAgent.Infrastructure.Persistence;
 
 namespace PiAgent.Poller.Streams;
 
-/// <summary>`pr_review_comments` stream (decision 53): repo-wide `GET /repos/{o}/{r}/pulls/comments` —
-/// inline PR review comments (the per-PR listing path stays reserved for the deleted-comment sweep,
-/// ticket 05); work-item resolution + boundary holdback in CommentsPageSync.</summary>
+/// <summary>`pr_review_comments` stream: repo-wide `GET /repos/{o}/{r}/pulls/comments` —
+/// inline PR review comments (the per-PR listing path stays reserved for the deleted-comment sweep);
+/// work-item resolution + boundary holdback in CommentsPageSync.</summary>
 public sealed class PrReviewCommentsStream : IRepositoryStream
 {
     public string StreamName => SyncCursorStreams.PrReviewComments;

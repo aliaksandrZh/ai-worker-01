@@ -1,5 +1,5 @@
 #!/bin/sh
-# Scheduled PostgreSQL dumps (decisions 52/76). One §14-shape JSON log line per action.
+# Scheduled PostgreSQL dumps. One JSON-shape log line per action.
 # BACKUP_RUN_ONCE=1 runs a single cycle and exits (testability without docker).
 
 set -eu

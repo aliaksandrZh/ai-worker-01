@@ -114,7 +114,7 @@ public class TimelineSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task CrossReference_FromOtherRepository_NoLink() // decision 51 scope
+    public async Task CrossReference_FromOtherRepository_NoLink() // different-repository scope
     {
         var (db, repo) = await NewDbAndRepoAsync();
         SeedIssue(db, repo, 3); // visits run 3 → 7
@@ -130,7 +130,7 @@ public class TimelineSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task CrossReference_IssueReferencesIssue_NoLink() // D1: V1 links are Issue↔PR only
+    public async Task CrossReference_IssueReferencesIssue_NoLink() // links are Issue↔PR only
     {
         var (db, repo) = await NewDbAndRepoAsync();
         SeedIssue(db, repo, 12);
@@ -212,7 +212,7 @@ public class TimelineSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task ClosedViaDirectKeywordCommit_NoPr_NoLink() // decision 51: Issue↔PR links only
+    public async Task ClosedViaDirectKeywordCommit_NoPr_NoLink() // Issue↔PR links only
     {
         var (db, repo) = await NewDbAndRepoAsync();
         SeedIssue(db, repo, 12);
@@ -298,7 +298,7 @@ public class TimelineSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task ConnectDisconnect_RawRecords_NoLinks() // checklist 8 — decision 79
+    public async Task ConnectDisconnect_RawRecords_NoLinks() // checklist 8
     {
         var (db, repo) = await NewDbAndRepoAsync();
         var issue = SeedIssue(db, repo, 12);
@@ -322,7 +322,7 @@ public class TimelineSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task ReviewRequestEvents_ProducedFromTimeline() // checklist 5 — decision 31 event source
+    public async Task ReviewRequestEvents_ProducedFromTimeline() // checklist 5 — event source
     {
         var (db, repo) = await NewDbAndRepoAsync();
         PollerTestSupport.SeedWorkItem(db, repo, 7, WorkItemTypes.PullRequest);

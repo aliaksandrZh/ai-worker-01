@@ -11,12 +11,12 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// The /retry command (ticket 15, 06 §9a, decisions 27/65/70): re-runs the WorkItem's last failed Task
+/// The /retry command: re-runs the WorkItem's last failed Task
 /// WITHOUT creating a new Task — same Task (pinned profile version, same target_head_sha for reviews,
 /// reused input artifacts and Workspace), fresh OrchestrationJob, normal claim flow with
-/// attempt_number+1 and a fresh AgentSession. Accepted retries are silent (06 §13); rejections leave
+/// attempt_number+1 and a fresh AgentSession. Accepted retries are silent; rejections leave
 /// the Task `Failed` and enqueue exactly one reply. Per-task-type conditions stay at claim time
-/// (owner decision): the claim test covers the implement plan-input reuse path.
+/// (the claim test covers the implement plan-input reuse path).
 /// </summary>
 public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -117,7 +117,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
 
         await RunAsync(db, harness);
 
-        // the retry command is processed with NO reply (06 §13: no row for an accepted /retry)
+        // the retry command is processed with NO reply (no row for an accepted /retry)
         var retry = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Processed, retry.Status);
         Assert.Null(retry.RejectionReason);
@@ -127,7 +127,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
         Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status);
         Assert.Null(task.FailureReason);
         Assert.Null(task.CompletedAt);
-        // the Workflow re-enters `active` with the retried Task as its open work (03 §1)
+        // the Workflow re-enters `active` with the retried Task as its open work
         var workflow = await db.Workflows.AsNoTracking().SingleAsync();
         Assert.Equal(WorkflowStatuses.Active, workflow.Status);
         Assert.Equal(task.Id, workflow.CurrentTaskId);
@@ -169,7 +169,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
 
         await RunAsync(db, harness); // /retry accepted
 
-        // the claim flow then does the attempt+1 work (decision 70: normal claim flow follows)
+        // the claim flow then does the attempt+1 work (normal claim flow follows)
         var workerHarness = OrchestrationTestSupport.NewWorker(postgres);
         PollerTestSupport.StubHandler gateStub = workerHarness.Handler;
         gateStub.EnqueueResponse(new HttpResponseMessage(HttpStatusCode.OK)
@@ -220,14 +220,14 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
 
         await RunAsync(db, harness);
 
-        // the SAME Task retries: the pinned review SHA (decision 31) and profile version are untouched
+        // the SAME Task retries: the pinned review SHA and profile version are untouched
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id);
         Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status);
         Assert.Equal("deadbeef", task.TargetHeadSha);
         Assert.Equal(prepared.Task.AgentProfileVersionId, task.AgentProfileVersionId);
     }
 
-    // ---- rejected retries (Task stays Failed; exactly one reply; decision 70) ----
+    // ---- rejected retries (Task stays Failed; exactly one reply) ----
 
     [Fact]
     public async Task Retry_WithoutWorkflow_RejectedTaskNotRetryable()
@@ -262,7 +262,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
         var retry = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Rejected, retry.Status);
         Assert.Equal(AgentCommandRejectionReasons.TaskNotRetryable, retry.RejectionReason);
-        // /retry never re-runs a succeeded Task (06 §9a)
+        // /retry never re-runs a succeeded Task
         Assert.Equal(OrchestrationTaskStatuses.Succeeded,
             (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id)).Status);
         Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
@@ -298,7 +298,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
 
         await RunAsync(db, harness);
 
-        // occupancy (06 §12) beats the retry: same-Workflow commands are not queued behind one another
+        // occupancy beats the retry: same-Workflow commands are not queued behind one another
         var retry = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Rejected, retry.Status);
         Assert.Equal(AgentCommandRejectionReasons.UnfinishedTaskExists, retry.RejectionReason);
@@ -323,7 +323,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
         var retry = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Rejected, retry.Status);
         Assert.Equal(AgentCommandRejectionReasons.AgentProfileNotReady, retry.RejectionReason);
-        // decision 70: the rejection leaves the Task Failed (restore the version to retry)
+        // the rejection leaves the Task Failed (restore the version to retry)
         Assert.Equal(OrchestrationTaskStatuses.Failed,
             (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id)).Status);
         Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
@@ -374,7 +374,7 @@ public class RetryCommandTests(PostgresFixture postgres) : IClassFixture<Postgre
         var (db, harness, _, workItem) = await NewCaseAsync("@jsxhuz /retry");
         AuthStub200(harness.Handler);
         await SeedFailedTaskAsync(db, workItem);
-        // decision 71: a failed Workflow admits nothing — admission rejects /retry before the handler
+        // a failed Workflow admits nothing — admission rejects /retry before the handler
         await db.Workflows.ExecuteUpdateAsync(u => u
             .SetProperty(w => w.Status, WorkflowStatuses.Failed)
             .SetProperty(w => w.FailureReason, "integrity_failure"));

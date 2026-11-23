@@ -9,20 +9,20 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The Orchestrator-side consumer of terminal Runs (03 §2: the Orchestrator owns every Task/Workflow
+/// The Orchestrator-side consumer of terminal Runs (the Orchestrator owns every Task/Workflow
 /// transition; agents report facts — the Runtime API persisted them as RunEvents). Per tick:
 /// <list type="bullet">
 /// <item>Task `starting` whose Run reached `running` → Task `running` (the agent started executing).</item>
 /// <item>Terminal Run → Task terminal: `succeeded` (+Workflow `waiting_for_human`, command `processed`),
-/// `blocked` when the persisted `completed` callback carried `outcome = needs_human_input` (decision 72),
+/// `blocked` when the persisted `completed` callback carried `outcome = needs_human_input`,
 /// `failed`. A pre-execution failure (no `agent_started` event) of a transient infrastructure kind with
-/// automatic retry budget left (decisions 28/70, ticket 15) requeues the Task SILENTLY: `Failed → Queued`,
+/// automatic retry budget left requeues the Task SILENTLY: `Failed → Queued`,
 /// fresh OrchestrationJob after the pinned backoff, attempt+1 via the normal claim flow; the Workflow
 /// keeps the Task as its open work. Otherwise the failure is final: command `failed`, Workflow
 /// `waiting_for_human`, desired container state `stopped`, and one Outbox failure notification per the
-/// 06 §13 template — decision 42's publication note for `github_publication_failed`, the
+/// same failure-notification shape — a publication note for `github_publication_failed`, the
 /// exhausted-retries closing when silent retries were involved, the plain resubmit text otherwise
-/// (decision 29: one for every finally-failed Task, `TimedOut` included).
+/// (one for every finally-failed Task, `TimedOut` included).
 /// </summary>
 public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWorkerCycle
 {
@@ -72,7 +72,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
             : null;
         var workflow = await db.Workflows.SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
 
-        bool requeued = false; // ticket 15: a silent automatic retry keeps the Task as the Workflow's open work
+        bool requeued = false; // a silent automatic retry keeps the Task as the Workflow's open work
 
         switch (run.Status)
         {
@@ -80,7 +80,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                 var outcome = await CompletedOutcomeAsync(db, run, cancellationToken);
                 if (outcome == RunEventVocabulary.NeedsHumanInput)
                 {
-                    task.Status = OrchestrationTaskStatuses.Blocked; // decision 72: agent checkpointed + asked a human
+                    task.Status = OrchestrationTaskStatuses.Blocked; // agent checkpointed + asked a human
                 }
                 else
                 {
@@ -96,17 +96,17 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
 
             case RunStatuses.Failed:
             {
-                // Execution began when the agent started (03 §3: the event-driven `agent_started` callback);
-                // without it the Run failed pre-execution — the only window automatic retry applies in (decision 70).
+                // Execution began when the agent started (the event-driven `agent_started` callback);
+                // without it the Run failed pre-execution — the only window automatic retry applies in.
                 var preExecution = !await ExecutionStartedAsync(db, run.Id, cancellationToken);
                 var policy = RetryPolicies.Parse(task.RetryPolicy);
                 if (preExecution
                     && RunErrorCodes.TransientPreExecution.Contains(run.ErrorCode)
-                    && task.AutomaticRetriesUsed < policy.MaxAutomaticRetries) // decision 28: task-lifetime budget
+                    && task.AutomaticRetriesUsed < policy.MaxAutomaticRetries) // task-lifetime budget
                 {
                     task.AutomaticRetriesUsed += 1;
                     RequeueTaskForAutomaticRetry(db, task, workflow, policy, task.AutomaticRetriesUsed, now);
-                    requeued = true; // silent: no notification, no command/workflow terminal writes (06 §13)
+                    requeued = true; // silent: no notification, no command/workflow terminal writes
                     break;
                 }
                 task.Status = OrchestrationTaskStatuses.Failed;
@@ -118,8 +118,8 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     command.RejectionReason = task.FailureReason;
                     command.ProcessedAt = now;
                 }
-                // decision 29: every finally-failed Task notifies once — the exhausted-retries closing
-                // applies when silent automatic retries were involved, decision 42's keeps its own.
+                // every finally-failed Task notifies once — the exhausted-retries closing
+                // applies when silent automatic retries were involved; publication failures keep their own.
                 var retriesExhausted = preExecution && RunErrorCodes.TransientPreExecution.Contains(run.ErrorCode)
                     && task.AutomaticRetriesUsed > 0;
                 await EnqueueFinalFailureNotificationAsync(db, task, run, workflow, preExecution, retriesExhausted, cancellationToken);
@@ -129,7 +129,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
             case RunStatuses.Cancelled:
                 task.Status = OrchestrationTaskStatuses.Cancelled;
                 task.CancelledAt = now;
-                // ticket 14: the only V1 Run canceller is /stop (decision 61) — the reason rides the
+                // the only Run canceller is /stop — the reason rides the
                 // run's stop signal, not the trigger command's own rejection.
                 task.FailureReason = AgentCommandRejectionReasons.StopRequested;
                 if (command is not null)
@@ -150,7 +150,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     command.RejectionReason = "run_timed_out";
                     command.ProcessedAt = now;
                 }
-                // decision 29: TimedOut never auto-retries (03 §3: execution began) and still notifies.
+                // TimedOut never auto-retries (execution began) and still notifies.
                 await EnqueueFinalFailureNotificationAsync(db, task, run, workflow,
                     preExecution: false, retriesExhausted: false, cancellationToken);
                 break;
@@ -168,7 +168,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                 openJob.LastError = run.ErrorCode ?? run.ErrorMessage;
         }
 
-        // container desired state (03 §5): stopped on Task completion — the Runtime API already stopped
+        // container desired state: stopped on Task completion — the Runtime API already stopped
         // it (also for a requeued attempt: the failed attempt's container is dead)
         var containers = await db.ContainerInstances
             .Where(c => c.RunId == run.Id)
@@ -176,7 +176,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
         foreach (var container in containers)
             container.DesiredState = ContainerDesiredStates.Stopped;
 
-        // a requeued automatic retry keeps the Task as the Workflow's open work (03 §1: staying Active
+        // a requeued automatic retry keeps the Task as the Workflow's open work (staying Active
         // while its Task is queued again); only terminal paths hand the Workflow back
         if (!requeued)
         {
@@ -192,13 +192,13 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
     }
 
     /// <summary>True when the Run's agent actually began working (a persisted `agent_started` callback,
-    /// 03 §3 — the event-driven run promotion); the boundary between the automatic-retry window
-    /// (decision 70) and manual `/retry`.</summary>
+    /// the event-driven run promotion); the boundary between the automatic-retry window
+    /// and manual `/retry`.</summary>
     private static async Task<bool> ExecutionStartedAsync(AppDbContext db, Guid runId, CancellationToken cancellationToken) =>
         await db.RunEvents.AsNoTracking()
             .AnyAsync(e => e.RunId == runId && e.Type == RunEventTypes.AgentStarted, cancellationToken);
 
-    /// <summary>Decision 70 (automatic half): the Task silently re-enters the normal claim flow —
+    /// <summary>Automatic retry: the Task silently re-enters the normal claim flow —
     /// `Failed → Queued`, terminal markers cleared, a fresh OrchestrationJob schedules the new attempt
     /// after the pinned exponential backoff. The claim flow revalidates preconditions and creates the
     /// Run/AgentSession at attempt_number+1; the Workflow keeps the Task as its open work.</summary>
@@ -209,7 +209,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
         task.Status = OrchestrationTaskStatuses.Queued;
         task.CompletedAt = null;
         task.FailureReason = null;
-        // initial backoff doubled per already-spent retry (decision 28; defaults give one retry at 30 s)
+        // initial backoff doubled per already-spent retry (defaults give one retry at 30 s)
         var backoff = TimeSpan.FromSeconds(policy.InitialBackoffSeconds * Math.Pow(2, retriesUsed - 1));
         db.OrchestrationJobs.Add(new OrchestrationJob
         {
@@ -226,7 +226,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
         workflow.UpdatedAt = now;
     }
 
-    /// <summary>The final-failure notification (06 §13 template): command, agent, attempt, stage and the
+    /// <summary>The final-failure notification: command, agent, attempt, stage and the
     /// error with a diagnostic id — never re-publishes the agent's result; the artifacts stay. One per
     /// finally-failed Task: the consumer transitions each Task exactly once and the enqueue rides the
     /// same change set. The Run id is the idempotency key.</summary>
@@ -272,7 +272,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
             cancellationToken);
     }
 
-    /// <summary>Reads the `outcome` from the run's persisted `completed` callback (04 §4: the full body is
+    /// <summary>Reads the `outcome` from the run's persisted `completed` callback (the full body is
     /// a RunEvent payload before acknowledgement). Default `completed`.</summary>
     public static async Task<string> CompletedOutcomeAsync(AppDbContext db, Run run, CancellationToken cancellationToken)
     {

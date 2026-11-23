@@ -2,7 +2,7 @@ using PiAgent.Platform.Config;
 
 namespace PiAgent.Poller;
 
-/// <summary>§16 polling knobs from config/system.yaml (decision 53 defaults): `poll_interval` 60 s per
+/// <summary>Polling knobs from config/system.yaml: `poll_interval` 60 s per
 /// repository, `poll_overlap` 5-minute window for timestamp queries, `per_page` 100. Missing key →
 /// default; missing file or malformed/non-positive value → startup failure. Duration strings parse
 /// via the shared SystemYaml mechanics (formerly a per-host local copy of the duration regex).</summary>

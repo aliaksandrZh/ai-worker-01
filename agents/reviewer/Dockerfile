@@ -1,4 +1,4 @@
-# Reviewer agent profile image (decisions 54/56/64/74). Own build context, own Git clone path — the
+# Reviewer agent profile image. Own build context, own Git clone path — the
 # reviewer shares NO code with the planner or the coder (each agent gets its codebase via its own git
 # clone in its own entry script). Pi is PINNED at build time.
 ARG PI_VERSION=1.6.0

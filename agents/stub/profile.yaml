@@ -1,9 +1,9 @@
-# The stub agent profile (ticket 09; keep until ticket 12): a fake headless CLI speaking a tiny pi-RPC-shaped JSON
-# protocol, plus the reference Runtime Bridge baked into the image (decision 33). Proves the run pipeline end to end
-# while the real planner runs are being wired (tickets 11–12). Since ticket 10 its image builds through the build
-# pipeline automatically (agent-stub:v<n>); the profile must stay otherwise ordinary — ticket 12 replaces it by
-# routing /plan back to the planner.
-description: Stub agent proving the run pipeline (pi-RPC-shaped JSON protocol) until ticket 10
+# The stub agent profile: a fake headless CLI speaking a tiny pi-RPC-shaped JSON
+# protocol, plus the reference Runtime Bridge baked into the image. Proves the run pipeline end to end
+# while the real planner runs are being wired. Its image builds through the build
+# pipeline automatically (agent-stub:v<n>); the profile must stay otherwise ordinary — routing /plan
+# back to the planner replaces it.
+description: Stub agent proving the run pipeline (pi-RPC-shaped JSON protocol)
 enabled: true
 runtime_type: pi
 max_context_tokens: 200000
@@ -18,7 +18,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording + required_permission_denied verification, ticket 13
+  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording + required_permission_denied verification
   heartbeat_interval: 15s
   event_cadence: 5s
   behavior: succeed   # stub-only scenario lever: succeed | fail | needs_human | hang | never_start | permission_denied

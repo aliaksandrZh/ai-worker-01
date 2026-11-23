@@ -7,7 +7,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// Deleted-comment daily sweep (decision 77, task 05): a separate full listing compared against stored
+/// Deleted-comment daily sweep: a separate full listing compared against stored
 /// IDs — all conversation comments via `issues/comments`, inline comments per OPEN PR via
 /// `pulls/{n}/comments`. A stored ID missing from a listing is re-checked by direct request; ONLY a
 /// confirmed 404 creates a tombstone, 403/rate-limit/network errors never mean deletion (a confirmed
@@ -16,15 +16,15 @@ namespace PiAgent.Poller.Streams;
 /// transaction, together with the run-state bookkeeping — so a failed sweep persists nothing and is
 /// retried whole on the next due cycle.
 ///
-/// Own run state (decision 77): the `deleted_comment_sweep` sync_cursor row gates the daily cadence
+/// Own run state: the `deleted_comment_sweep` sync_cursor row gates the daily cadence
 /// via LastSuccessAt; its `cursor_value` stays NULL. It never reads or advances the six incremental
 /// stream cursors. Listings use no ETags: an append-mostly listing can leave a page-1 etag stale after
 /// deletions/deep-page changes, and a wrongly-304'd sweep would silently miss deletions.
 /// </summary>
 public sealed class DeletedCommentSweepStream : IRepositoryStream
 {
-    /// <summary>Daily cadence per decision 77 (hardcoded default, approved D4 — test-overridable
-    /// via cursor timestamps; no system.yaml knob, §16 untouched).</summary>
+    /// <summary>Daily cadence (hardcoded default — test-overridable
+    /// via cursor timestamps; no system.yaml knob).</summary>
     public static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
     public string StreamName => SyncCursorStreams.DeletedCommentSweep;
@@ -37,7 +37,7 @@ public sealed class DeletedCommentSweepStream : IRepositoryStream
 
         try
         {
-            // ---- full listings (read-only; open PRs only for inline comments, decision 77) ----
+            // ---- full listings (read-only; open PRs only for inline comments) ----
             var listedConversation = await ListIdsAsync(run,
                 $"repos/{run.Repository.Owner}/{run.Repository.Name}/issues/comments?per_page={run.Options.PerPage}",
                 cancellationToken);
@@ -123,7 +123,7 @@ public sealed class DeletedCommentSweepStream : IRepositoryStream
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing persisted (decision 53/77)
+            throw; // the cycle must stop for the whole run — nothing persisted
         }
         catch (Exception exception)
         {

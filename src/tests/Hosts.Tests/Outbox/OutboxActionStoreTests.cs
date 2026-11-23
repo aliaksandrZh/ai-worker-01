@@ -11,7 +11,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Outbox;
 
 /// <summary>
-/// OutboxActionStore decision-67 semantics over real postgres (task brief): idempotent enqueue,
+/// OutboxActionStore semantics over real postgres: idempotent enqueue,
 /// atomic SKIP-LOCKED claim with lease + retry-window exhaustion, owner-guarded transitions,
 /// cancel. All timestamps use UTC with a 5 s tolerance for clock travel between reads.
 /// </summary>

@@ -1,6 +1,6 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Workflow lifecycle statuses (02 §9, 03 §1). `failed` is terminal-intervention (decision 71).</summary>
+/// <summary>Workflow lifecycle statuses. `failed` is terminal-intervention.</summary>
 public static class WorkflowStatuses
 {
     public const string WaitingForHuman = "waiting_for_human";
@@ -10,8 +10,8 @@ public static class WorkflowStatuses
 }
 
 /// <summary>
-/// One long-lived orchestration lifecycle per root WorkItem in V1 — `work_item_id` is unique (02 §9);
-/// a reopened root never resurrects a `closed` Workflow (decision 73). The Orchestrator owns every transition (03 §1).
+/// One long-lived orchestration lifecycle per root WorkItem — `work_item_id` is unique;
+/// a reopened root never resurrects a `closed` Workflow. The Orchestrator owns every transition.
 /// </summary>
 public class Workflow
 {
@@ -25,6 +25,6 @@ public class Workflow
     public DateTime? ClosedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public string? FailureReason { get; set; }
-    /// <summary>Set when the automatic initial review Task is created (dedupe; ticket 12 writes it).</summary>
+    /// <summary>Set when the automatic initial review Task is created (dedupe).</summary>
     public DateTime? InitialReviewCreatedAt { get; set; }
 }

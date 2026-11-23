@@ -2,7 +2,7 @@
 # Planner agent entry (poc pi-worker-entry shape): optionally clone GIT_CLONE_REPO into /workspace with
 # the mounted token, scrub the token from the remote, then exec the Runtime Bridge (the supervisor).
 # The repo NAME arrives from the Runtime API at /start (GIT_CLONE_REPO — not a secret); the token lives
-# ONLY in the host-managed file mounted read-only at /run/secrets/<name> (decision 54, GIT_CLONE_TOKEN_
+# ONLY in the host-managed file mounted read-only at /run/secrets/<name> (GIT_CLONE_TOKEN_
 # FILE is a baked path pointer) — never in env vars, git config, or image layers.
 set -eu
 
@@ -12,7 +12,7 @@ if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
 fi
 
 if [ -n "${GIT_CLONE_REPO:-}" ]; then
-  # Workspace persistence is per-Task (retry reuse, decision 12/72): clone only into an EMPTY workspace.
+  # Workspace persistence is per-Task (retry reuse): clone only into an EMPTY workspace.
   if [ -z "$(ls -A /workspace 2>/dev/null)" ]; then
     : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to run without the repository clone}"
     GIT_TERMINAL_PROMPT=0 git clone \

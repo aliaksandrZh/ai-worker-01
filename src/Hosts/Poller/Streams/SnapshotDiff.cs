@@ -5,18 +5,18 @@ using PiAgent.Infrastructure.Persistence;
 
 namespace PiAgent.Poller.Streams;
 
-/// <summary>One detected change: a decision-78 normalized event with its JSONB payload and the
-/// deterministic dedupe fingerprint (02 §7). Source ∈ rest_resource_sync | snapshot_diff for task 04.</summary>
+/// <summary>One detected change: a normalized event with its JSONB payload and the
+/// deterministic dedupe fingerprint. Source ∈ rest_resource_sync | snapshot_diff.</summary>
 public sealed record Detection(string EventType, string Source, string DedupeKey, object Payload, DateTime OccurredAt);
 
 /// <summary>
-/// Pure detection engine over WorkItem snapshots (plan task-4 detection table). Emits per decision 78:
-/// created / updated (change map, body as a flag only) / closed (`close_reason = merged` for merged PRs,
-/// decision 40) / pull_request_synchronized on head drift / review_requested &amp; review_request_removed
-/// as requested_reviewer set diffs (source snapshot_diff, decision 31). Fingerprint scheme:
+/// Pure detection engine over WorkItem snapshots (the detection table). Emits:
+/// created / updated (change map, body as a flag only) / closed (`close_reason = merged` for merged PRs) /
+/// pull_request_synchronized on head drift / review_requested &amp; review_request_removed
+/// as requested_reviewer set diffs (source snapshot_diff). Fingerprint scheme:
 /// `wi:{node}:upd:{unix}:{sha8(pairs)}` — identical re-detection yields the identical key (overlap and
 /// restart dedupe), an edit within the same second yields a distinct one. First observation pins the
-/// head (drift alone emits synchronization; decision 17 pins on Task creation downstream).
+/// head (drift alone emits synchronization; pinning happens on Task creation downstream).
 /// </summary>
 public static class SnapshotDiff
 {
@@ -43,7 +43,7 @@ public static class SnapshotDiff
         if (after.State == "closed" && before.State != "closed")
         {
             detections.Add(Closed(after, node));
-            // the closed event owns closure artifacts (decision 40); the update keeps other fields
+            // the closed event owns closure artifacts; the update keeps other fields
             changed.Remove("closed_at");
             changed.Remove("merged_at");
             changed.Remove("state");
@@ -94,7 +94,7 @@ public static class SnapshotDiff
     }
 
     /// <summary>Synced-field change map; `body` becomes the `body_changed` flag only (never content copied).
-    /// `state` appears only for reopen (open→closed keeps its dedicated closed event; decision 40).</summary>
+    /// `state` appears only for reopen (open→closed keeps its dedicated closed event).</summary>
     private static (Dictionary<string, string> Changed, bool BodyChanged) FieldChanges(
         WorkItemSnapshot before, WorkItemSnapshot after)
     {
@@ -128,7 +128,7 @@ public static class SnapshotDiff
             closeAt);
     }
 
-    /// <summary>Decision 40: a merged PR's close carries `close_reason = merged` via merged_at.</summary>
+    /// <summary>A merged PR's close carries `close_reason = merged` via merged_at.</summary>
     private static string? CloseReason(WorkItemSnapshot after) => after.MergedAt is null ? null : "merged";
 
     private static bool ListEqual(IReadOnlyList<string>? left, IReadOnlyList<string>? right) =>
@@ -140,7 +140,7 @@ public static class SnapshotDiff
 
     private static long Unix(DateTime value) => new DateTimeOffset(value, TimeSpan.Zero).ToUnixTimeSeconds();
 
-    /// <summary>First 8 hex chars of the SHA-256 — the fingerprint suffix (02 §7 deterministic fingerprint).</summary>
+    /// <summary>First 8 hex chars of the SHA-256 — the deterministic fingerprint suffix.</summary>
     private static string Sha8(string value)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));

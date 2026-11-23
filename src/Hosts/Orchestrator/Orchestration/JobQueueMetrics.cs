@@ -27,7 +27,7 @@ public sealed class JobQueueMetrics
     public void RecordClaim() => Interlocked.Increment(ref _jobsClaimed);
     public void RecordLeaseExpiration() => Interlocked.Increment(ref _leaseExpirations);
     public void RecordClaimCancellation() => Interlocked.Increment(ref _claimCancellations);
-    /// <summary>Ticket 11: a claim died at context assembly — mandatory context beyond the budgets.</summary>
+    /// <summary>A claim died at context assembly — mandatory context beyond the budgets.</summary>
     public void RecordClaimContextTooLarge() => Interlocked.Increment(ref _claimContextTooLarge);
 
     public void UpdateGauges(long pendingJobs, double oldestPendingAgeSeconds, double claimWaitSeconds, long activeRuns)

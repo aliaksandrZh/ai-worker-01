@@ -1,6 +1,6 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Submitted PR review states as the REST API reports them (02 §6): pending reviews are
+/// <summary>Submitted PR review states as the REST API reports them: pending reviews are
 /// visible only to their author; `dismissed` arrives on dismissal of a submitted review.</summary>
 public static class GitHubReviewStates
 {
@@ -11,7 +11,7 @@ public static class GitHubReviewStates
     public const string Dismissed = "dismissed";
 }
 
-/// <summary>A submitted PR review, distinct from inline review comments (02 §6) — those are
+/// <summary>A submitted PR review, distinct from inline review comments — those are
 /// GitHubComment rows with `kind = review_comment` linked by `github_review_id`.</summary>
 public class GitHubReview
 {

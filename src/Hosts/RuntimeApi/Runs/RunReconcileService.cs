@@ -7,11 +7,11 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// Shared reconciliation facts for the ticket-13 timeout/death reconcilers: effective execution limits
-/// (§16: a profile version may lower `startup_timeout`/`idle_timeout`/`max_run_duration` but never
+/// Shared reconciliation facts for the timeout/death reconcilers: effective execution limits
+/// (a profile version may lower `startup_timeout`/`idle_timeout`/`max_run_duration` but never
 /// bypass the system constraints — the effective value is capped at the system knob) and the
 /// reconciled-terminal write (the identical terminal facts a delivery would record, plus the Docker
-/// stop). The stop is attempted first and confirmed: a Docker outage (decision 22) preserves the
+/// stop). The stop is attempted first and confirmed: a Docker outage preserves the
 /// desired state and the cycle simply retries on the next tick without corrupting anything.
 /// </summary>
 public static class RunReconcileService
@@ -41,12 +41,12 @@ public static class RunReconcileService
         {
             var stopped = await provisioner.StopAsync(containerName, cancellationToken);
             if (!stopped)
-                return false; // decision 22 posture: desired state preserved, nothing corrupted, retried later
+                return false; // desired state preserved, nothing corrupted, retried later
             container.ObservedState = ContainerObservedStates.Stopped;
             container.LastStoppedAt = DateTime.UtcNow;
         }
 
-        // conditional terminal claim FIRST (04 §8: exactly one terminal writer): run from a non-terminal
+        // conditional terminal claim FIRST (exactly one terminal writer): run from a non-terminal
         // status, so a callback delivery racing this reconcile is the survivor and this becomes a no-op —
         // the terminal facts below are only applied by the actual winner
         var now = DateTime.UtcNow;

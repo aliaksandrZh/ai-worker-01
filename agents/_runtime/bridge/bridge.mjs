@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * Runtime Bridge (04 §4, decisions 33/58–61) — the supervisor INSIDE the agent container. Not a Pi
- * extension: it launches the agent CLI in `--mode rpc` (real Pi baked via PI_AGENT_BIN/PI_AGENT_ARGS
- * per decision 56; the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
+ * Runtime Bridge — the supervisor INSIDE the agent container. Not a Pi
+ * extension: it launches the agent CLI in `--mode rpc` (real Pi baked via PI_AGENT_BIN/PI_AGENT_ARGS;
+ * the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
  * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
  * callback to the durable per-Run spool BEFORE sending, retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
  * validates the run's `result.json` manifest after `agent_settled` (in place, deriving
  * branch/commitSha via Git, correlating requiredPublications with error-free completed tool
- * executions — decision 42/59) and delivers the terminal `completed` (or `failed`) callback — the
+ * executions) and delivers the terminal `completed` (or `failed`) callback — the
  * delivery cycle ends only on the Runtime API's persistence acknowledgement. It also captures Pi
- * stdout/stderr plus its own diagnostics into the per-Run log trio (decision 43).
+ * stdout/stderr plus its own diagnostics into the per-Run log trio.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,14 +29,14 @@ const baseUrl = (env.PI_CALLBACK_BASE_URL || "http://runtime-api:8080").replace(
 const tokenFile = env.PI_CALLBACK_TOKEN_FILE || fail("callback token file (PI_CALLBACK_TOKEN_FILE) is required");
 const workspace = env.PI_WORKSPACE || "/workspace";
 const sessionDir = env.PI_SESSION_DIR || "/session";
-// decision 56: the image is the sole source of the runtime configuration — the baked env picks the
-// agent binary and its fixed flags; the Bridge appends only the per-Run session flags (decision 57).
+// the image is the sole source of the runtime configuration — the baked env picks the
+// agent binary and its fixed flags; the Bridge appends only the per-Run session flags.
 // The agent process runs with cwd = the workspace (that cwd is pi's project scope). The stub default
 // therefore resolves its agent module ABSOLUTELY (a relative arg would miss from /workspace).
 const agentBin = env.PI_AGENT_BIN || "node";
 const defaultStubAgent = fileURLToPath(new URL("../stub-agent/pi-stub.mjs", import.meta.url));
 const agentArgs = (env.PI_AGENT_ARGS || defaultStubAgent).split(" ").filter(Boolean);
-// decision 42 (task 12): mandated publication kinds that MUST be confirmed before `completed`
+// mandated publication kinds that MUST be confirmed before `completed`
 // (comma-separated; empty = no mandate — every listed publication is still correlated, the stub).
 const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
   .split(",").map((kind) => kind.trim()).filter(Boolean);
@@ -86,7 +86,7 @@ async function post(route, body) {
     return {
       ok: false,
       status: response.status,
-      // network/429/5xx/408 are retried with the same eventId (decision 60)
+      // network/429/5xx/408 are retried with the same eventId
       retryable: response.status === 429 || response.status === 408 || response.status >= 500,
       detail,
     };
@@ -102,13 +102,13 @@ const spool = openSpool(spoolDir, {
 
 /** Non-retryable statuses back off too, then park — but a parked entry is never dropped: a bridge
  * or container restart redelivers it (the runtime-api restart cases), which is exactly the spool
- * redelivery contract (decision 60). */
+ * redelivery contract. */
 const backoffs = [1, 2, 4, 8, 16, 30];
 
 async function deliverNext() {
   const entry = await spool.next();
   if (!entry) return null;
-  // terminal routes (incl. the ticket-14 `cancelled`): never dropped
+  // terminal routes (incl. the `cancelled`): never dropped
   const unbounded = entry.route === "completed" || entry.route === "failed" || entry.route === "cancelled";
   for (let attempt = 0; ; attempt++) {
     const result = await post(entry.route, entry.body);
@@ -172,7 +172,7 @@ async function senderLoop() {
   }
 }
 
-/** Bridge pull channel (04 §3/§4): the frozen RunContextSnapshot, retried while the API is down. */
+/** Bridge pull channel: the frozen RunContextSnapshot, retried while the API is down. */
 async function pullInput() {
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
@@ -192,8 +192,8 @@ async function pullInput() {
 }
 
 // ---- run state shared across the launch/lifecycle/terminal stages ----
-const observedCompletedToolCalls = new Set(); // error-free completed tool ids (decision 59)
-let sessionFilePath = null; // decision 57: the actual session path, discovered via `get_state`
+const observedCompletedToolCalls = new Set(); // error-free completed tool ids
+let sessionFilePath = null; // the actual session path, discovered via `get_state`
 let settled = false;
 
 /** Terminal failure path: spool the `failed` callback, stop the agent, wait for the ack, exit. */
@@ -238,7 +238,7 @@ async function main() {
       const line = stdoutBuffer.slice(0, newline).trim();
       stdoutBuffer = stdoutBuffer.slice(newline + 1);
       if (line.length === 0) continue;
-      logs.write("stdout.log", line + "\n"); // decision 43: trio capture
+      logs.write("stdout.log", line + "\n"); // trio capture
       let record;
       try {
         record = JSON.parse(line);
@@ -255,17 +255,17 @@ async function main() {
   agent.stderr.setEncoding("utf8");
   agent.stderr.on("data", (chunk) => logs.write("stderr.log", chunk));
 
-  // heartbeat cadence → coalesced single-slot spool entry (decision 60); heartbeat proves liveness
-  // only and never counts as progress (decision 58). Declared before the launch handshake so the
+  // heartbeat cadence → coalesced single-slot spool entry; heartbeat proves liveness
+  // only and never counts as progress. Declared before the launch handshake so the
   // stop path (which may fire before/while the handshake runs) can clear them from anywhere.
   const beats = spool.coalescingHeartbeats(`hb-${runId}-${Date.now()}`);
   const heartbeatTimer = setInterval(() => {
     if (!settled) beats({ occurredAt: new Date().toISOString() });
   }, heartbeatSeconds * 1000);
-  // event cadence → flush aggregated assistant text as ONE assistant_output RunEvent (decision 58)
+  // event cadence → flush aggregated assistant text as ONE assistant_output RunEvent
   const flushTimer = setInterval(() => mapper.flushAggregated(), eventCadenceSeconds * 1000);
 
-  // ---- graceful stop control (04 §4 step sequence, decision 61, ticket 14) ----
+  // ---- graceful stop control ----
   // The signal lives in PostgreSQL (`run.stop_requested_at`); this Bridge pulls it every 2 s once the
   // agent is spawned. Once observed, the stop path owns the terminal: every other lifecycle branch
   // below defers to it and must never post another terminal around it.
@@ -366,8 +366,8 @@ async function main() {
   const exitCode = await new Promise((resolve) => {
     let grace = null;
     // the 30s exit grace arms only AFTER agent_settled — an agent that has not settled keeps running
-    // with its heartbeat (its stop is ticket 14's control path; a silent/never-settling agent is
-    // ticket 13's reconciliation, never the Bridge's own kill)
+    // with its heartbeat (its stop is the stop control path; a silent/never-settling agent is
+    // the Runtime API's reconciliation, never the Bridge's own kill)
     const settleWatch = setInterval(() => {
       if (!settled || grace) return;
       clearInterval(settleWatch);
@@ -396,7 +396,7 @@ async function main() {
   if (stopSignal) return await finishCancelled();
 
   if (exitCode !== 0 || !settled) {
-    // on a crash the Bridge reports failure with the agent's exit code (decision 33)
+    // on a crash the Bridge reports failure with the agent's exit code
     return await spoolFailure("runtime_failure",
       `agent process exited (code ${exitCode}) without settling — reported by the Runtime Bridge`);
   }

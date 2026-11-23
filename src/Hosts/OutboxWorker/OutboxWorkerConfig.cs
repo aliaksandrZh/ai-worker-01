@@ -3,8 +3,8 @@ using PiAgent.Platform.Config;
 namespace PiAgent.OutboxWorker;
 
 /// <summary>
-/// The Outbox Worker reads exactly one knob directly from the configuration plane (plan ruling 5):
-/// `outbox_retry_window` in deploy/config/system.yaml (§16, owner System, default 24 h). Missing key →
+/// The Outbox Worker reads exactly one knob directly from the configuration plane:
+/// `outbox_retry_window` in deploy/config/system.yaml (default 24 h). Missing key →
 /// default; missing file or a malformed/non-positive value → startup failure. Duration strings parse
 /// via the shared SystemYaml mechanics (formerly a per-host local copy of the duration regex).
 /// </summary>

@@ -9,8 +9,8 @@ using System.Text.Json.Serialization;
 namespace PiAgent.BuildWorker.Builds;
 
 /// <summary>
-/// Materializes the pinned build context from the dispatch payload's config_snapshot (04 §6). The
-/// snapshot (AgentProfileVersion.config_snapshot, built by the Config Loader per decision 54) contains
+/// Materializes the pinned build context from the dispatch payload's config_snapshot. The
+/// snapshot (AgentProfileVersion.config_snapshot, built by the Config Loader) contains
 /// the profile's file list with per-file sha256 AND the file contents — the version is rebuildable
 /// from the dispatch alone, so the Worker never reads a possibly-moved Git tree: the built image is
 /// guaranteed to match the pinned version even if `config/agents/<profile>` changed in between.

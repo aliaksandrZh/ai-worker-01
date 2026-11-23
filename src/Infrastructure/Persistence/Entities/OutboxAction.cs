@@ -1,8 +1,8 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>OutboxAction delivery states (03 §8). `failed` is reserved — V1 never produces it
+/// <summary>OutboxAction delivery states. `failed` is reserved — never produced
 /// (transient failures reuse `pending` with a future `available_at`; terminal failures go to
-/// `dead_letter`, decision 67).</summary>
+/// `dead_letter`).</summary>
 public static class OutboxStatuses
 {
     public const string Pending = "pending";
@@ -13,16 +13,16 @@ public static class OutboxStatuses
     public const string Cancelled = "cancelled";
 }
 
-/// <summary>Outbox delivers orchestration-owned comments only (02 §20; agent GitHub writes go through GitHub MCP).</summary>
+/// <summary>Outbox delivers orchestration-owned comments only (agent GitHub writes go through GitHub MCP).</summary>
 public static class OutboxActionTypes
 {
     public const string Comment = "comment";
 }
 
 /// <summary>
-/// Reliable external write queue for orchestration-owned comments (02 §20). WorkItemId/TaskId are
-/// plain Guids until tickets 04/07 add the orchestration tables and their FKs. Lease columns
-/// (LockedBy/LockedUntil) implement decision 67's DB lease — one dispatcher owns one action at a time.
+/// Reliable external write queue for orchestration-owned comments. WorkItemId/TaskId are
+/// plain Guids (the referencing rows live in other services' tables). Lease columns
+/// (LockedBy/LockedUntil) implement a DB lease — one dispatcher owns one action at a time.
 /// </summary>
 public class OutboxAction
 {
@@ -36,7 +36,7 @@ public class OutboxAction
 
     public string ActionType { get; set; } = OutboxActionTypes.Comment;
 
-    /// <summary>jsonb. V1 contract: { "issue_number": &lt;long&gt;, "text": &lt;string&gt; }.</summary>
+    /// <summary>jsonb. Contract: { "issue_number": &lt;long&gt;, "text": &lt;string&gt; }.</summary>
     public string Payload { get; set; } = null!;
 
     public string Status { get; set; } = OutboxStatuses.Pending;
@@ -49,10 +49,10 @@ public class OutboxAction
 
     public string? LastError { get; set; }
 
-    /// <summary>Unique (02 §23). Carried inside the invisible HTML-comment marker of the delivered comment.</summary>
+    /// <summary>Unique. Carried inside the invisible HTML-comment marker of the delivered comment.</summary>
     public string IdempotencyKey { get; set; } = null!;
 
-    /// <summary>Decision-67 DB lease: dispatcher instance currently owning the action.</summary>
+    /// <summary>DB lease: dispatcher instance currently owning the action.</summary>
     public Guid? LockedBy { get; set; }
 
     public DateTime? LockedUntil { get; set; }

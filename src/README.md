@@ -1,17 +1,16 @@
 # pi-agent control plane
 
-The real implementation of `docs/pi-agent-architecture/` (task `01-stack-and-skeleton` and onward).
+The real implementation of the pi-agent architecture.
 The PoC lives in `../poc/` (`api/`, `github-polling/`, `pi/`, `komodo/`) as frozen reference
 material; everything in this directory is the new system. Repo overview + main flow: root `../README.md`.
 
-## Stack (spec decision 1, finalized)
+## Stack (finalized)
 
-> **Amendment to spec decision 1 (2026-11-20).** The architecture is no longer stack-neutral:
+> **Amendment (2026-11-20).** The architecture is no longer stack-neutral:
 > **.NET 10** (ASP.NET Core minimal APIs) · **EF Core 10 + Npgsql** (DB access) ·
 > **EF Core Migrations** (versioned schema) · **xUnit** (tests).
-> Recorded here because `docs/pi-agent-architecture/` is frozen accepted-spec material.
-> Two deployment notes travel with it: V1 is single-host, so services speak plain HTTP on the
-> private compose network (decision 65's TLS-across-hosts applies when hosts split); CI runs on
+> Two deployment notes travel with it: the stack is single-host, so services speak plain HTTP on the
+> private compose network (TLS-across-hosts applies when hosts split); CI runs on
 > GitHub Actions for every pull request (`.github/workflows/ci.yml`): restore, build, and
 > `dotnet test` on the full solution — the same suites you run locally with `dotnet test`
 > (Hosts.Tests spins a Testcontainers postgres; runners have Docker preinstalled).
@@ -20,10 +19,10 @@ material; everything in this directory is the new system. Repo overview + main f
 
 | path | what |
 |---|---|
-| `Platform/` | cross-service plumbing: §14 JSON logging + correlation, `/healthz` `/readyz` `/metrics`, worker heartbeat loop, service-token auth, Docker-socket readiness |
+| `Platform/` | cross-service plumbing: JSON logging + correlation, `/healthz` `/readyz` `/metrics`, worker heartbeat loop, service-token auth, Docker-socket readiness |
 | `Infrastructure/` | EF Core AppDbContext, `Persistence/Migrations/`, `AddPiData` (postgres readiness) |
 | `Hosts/` | one executable per service: `RuntimeApi`, `Orchestrator`, `Poller`, `OutboxWorker`, `HostMonitor`, `BuildWorker` |
-| `Migrator/` | one-shot EF migration host (§13's `migrations` step) |
+| `Migrator/` | one-shot EF migration host (`migrations` step) |
 | `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` (Hosts.Tests spins a Testcontainers postgres — Docker required for `dotnet test`) |
 | `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) — the only build artifact left in `src/` |
 
@@ -31,79 +30,77 @@ Outside `src/` (repo root):
 
 | path | what |
 |---|---|
-|  `deploy/config/` | configuration-plane yamls (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml` — mounted read-only at the config root |
+|  `deploy/config/` | configuration-plane yamls: `system.yaml` (bot login + operational knobs), `repositories.yaml`, `routing.yaml` — mounted read-only at the config root |
 | `agents/` | all agent assets: profile definitions (`agents/<name>/profile.yaml` + Dockerfile + entry…) and the shared runtime implementation `agents/_runtime/bridge/` — the Runtime Bridge modules every profile bakes. Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only INSIDE the orchestrator's config root (`/etc/pi-agent/config/agents/`) so the pinned tree shape holds |
-| `deploy/` | `compose.yaml` (the §13 control-plane stack, 13 services, private network `pi-agent-net`), `.env.example`, scheduled `pg_dump` + config-plane Git snapshot scripts (`backup/`), centralized logging config (`logging/`: loki/alloy/grafana) |
+| `deploy/` | `compose.yaml` (the control-plane stack, 13 services, private network `pi-agent-net`), `.env.example`, scheduled `pg_dump` + config-plane Git snapshot scripts (`backup/`), centralized logging config (`logging/`: loki/alloy/grafana) |
 ## Quick start
 
 ```sh
 task stack                # postgres → migrator → the rest; --wait gates a green, ordered start
                           # after any src/ change: task stack-rebuild first (rebuilds images), then task stack
 curl localhost:8080/healthz && curl localhost:8080/readyz && curl localhost:8080/metrics
-task stack-logs           # each service logs §14 JSON lines
+task stack-logs           # each service logs JSON lines
 open http://localhost:3000 # the same logs in one place: "Pi Agent Logs" dashboard (admin / GRAFANA_ADMIN_PASSWORD)
 task stack-down
 ```
 
 `task stack` copies `deploy/.env.example` → `deploy/.env` on first run; the runtime-api provisions agent
-containers itself over the Docker socket (decision 82 — Komodo was dropped; see
-`../docs/komodo-vs-manual-docker.md`), so no external container orchestrator is involved.
+containers itself over the Docker socket (Komodo was dropped), so no external container orchestrator is involved.
 
-## Configuration plane (ticket 02)
+## Configuration plane
 
 YAML in `deploy/config/` is the desired configuration; PostgreSQL holds the runtime state. The
 Config Loader — a startup component of the Orchestrator — validates everything and syncs the
-DB in one transaction at each startup; no hot reload, no admin API (decisions 55–56, 81).
+DB in one transaction at each startup; no hot reload, no admin API.
 
-- `system.yaml` — `github.bot_login` + every §16 operational knob (unit strings: `60s`, `50MiB`).
-- `repositories.yaml` — registered repositories; allowlist semantics per decision 49 (absent =
+- `system.yaml` — `github.bot_login` + every operational knob (unit strings: `60s`, `50MiB`).
+- `repositories.yaml` — registered repositories; allowlist semantics (absent =
   enabled + seeded with the owner; explicit `[]` = filtering disabled), permitted commands/types,
   authorization policy.
 - `routing.yaml` — global routing rules (`repository_id = NULL`) with per-repo overrides; the
-  referenced version is pinned on the Task at creation (02 §12a).
+  referenced version is pinned on the Task at creation.
 - `agents/<name>/profile.yaml` — profile definition; each configuration change creates a
   new immutable `AgentProfileVersion` (`draft`): normalized YAML + per-file sha256 + file contents
-  + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata. Builds/dispatches are tickets 07/10.
+  + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata.
 
 Before `task stack`: create the two secrets files and align identities
 
 ```sh
 mkdir -p secrets && printf '<your-pat>' > secrets/github-sync-pat.txt   # gitignored
 #   → the PAT's login (GET /user) must equal github.bot_login in deploy/config/system.yaml
-printf '<your-write-pat>' > secrets/github-write-pat.txt                    # task 03: outbox comments; task 12+: agent GitHub MCP (planner publication) + workspace clone
+printf '<your-write-pat>' > secrets/github-write-pat.txt                    # outbox comments; agent GitHub MCP (planner publication) + workspace clone
 ```
 
 Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown
-repository (404), schema-invalid YAML or a §16 constraint violation all abort Orchestrator
+repository (404), schema-invalid YAML or a constraint violation all abort Orchestrator
 startup with a diagnosable log line; the compose `--wait` gate shows it red.
 
-## Ports and exposure (decision-65 contour from day one)
+## Ports and exposure
 
 | exposure | port | why |
 |---|---|---|
 | `runtime-api` | published (`RUNTIME_API_HOST_PORT`, default 8080) | control-plane port on the host — health/readiness/metrics |
-| orchestrator | private network only (host access via `docker compose exec orchestrator curl …`) | decision 65 — hosts the Orchestration API + internal commands hook (task 08) |
-| postgres, all workers, migrator | private network only | decision 65 — no external exposure |
+| orchestrator | private network only (host access via `docker compose exec orchestrator curl …`) | hosts the Orchestration API + internal commands hook |
+| postgres, all workers, migrator | private network only | no external exposure |
 
 Host Monitor and Build Worker never touch PostgreSQL (day-one enforcement:
 `tests/Architecture.Tests/ProjectBoundaryTests.cs`); their dependency is the Docker socket
 (read-only) and, for the Host Monitor, the managed storage root (`STORAGE_ROOT`, mounted at
-`/var/lib/pi-agent/workflows` — plain host directories per decision 52).
+`/var/lib/pi-agent/workflows` — plain host directories).
 
-## Metrics baseline (§14 — on every service's `/metrics`)
+## Metrics baseline (on every service's `/metrics`)
 
 Workers additionally expose `running`, `heartbeatUtc`, `lastSuccessfulCycleUtc`.
-Placeholder `null` keys become real as their features land: poller → task 04, queue → task 07-08,
-runs/reconciliation → task 13, build flows → task 13+. Live now: `outboxPending/outboxFailed/
-outboxDeadLetter` (outbox-worker, task 03), `dbSizeBytes` (runtime-api), `storageFreeBytes`
+Live now: `outboxPending/outboxFailed/
+outboxDeadLetter` (outbox-worker), `dbSizeBytes` (runtime-api), `storageFreeBytes`
 (host-monitor), the poller set `pollerLagSeconds/pollerLastSuccessUtc/
-pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining` (task 04), worker
-heartbeats, and the task-10 build set — orchestrator: `buildJobsPending/buildJobsPolling/
+pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining`, worker
+heartbeats, and the build set — orchestrator: `buildJobsPending/buildJobsPolling/
 oldestPendingBuildAgeSeconds/buildsDispatchedTotal/buildsCompletedTotal/buildsFailedTotal/
 buildTransientErrorsTotal`; build-worker: `buildsActive/buildsSucceededTotal/buildsFailedTotal/
 buildExecutionRetriesTotal`.
 
-## Profile image builds (ticket 10, decision 81)
+## Profile image builds
 
 Every `AgentProfileVersion` is built asynchronously by the Build Worker: version `draft` →
 durable `build_job` row (buildId persisted BEFORE dispatch) → `POST /internal/builds` → `202` →
@@ -114,36 +111,30 @@ result → version `ready` (or `build_failed` on a real build failure). The work
 local JSON state under `BUILD_STATE_ROOT` (default `../runtime/builds`): results stay retrievable after
 worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
 with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
-Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile` (decision 56)
+Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile`
 are profile-Dockerfile responsibilities (see `agents/planner/Dockerfile`). The shared
 Runtime Bridge implementation is a single copy at `agents/_runtime/bridge/` (never per-profile);
 the Config Loader merges it into every profile's pinned snapshot under `runtime-bridge/` so the
 profile Dockerfiles keep `COPY runtime-bridge/` unchanged.
 
-## Context assembling (ticket 11, decision 63)
+## Context assembling
 
 The claim worker runs the Context Assembler (`Hosts/Orchestrator/Context/`) BEFORE preparing the
 Run: package = task-type instructions + pinned profile identity, the user command (its full
-`source_body_snapshot` incl. trailing text, decision 79), the work item, every conversation
+`source_body_snapshot` incl. trailing text), the work item, every conversation
 comment chronologically (tombstones recorded as exclusions), `relatedWorkItems` from
 WorkItemLink rows, prior Workflow artifacts (the `task_artifact_input` approved plan is mandatory
 and never pruned; `log_reference` artifacts travel by reference), repository data, coder
 agent-branch facts, and — for reviews — the pinned head/base SHAs plus submitted reviews and
-grouped inline threads. Owner simplification: V1 collects everything and applies only
+grouped inline threads. Owner simplification: the assembler collects everything and applies only
 budget-driven pruning, newest-first kept, with every exclusion recorded in the snapshot. Limits:
-`ContextTokenEstimator` (bytes/4, OBS-6) against the profile's `max_context_tokens`, plus 256 KiB
+`ContextTokenEstimator` (bytes/4) against the profile's `max_context_tokens`, plus 256 KiB
 per artifact / 512 KiB artifacts / 512 KiB serialized input. Mandatory context that cannot fit →
 Task fails `context_too_large` with NO Run rows (metric `claimContextTooLargeTotal`); the frozen
-snapshot is byte-exact (`content` moved jsonb → text, OBS-8), hashed, immutable, and served to
+snapshot is byte-exact (`content` moved jsonb → text), hashed, immutable, and served to
 the Bridge via `GET /internal/runtime/runs/{runId}/input`.
 
-## Observations — known non-critical debt
-
-Four deferred items from the task-01 review (unauthenticated dev metrics port, unpinned
-`alpine/git`, `pg_dump` stderr hidden, no Dockerfile restore-cache layering) are recorded with
-revisit triggers and fix sketches in [`docs/observations.md`](../docs/observations.md).
-
-## Backups (decisions 52/76)
+## Backups
 
 `backups` service: hourly `pg_dump → /backups/<ts>.sql.gz` (keep 24) —
 `BACKUP_INTERVAL_MINUTES` tunes it. `config-snapshot`: clones `CONFIG_SNAPSHOT_REPO_URL`

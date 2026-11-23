@@ -19,10 +19,10 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Api;
 
 /// <summary>
-/// Task 08: the Orchestration API read surface served by the Orchestrator (04 §2 shapes, 04 §7 error
-/// shape) under the decision-65 service token, plus `POST /internal/commands` — a synthetic comment
+/// The Orchestration API read surface served by the Orchestrator (shape + error
+/// shape) under the service token, plus `POST /internal/commands` — a synthetic comment
 /// ingested through the exact poller pipeline (parse → policy → allowlist, permission lookup skipped
-/// per owner ruling → admission → control reply/Outbox), idempotent by commentId.
+/// → admission → control reply/Outbox), idempotent by commentId.
 /// </summary>
 public class OrchestrationApiTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -51,7 +51,7 @@ public class OrchestrationApiTests(PostgresFixture postgres) : IClassFixture<Pos
         builder.Services.AddSingleton(new CommandMetrics());
         builder.Services.AddSingleton(new CollaboratorPermissionGate(
             new HttpClient(), "unused-pat")); // the hook never performs GitHub permission lookups
-        // ticket 14: /stop is a control command that signals the Runtime API — the test app registers a
+        // /stop is a control command that signals the Runtime API — the test app registers a
         // stub-backed client so the minimal-API binding matches the production registration
         var runtimeStub = new PiAgent.Hosts.Tests.Runtime.DirectHttpStub(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)

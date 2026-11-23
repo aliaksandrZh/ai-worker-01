@@ -6,7 +6,7 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// Insert-dedupe event writer (02 §7: dedupe_key unique per (source, dedupe_key)): batch keys are checked
+/// Insert-dedupe event writer (dedupe_key unique per (source, dedupe_key)): batch keys are checked
 /// with one query inside the caller's transaction, then new rows are added with `processing_status =
 /// pending`. In-batch duplicates are guarded too. Single-writer poller — no upsert race handling needed.
 /// </summary>

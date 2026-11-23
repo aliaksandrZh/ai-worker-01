@@ -103,7 +103,7 @@ public class ReviewsSyncTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
-    public async Task NotModified_SkipsPrWithoutConsumingAnything() // decision 53: 304 costs nothing
+    public async Task NotModified_SkipsPrWithoutConsumingAnything() // 304 costs nothing
     {
         var (db, repo, _, pr9) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();

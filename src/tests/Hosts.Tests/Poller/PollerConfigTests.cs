@@ -4,8 +4,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Poller;
 
 /// <summary>
-/// Poller startup knobs from config/system.yaml (§16, OutboxWorkerConfig precedent): defaults per
-/// decision 53 (60s / 5m / 100), parsing, and startup failures — missing file, malformed duration,
+/// Poller startup knobs from config/system.yaml (OutboxWorkerConfig precedent): defaults
+/// (60s / 5m / 100), parsing, and startup failures — missing file, malformed duration,
 /// non-positive per_page.
 /// </summary>
 public class PollerConfigTests

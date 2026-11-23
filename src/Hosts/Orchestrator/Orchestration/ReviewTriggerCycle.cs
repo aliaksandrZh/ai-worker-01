@@ -7,7 +7,7 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// System-owned review triggers (ticket 19, 06 §11, decisions 17/31/74). Consumes three Poller-written
+/// System-owned review triggers. Consumes three Poller-written
 /// event kinds for Pull Requests and never reads GitHub directly:
 /// - `review_requested` (bot is the requested reviewer) — starts the initial review on a ready PR; on a
 ///   draft PR the request is only recorded (the draft→ready transition decides later);
@@ -35,7 +35,7 @@ public sealed class ReviewTriggerCycle(
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
         if (!configurationState.Synchronized || string.IsNullOrEmpty(configurationState.BotLogin))
-            return; // cold-start gate (01 §13)
+            return; // cold-start gate
         var botLogin = configurationState.BotLogin;
 
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -83,7 +83,7 @@ public sealed class ReviewTriggerCycle(
                 if (!IsBotPayload(githubEvent, botLogin))
                     return;
                 if (workItem.Draft == true)
-                    return; // recorded only: the draft→ready transition decides (decision 74)
+                    return; // recorded only: the draft→ready transition decides
                 await TryCreateInitialReviewAsync(db, githubEvent, workItem, botLogin, cancellationToken);
                 return;
 
@@ -101,7 +101,7 @@ public sealed class ReviewTriggerCycle(
         }
     }
 
-    /// <summary>Creates the automatic initial review when the three conditions hold (06 §11, decision 74).
+    /// <summary>Creates the automatic initial review when the three conditions hold.
     /// Every failing condition is a silent no-op — the event is consumed, nothing is created.</summary>
     private static async Task TryCreateInitialReviewAsync(
         AppDbContext db, GitHubEvent githubEvent, WorkItem workItem, string botLogin, CancellationToken cancellationToken)
@@ -133,14 +133,14 @@ public sealed class ReviewTriggerCycle(
         if (workflow.Status is WorkflowStatuses.Failed or WorkflowStatuses.Closed)
             return;
 
-        // Condition 3: no explicit `/review` already ran for this PR (decision 74 suppression).
+        // Condition 3: no explicit `/review` already ran for this PR.
         var explicitReviewExists = await db.OrchestrationTasks.AnyAsync(
             t => t.WorkflowId == workflow.Id && t.Type == OrchestrationTaskTypes.Review && t.TriggerCommandId != null,
             cancellationToken);
         if (explicitReviewExists)
             return;
 
-        // The one-unfinished-Task-per-Workflow invariant (decision 79) — defer if another Task is in flight.
+        // The one-unfinished-Task-per-Workflow invariant — defer if another Task is in flight.
         if (await db.OrchestrationTasks.AnyAsync(
                 t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
             return;
@@ -191,7 +191,7 @@ public sealed class ReviewTriggerCycle(
     }
 
     /// <summary>Withdrawn request: cancel only a QUEUED automatic review (a running review is never
-    /// interrupted, decision 31). Only the Task's `queued` status is touched here; the Job and the notice are
+    /// interrupted). Only the Task's `queued` status is touched here; the Job and the notice are
     /// the claim-time path's job (`JobQueueWorker`, reason `review_request_removed_before_execution`), so the
     /// Task/Job state machine has one writer. `TriggerGithubEventId` stays set, so a renewed request never
     /// starts a second automatic review (the Workflow guard is `InitialReviewCreatedAt`, never cleared).</summary>

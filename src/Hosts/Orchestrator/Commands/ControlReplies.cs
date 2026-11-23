@@ -5,7 +5,7 @@ using PiAgent.Orchestrator.Orchestration;
 
 namespace PiAgent.Orchestrator.Commands;
 
-/// <summary>Short display text for every V1 command; rendered as `/{name.Replace('_', '-')}`.</summary>
+/// <summary>Short display text for every command; rendered as `/{name.Replace('_', '-')}</summary>
 public static class CommandDescriptions
 {
     public static readonly Dictionary<string, string> For = new()
@@ -24,11 +24,11 @@ public static class CommandDescriptions
 }
 
 /// <summary>
-/// Control-command replies (06 §7, §9, decision 29): `/status` renders the draft status format from
-/// current rows only (Workflow / current Task incl. `Run attempt: #N` per decision 79, execution
+/// Control-command replies: `/status` renders the status format from
+/// current rows only (Workflow / current Task incl. `Run attempt: #N`, execution
 /// heartbeat, queue position vs system-wide pending jobs, last completed Task, last error/reason);
 /// `/help` lists commands that would be accepted right now (target type, permitted commands, pause,
-/// routing/profile gate, Workflow state all filtered — owner ruling: omitted when the image is not
+/// routing/profile gate, Workflow state all filtered — omitted when the image is not
 /// `ready`, and task-producing commands omitted while the repository is paused). No section, Workflow,
 /// Task, Run or Container row is written here; the reply itself is one Outbox enqueue.
 /// </summary>
@@ -131,9 +131,9 @@ public static class ControlReplies
     }
 
     /// <summary>`- Phase: tool_started | Container: running | Last heartbeat: 20s ago | …`; omitted when
-    /// nothing observed yet. The Phase mirrors the Run's LATEST persisted RunEvent TYPE (task 12 owner
-    /// ruling: no extra enum — the event type vocabulary itself, 02 §18) and deliberately skips
-    /// `heartbeat` rows: heartbeat proves liveness and never advances progress or the phase (decision 58).</summary>
+    /// nothing observed yet. The Phase mirrors the Run's LATEST persisted RunEvent TYPE (no extra
+    /// enum — the event type vocabulary itself) and deliberately skips
+    /// `heartbeat` rows: heartbeat proves liveness and never advances progress or the phase.</summary>
     private static async Task<string?> ExecutionLineAsync(
         AppDbContext db, Run? run, DateTime now, CancellationToken cancellationToken)
     {
@@ -192,8 +192,8 @@ public static class ControlReplies
 }
 
 /// <summary>
-/// The /help availability filter (06 §9 plus owner rulings): a command is listed only when the
-/// pipeline would accept it right now — target type, repository permitted set, not paused (task
+/// The /help availability filter: a command is listed only when the
+/// pipeline would accept it right now — target type, repository permitted set, not paused (task-
 /// producing commands), the routing/profile gate (missing/disabled/or version not `ready` omitted),
 /// and the Workflow state (closed WorkItem, failed/closed Workflow, unfinished Task, missing plan
 /// Artifact for /code, no last-failed Task for /retry). /status, /help and /stop need no Workflow.
@@ -225,20 +225,20 @@ public static class HelpAvailability
             {
                 if (repository.IsEnabled &&
                     await RetryAvailableAsync(db, workflow, workItem, repository, cancellationToken))
-                    available.Add(name); // owner ruling: omitted while paused (parse path rejects /retry)
+                    available.Add(name); // omitted while paused (parse path rejects /retry)
                 continue;
             }
             if (CommandAdmission.TaskTypeFor.ContainsKey(name))
             {
                 if (blocked || !repository.IsEnabled)
-                    continue; // owner ruling: task-producing commands hidden while paused or state-blocked
+                    continue; // task-producing commands hidden while paused or state-blocked
                 var (resolved, _, _) = await ProfileGate.ResolveAsync(
                     db, repository, CommandAdmission.TaskTypeFor[name], cancellationToken);
                 if (resolved is null)
-                    continue; // phase-/profile-gated (ruling: not-ready versions omitted too)
+                    continue; // phase-/profile-gated (not-ready versions omitted too)
                 if (name == AgentCommandNames.Code &&
                     await CommandAdmission.LatestPlanArtifactIdAsync(db, workflow?.Id, cancellationToken) is null)
-                    continue; // decision 80 — also covers a missing Workflow (no plan without one)
+                    continue; // also covers a missing Workflow (no plan without one)
                 available.Add(name);
                 continue;
             }
@@ -253,16 +253,16 @@ public static class HelpAvailability
         return sb.ToString().TrimEnd();
     }
 
-    /// <summary>/retry (06 §9a): the Workflow's most recent non-cancelled task-producing Task is
+    /// <summary>/retry: the Workflow's most recent non-cancelled task-producing Task is
     /// `failed`, nothing unfinished, and the Task's pinned profile/version is still usable; original
-    /// preconditions still hold (for implement, the plan Artifact still exists — decision 80).</summary>
+    /// preconditions still hold (for implement, the plan Artifact still exists).</summary>
     private static async Task<bool> RetryAvailableAsync(
         AppDbContext db, Workflow? workflow, WorkItem workItem, Repository repository, CancellationToken cancellationToken)
     {
         if (workflow is null || workItem.State != "open")
             return false;
         if (workflow.Status is WorkflowStatuses.Failed or WorkflowStatuses.Closed)
-            return false; // decision 71: only /status, /help and root closure remain available
+            return false; // only /status, /help and root closure remain available
         var unfinished = await db.OrchestrationTasks.AnyAsync(
             t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken);
         if (unfinished)
@@ -278,7 +278,7 @@ public static class HelpAvailability
         var profile = await db.AgentProfiles.AsNoTracking()
             .SingleAsync(p => p.Id == version.AgentProfileId, cancellationToken);
         if (!profile.IsEnabled || version.State != ProfileVersionStates.Ready)
-            return false; // agent_profile_not_ready on the retry path (06 §9a)
+            return false; // agent_profile_not_ready on the retry path
         if (last.Type == OrchestrationTaskTypes.Implement &&
             await CommandAdmission.LatestPlanArtifactIdAsync(db, workflow.Id, cancellationToken) is null)
             return false;
@@ -288,9 +288,9 @@ public static class HelpAvailability
 
 /// <summary>
 /// Executes an authorized control command inside the caller's (processor's) transaction: renders the
-/// reply from current rows and enqueues exactly one Outbox comment (decision 29), then marks the
+/// reply from current rows and enqueues exactly one Outbox comment, then marks the
 /// command `processed`. /status and /help create no Workflow, Task, Run, Session or Container row;
-/// /stop (ticket 14) and /retry (ticket 15) are state-changing control paths — StopCommandHandler
+/// /stop and /retry are state-changing control paths — StopCommandHandler
 /// cancels queued work and signals the runtime; RetryCommandHandler requeues the last failed Task.
 /// </summary>
 public static class ControlCommandHandler
@@ -301,7 +301,7 @@ public static class ControlCommandHandler
     {
         if (command.CommandName == AgentCommandNames.Stop)
         {
-            // ticket 14: a state-changing control path — StopCommandHandler marks the command processed
+            // a state-changing control path — StopCommandHandler marks the command processed
             await StopCommandHandler.HandleAsync(db, command, workItem, repository,
                 runtimeApi ?? throw new InvalidOperationException("the /stop control path requires the Runtime API client"),
                 cancellationToken);
@@ -309,7 +309,7 @@ public static class ControlCommandHandler
         }
         if (command.CommandName == AgentCommandNames.Retry)
         {
-            // ticket 15: a state-changing control path too — RetryCommandHandler marks the command
+            // a state-changing control path too — RetryCommandHandler marks the command
             // processed (accepted silently) or rejected with exactly one reply
             await RetryCommandHandler.HandleAsync(db, command, workItem, repository, metrics, cancellationToken);
             return;

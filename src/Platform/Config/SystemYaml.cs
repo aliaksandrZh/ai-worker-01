@@ -4,7 +4,7 @@ using YamlDotNet.Serialization;
 namespace PiAgent.Platform.Config;
 
 /// <summary>
-/// Shared mechanics for reading the configuration plane's `system.yaml` (01 §2): strict load (a
+/// Shared mechanics for reading the configuration plane's `system.yaml`: strict load (a
 /// missing file or malformed YAML is a diagnosable startup failure) plus the duration / positive-int
 /// knob parsers used across the plane (`60s`, `5m`, `4h`). Hosts keep their own narrow DTOs and pick
 /// the knobs they read; the Orchestrator's strict ConfigParser remains the schema authority for the
@@ -21,7 +21,7 @@ public static class SystemYaml
         var path = Path.Combine(configRoot, "system.yaml");
         if (!File.Exists(path))
             throw new ConfigException(
-                $"configuration error: the configuration file '{path}' does not exist (configuration plane, 01 §2)");
+                $"configuration error: the configuration file '{path}' does not exist");
         return File.ReadAllText(path);
     }
 

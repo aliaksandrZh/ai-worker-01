@@ -159,7 +159,7 @@ public static class CommandTestSupport
     }
 
     /// <summary>A processor wired against the real postgres fixture with a stubbed GitHub handler.
-    /// `runtimeStub` (optional, ticket 14) wires a stubbed Runtime API for the /stop control path.
+    /// `runtimeStub` (optional) wires a stubbed Runtime API for the /stop control path.
     /// </summary>
     public static ProcessorHarness NewProcessor(string connectionString, ConfigurationState? configurationState = null, DirectHttpStub? runtimeStub = null)
     {
@@ -195,7 +195,7 @@ public static class CommandTestSupport
         return new ProcessorHarness(provider, processor, handler, configuration, metrics);
     }
 
-    /// <summary>Profile + version (given state, ticket-02 shape) + routing rule for admission tests (task 07).</summary>
+    /// <summary>Profile + version (given state) + routing rule for admission tests.</summary>
     public static async Task<(AgentProfile Profile, AgentProfileVersion Version, AgentProfileRoutingRule Rule)> SeedProfileAsync(
         AppDbContext db,
         string taskType,

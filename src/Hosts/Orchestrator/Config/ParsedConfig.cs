@@ -1,6 +1,6 @@
 namespace PiAgent.Orchestrator.Config;
 
-/// <summary>Parsed configuration-plane desired state (01 §2): YAML is the source of desired configuration.</summary>
+/// <summary>Parsed configuration-plane desired state: YAML is the source of desired configuration.</summary>
 public sealed class ParsedConfig
 {
     public required SystemConfig System { get; init; }
@@ -34,7 +34,7 @@ public sealed class RepositoryEntry
     public required string Owner { get; init; }
     public required string Name { get; init; }
     public bool Enabled { get; init; } = true;
-    /// <summary>Decision 49: NULL = allowlist enabled and seeded with the owner on sync; empty list = filtering disabled.</summary>
+    /// <summary>NULL = allowlist enabled and seeded with the owner on sync; empty list = filtering disabled.</summary>
     public List<string>? AllowedLogins { get; init; }
     public List<string>? PermittedCommands { get; init; }
     public List<string>? PermittedWorkItemTypes { get; init; }
@@ -59,7 +59,7 @@ public sealed class ProfileConfig
     public bool Enabled { get; init; } = true;
     public string RuntimeType { get; init; } = "pi";
     public string? SystemPrompt { get; init; }
-    /// <summary>Mandatory per profile; V1 validates presence/positivity only (decision 56).</summary>
+    /// <summary>Mandatory per profile; only presence/positivity is validated.</summary>
     public long MaxContextTokens { get; init; }
     public TimeSpan? StartupTimeout { get; init; }
     public TimeSpan? IdleTimeout { get; init; }
@@ -71,13 +71,13 @@ public sealed class ProfileConfig
     public string? BridgeVersion { get; init; }
     public TimeSpan? BridgeHeartbeatInterval { get; init; }
     public TimeSpan? BridgeEventCadence { get; init; }
-    /// <summary>Stub-only scenario lever (tickets 09/13): `succeed` (default) | `fail` | `needs_human` | `hang` | `never_start` | `permission_denied`.</summary>
+    /// <summary>Stub-only scenario lever: `succeed` (default) | `fail` | `needs_human` | `hang` | `never_start` | `permission_denied`.</summary>
     public string? BridgeBehavior { get; init; }
     public List<string>? Skills { get; init; }
-    /// <summary>Secret reference names only — values live in host-managed files (decisions 50/54).</summary>
+    /// <summary>Secret reference names only — values live in host-managed files.</summary>
     public List<string>? Secrets { get; init; }
     public List<string>? Capabilities { get; init; }
-    /// <summary>Opaque passthrough structures, pinned verbatim into the snapshot for lineage (02 §12).</summary>
+    /// <summary>Opaque passthrough structures, pinned verbatim into the snapshot for lineage.</summary>
     public Dictionary<string, object?>? Mcp { get; init; }
     public Dictionary<string, object?>? Tools { get; init; }
     public Dictionary<string, object?>? Permissions { get; init; }

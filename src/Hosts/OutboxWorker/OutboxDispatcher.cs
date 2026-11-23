@@ -11,7 +11,7 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.OutboxWorker;
 
 /// <summary>
-/// One OutboxAction per WorkerLoop tick (decision 67). Claim via the store's DB lease, then:
+/// One OutboxAction per WorkerLoop tick. Claim via the store's DB lease, then:
 /// retry ⇒ invisible-marker check first (duplicate suppression), then POST the comment. Permanent
 /// GitHub statuses (401, 404, 422, regular 403) dead-letter immediately; transient ones (5xx, 429,
 /// rate-limit 403) retry with exponential backoff capped at 1 h over the `outbox_retry_window`;
@@ -71,7 +71,7 @@ public sealed class OutboxDispatcher(
             var marker = Marker(action.IdempotencyKey);
             if (action.Attempts > 1)
             {
-                // decision 67 duplicate control: before every RE-send (attempts ≥ 2 — ClaimNextAsync
+                // duplicate control: before every RE-send (attempts ≥ 2 — ClaimNextAsync
                 // returns the row with the current attempt already counted), look for our marker in
                 // the newest comments: the previous attempt may have landed despite reporting failure.
                 // GET failures classify identically to write failures (same PAT, same GitHub). The
@@ -119,7 +119,7 @@ public sealed class OutboxDispatcher(
         }
     }
 
-    /// <summary>Permanent per decision 67: 401, 404, 422, and any 403 that is not a rate limit (remaining != 0).</summary>
+    /// <summary>Permanent: 401, 404, 422, and any 403 that is not a rate limit (remaining != 0).</summary>
     private static bool IsPermanent(GitHubDeliveryException exception) =>
         exception.Status is HttpStatusCode.Unauthorized or HttpStatusCode.NotFound or HttpStatusCode.UnprocessableEntity
         || (exception.Status == HttpStatusCode.Forbidden && exception.RateLimitRemaining != 0);

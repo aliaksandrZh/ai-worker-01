@@ -8,7 +8,7 @@ namespace PiAgent.Hosts.Tests.Commands;
 /// <summary>
 /// The task-07 rejection/notice vocabularies: every admission rejection (AgentCommandRejectionReplies)
 /// and claim-time cancellation notice (ClaimCancellationNotices) carries a distinct, actionable GitHub
-/// line — the 06 §13 "concise reason" contract extended to the orchestration reasons.
+/// line — the "concise reason" contract extended to the orchestration reasons.
 /// </summary>
 public class CommandRejectionTextTests
 {
@@ -34,7 +34,7 @@ public class CommandRejectionTextTests
         Assert.Contains("no completed plan", AgentCommandRejectionReplies.Text(planMissing, ""), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("/plan", AgentCommandRejectionReplies.Text(planMissing, ""), StringComparison.Ordinal);
 
-        // ticket 15 (06 §9a): /retry rejections get distinct actionable lines
+        // /retry rejections get distinct actionable lines
         const string notRetryable = AgentCommandRejectionReasons.TaskNotRetryable;
         Assert.Contains("no failed task to retry", AgentCommandRejectionReplies.Text(notRetryable, ""), StringComparison.OrdinalIgnoreCase);
         Assert.NotEqual(AgentCommandRejectionReplies.Text(AgentCommandRejectionReasons.UnfinishedTaskExists, ""),

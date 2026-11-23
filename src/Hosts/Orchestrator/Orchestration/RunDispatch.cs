@@ -10,9 +10,9 @@ using PiAgent.Orchestrator.Context;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>Run rows the Orchestrator created for one claim, ready to hand to the dispatcher
-/// (decision 44: the Orchestrator owns the DB rows; the Runtime API — ticket 09 — provisions).
+/// (the Orchestrator owns the DB rows; the Runtime API provisions).
 /// The Workspace row was created (or reused) by RunPrepare on the Task's first attempt.
-/// `AssembledContext` carries the ticket-11 Context Assembler output (null only in task-07 legacy
+/// `AssembledContext` carries the Context Assembler output (null only in legacy
 /// tests that never dispatch); the dispatcher freezes it as the Run's immutable snapshot.</summary>
 public sealed record RunPreparation(
     Run Run,
@@ -23,8 +23,8 @@ public sealed record RunPreparation(
     AgentProfileVersion ProfileVersion,
     ContextAssembly? AssembledContext);
 
-/// <summary>The dispatch hook between the queue and the Runtime API (decision 44: the Orchestrator owns
-/// the DB rows; the Runtime API provisions). Ticket 09 replaced the task-07 no-op stub.
+/// <summary>The dispatch hook between the queue and the Runtime API (the Orchestrator owns
+/// the DB rows; the Runtime API provisions).
 /// <list type="bullet">
 /// <item><see cref="HandedOff"/> — `/start` accepted: the job is completed, the Task moved `starting`,
 /// the Run mirrored `starting`; the terminal-Run consumer takes over afterwards.</item>
@@ -38,7 +38,7 @@ public enum DispatchOutcome
     HandedOff,
     Transient,
     Permanent,
-    /// <summary>The claim was superseded mid-flight (ticket 14: /stop cancelled the claimed Task and
+    /// <summary>The claim was superseded mid-flight (/stop cancelled the claimed Task and
     /// its prepared pending Run rows) — nothing was handed off; the worker releases nothing.</summary>
     Superseded,
 }
@@ -48,7 +48,7 @@ public interface IRunDispatcher
     Task<DispatchOutcome> DispatchAsync(AppDbContext db, RunPreparation preparation, CancellationToken cancellationToken);
 }
 
-/// <summary>Decision-65 service credential for Orchestrator→Runtime API calls (the orchestrator's own
+/// <summary>Service credential for Orchestrator→Runtime API calls (the orchestrator's own
 /// service token; the per-Run callback tokens cannot call these endpoints).</summary>
 public sealed class RuntimeApiOptions
 {
@@ -59,7 +59,7 @@ public sealed class RuntimeApiOptions
     public int StartTimeoutSeconds { get; set; } = 180;
 }
 
-/// <summary>HTTP client for the Runtime API's internal runtime routes (04 §3).</summary>
+/// <summary>HTTP client for the Runtime API's internal runtime routes.</summary>
 public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions> options)
 {
     public async Task<HttpResponseMessage> StartRunAsync(Guid runId, RunStartPayload payload, CancellationToken cancellationToken)
@@ -73,7 +73,7 @@ public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions
         return await http.SendAsync(request, cancellationToken);
     }
 
-    /// <summary>`POST /internal/runtime/runs/{runId}/stop` (ticket 14, decision 61): the graceful-stop
+    /// <summary>`POST /internal/runtime/runs/{runId}/stop`: the graceful-stop
     /// control signal — the Runtime API records it and hands the sequence to the Bridge.</summary>
     public async Task<HttpResponseMessage> StopRunAsync(Guid runId, string reason, CancellationToken cancellationToken)
     {
@@ -98,8 +98,8 @@ public sealed class RuntimeApiClient(HttpClient http, IOptions<RuntimeApiOptions
     }
 }
 
-/// <summary>The 04 §3 start request the Orchestrator sends; `input` is the frozen context package
-/// (the ticket-11 assembler's content, byte-identical to RunContextSnapshot.content — tested).</summary>
+/// <summary>The start request the Orchestrator sends; `input` is the frozen context package
+/// (the assembler's content, byte-identical to RunContextSnapshot.content — tested).</summary>
 public sealed record RunStartPayload(
     [property: JsonPropertyName("agentSessionId")] Guid AgentSessionId,
     [property: JsonPropertyName("workspaceId")] Guid WorkspaceId,
@@ -107,7 +107,7 @@ public sealed record RunStartPayload(
     [property: JsonPropertyName("input")] JsonElement Input);
 
 /// <summary>
-/// The real dispatcher (ticket 11 refines ticket 09): freezes the ticket-11 Assembler's context as the
+/// The real dispatcher: freezes the Assembler's context as the
 /// Run's IMMUTABLE RunContextSnapshot (idempotent by content hash; never rewritten — an existing row
 /// with a different hash aborts the dispatch) and calls the Runtime API
 /// `POST /internal/runtime/runs/{runId}/start` with the same frozen content, then completes the claim
@@ -127,9 +127,9 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
 
         if (assembled is null)
             throw new InvalidOperationException(
-                $"run {run.Id} dispatch requires the assembled context — the claim path assembles before RunPrepare (ticket 11)");
+                $"run {run.Id} dispatch requires the assembled context — the claim path assembles before RunPrepare");
 
-        // Ticket 14: /stop cancels a claimed Task (and deletes its pending Run rows) while the claim
+        // /stop cancels a claimed Task (and deletes its pending Run rows) while the claim
         // worker may still be mid-flight between claim and handoff — re-verify before the freeze/POST;
         // a superseded claim removes its just-prepared rows and never touches the Runtime API.
         var freshTaskStatus = await db.OrchestrationTasks.AsNoTracking()
@@ -235,7 +235,7 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
     {
         await db.Runs
             .Where(r => r.Id == run.Id && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting)
-                && r.Status != RunStatuses.Running) // ticket 13: never downgrade an event-driven Running run
+                && r.Status != RunStatuses.Running) // never downgrade an event-driven Running run
             .ExecuteUpdateAsync(set => set
                 .SetProperty(r => r.Status, RunStatuses.Starting)
                 .SetProperty(r => r.StartedAt, now), cancellationToken);

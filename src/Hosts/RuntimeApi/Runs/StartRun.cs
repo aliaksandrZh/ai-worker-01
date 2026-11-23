@@ -12,10 +12,10 @@ using PiAgent.Platform.Secrets;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// `POST /internal/runtime/runs/{runId}/start` (04 §3). The Orchestrator owns the DB rows (decision 44);
-/// this endpoint provisions the physical resources: the per-Run tree (decision 52, plus the callback spool),
-/// the per-Run callback credential + its read-only secret file (decision 60), the workspace directory, and
-/// the agent container over the Docker socket (decision 82) — mounted with the per-Run/session/log/spool
+/// `POST /internal/runtime/runs/{runId}/start`. The Orchestrator owns the DB rows;
+/// this endpoint provisions the physical resources: the per-Run tree (plus the callback spool),
+/// the per-Run callback credential + its read-only secret file, the workspace directory, and
+/// the agent container over the Docker socket — mounted with the per-Run/session/log/spool
 /// paths and the pinned profile version's `resource_configuration` limits. Idempotent by runId; metadata
 /// written back into Run/AgentSession/ContainerInstance/Workspace.
 /// </summary>
@@ -44,7 +44,7 @@ public static class StartRunHandler
         if (container is null)
             return RunPipelineApi.Error(409, "invalid_transition", $"run {runId} has no ContainerInstance row (Orchestrator owns it)");
 
-        // Idempotent replay: already provisioned → return the same runtime metadata (04 §8).
+        // Idempotent replay: already provisioned → return the same runtime metadata.
         if (container.ContainerName is not null)
             return Results.Json(BuildResponse(run, container, container.DockerContainerId));
 
@@ -57,8 +57,8 @@ public static class StartRunHandler
         if (request.AgentProfileVersionId != task.AgentProfileVersionId)
             return RunPipelineApi.Error(400, "validation",
                 $"agentProfileVersionId {request.AgentProfileVersionId} does not match run's pinned version {task.AgentProfileVersionId}");
-        // 04 §3 (ticket 11): `input` is the frozen context package — the RunContextSnapshot content the
-        // Orchestrator assembled; the model contract is loose (a JSON object) because 04 §3's example is
+        // `input` is the frozen context package — the RunContextSnapshot content the
+        // Orchestrator assembled; the model contract is loose (a JSON object) because the example is
         // conceptual and the Bridge consumes the frozen bytes from `/input`, not this field.
         if (request.Input.ValueKind is not JsonValueKind.Object)
             return RunPipelineApi.Error(400, "validation", "input (the frozen RunContextSnapshot content) must be a JSON object");
@@ -90,14 +90,14 @@ public static class StartRunHandler
             storage.EnsureWorkspaceDirectory(workflow.Id, task.Id);
             var workspaceHost = storage.WorkspaceHostPath(workflow.Id, task.Id);
 
-            // 3. container plan (04 §3 provisioning): pinned image, resource_configuration limits, mounts.
+            // 3. container plan: pinned image, resource_configuration limits, mounts.
             // The work item's repository name travels as GIT_CLONE_REPO (not secret — profiles whose
             // entry script clones use their mounted token file; the stub ignores it).
             if (!TryBuildContainerPlan(run, task, version, storage, provisionerOptions.Value, workspaceHost, runTreeHost,
                     repository.FullName, workItem.Number, out var plan, out var planError))
                 return RunPipelineApi.Error(400, "validation", planError!);
 
-            // 4. Docker (decision 82): create + start + wait running; a created-but-not-confirmed container
+            // 4. Docker: create + start + wait running; a created-but-not-confirmed container
             //    is removed best-effort on every failure path (a leftover with no ContainerInstance row is a leak)
             var containerId = await provisioner.CreateContainerAsync(plan!, cancellationToken);
             if (containerId is null)
@@ -123,14 +123,14 @@ public static class StartRunHandler
             container.HostId = provisionerOptions.Value.HostId;
             container.ObservedState = ContainerObservedStates.Running;
             container.LastStartedAt = now;
-            session.RuntimeSessionId = runId.ToString(); // decision 57: --session-id <runId>
+            session.RuntimeSessionId = runId.ToString(); // --session-id <runId>
             session.SessionFilePath = $"{runTree.SessionDir}/{runId}.jsonl";
             session.Status = AgentSessionStatuses.InUse;
             workspace.StorageReference = workspaceHost;
             workspace.Status = WorkspaceStatuses.InUse;
             workspace.LastUsedAt = now;
             await db.Runs
-                // ticket 13: never downgrade a Run that already went `running` (an event arrived mid-provisioning)
+                // never downgrade a Run that already went `running` (an event arrived mid-provisioning)
                 .Where(r => r.Id == runId && (r.Status == RunStatuses.Pending || r.Status == RunStatuses.Starting) && r.Status != RunStatuses.Running)
                 .ExecuteUpdateAsync(set => set
                     .SetProperty(r => r.Status, RunStatuses.Starting)
@@ -223,7 +223,7 @@ public static class StartRunHandler
             var (hostPath, secretPathError) = storage.SecretHostPath(secret);
             if (hostPath is null)
             {
-                // decision 54 fail-closed: a missing/empty secret file mounts broken — the agent would fail
+                // fail-closed: a missing/empty secret file mounts broken — the agent would fail
                 // later with no hint; this error names the real problem at provisioning time.
                 error = $"profile secret '{secret}' {secretPathError}";
                 return false;
@@ -244,7 +244,7 @@ public static class StartRunHandler
         Env("STUB_BEHAVIOR", ParseBridgeBehavior(version.BridgeConfiguration));
         if (!string.IsNullOrEmpty(workItemRepository))
             Env("GIT_CLONE_REPO", workItemRepository);
-        // ticket 19 (decision 64/74): a review Task's workspace is formed from the PINNED revisions — the
+        // a review Task's workspace is formed from the PINNED revisions — the
         // reviewer entry checks out `target_head_sha` and forms the diff locally from `target_base_sha`.
         if (task.Type == OrchestrationTaskTypes.Review)
         {
@@ -266,7 +266,7 @@ public static class StartRunHandler
         return true;
     }
 
-    /// <summary>Profile secrets as `/run/secrets/<name>` references (decision 54); empty list = no mounts.
+    /// <summary>Profile secrets as `/run/secrets/<name>` references; empty list = no mounts.
     /// The row is written by the Config Loader, so a wrong-shaped document means a corrupted jsonb row —
     /// fail closed instead of silently running the agent without its secrets.</summary>
     public static List<string>? ParseSecretReferences(string? environmentConfiguration, out string? error)

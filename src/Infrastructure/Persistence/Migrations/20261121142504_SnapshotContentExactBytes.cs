@@ -10,7 +10,7 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // ticket 11: the frozen RunContextSnapshot.content must survive storage byte-exact — a jsonb
+            // The frozen RunContextSnapshot.content must survive storage byte-exact — a jsonb
             // column re-serializes (key order/whitespace), so the content_hash and the bytes served via
             // /input would diverge. `USING` is required (jsonb → text has no implicit cast); the cast is
             // lossless for valid JSON. Down: text → jsonb expects valid JSON (this column stores exactly that).

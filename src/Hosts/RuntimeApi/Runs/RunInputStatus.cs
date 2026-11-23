@@ -24,7 +24,7 @@ public static class InputHandler
 }
 
 /// <summary>
-/// `GET /internal/runtime/runs/{runId}` (04 §3): desired/observed runtime status, heartbeat, container
+/// `GET /internal/runtime/runs/{runId}`: desired/observed runtime status, heartbeat, container
 /// reference, and error details as Runtime-owned facts (business transitions stay with the Orchestrator).
 /// </summary>
 public static class RunStatusHandler

@@ -18,8 +18,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Outbox;
 
 /// <summary>
-/// OutboxDispatcher decision-67 behavior over real postgres with a stubbed GitHub (task 03 plan
-/// Review Focus items 1/2/5): classification of permanent vs transient and rate-limit 403, marker
+/// OutboxDispatcher behavior over real postgres with a stubbed GitHub
+/// (classification of permanent vs transient and rate-limit 403, marker
 /// dedup before every re-send, lease/window exhaustion, payload guarding, token never logged,
 /// OutboxState refresh.
 /// </summary>

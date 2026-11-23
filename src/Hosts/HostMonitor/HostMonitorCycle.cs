@@ -9,7 +9,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.HostMonitor;
 
-/// <summary>Where the Execution Host Monitor posts its telemetry (04 §4, decision 65: a dedicated
+/// <summary>Where the Execution Host Monitor posts its telemetry (a dedicated
 /// service credential — never a per-Run callback token, never a write PAT).</summary>
 public sealed class RuntimeApiOptions
 {
@@ -18,11 +18,11 @@ public sealed class RuntimeApiOptions
     public string ServiceToken { get; set; } = "host-monitor-dev-token";
 }
 
-/// <summary>One posted observation, kept for the §14 metrics (counts of the last cycle).</summary>
+/// <summary>One posted observation, kept for the metrics (counts of the last cycle).</summary>
 public sealed record MonitorCycleResult(int ContainersObserved, int BusyContainers, int WorkflowDirectories);
 
 /// <summary>
-/// The Execution Host Monitor's observation cycle (01 §2, decisions 62/77, ticket 13): per tick it
+/// The Execution Host Monitor's observation cycle: per tick it
 /// observes agent containers (label `pi-run`: state, process tree, CPU, bind mounts) through the local
 /// Docker API and the managed-storage tree (top-level workflow directories with mtimes), then posts
 /// one telemetry envelope to the Runtime API's `/internal/runtime/monitor/telemetry` under its own
@@ -57,7 +57,7 @@ public sealed class HostMonitorCycle(
 
         var client = httpClientFactory.CreateClient("host-monitor");
         client.BaseAddress = new Uri(apiOptions.Value.BaseUrl);
-        // decision 65: the dedicated host credential presented as X-Service-Token on every post
+        // the dedicated host credential presented as X-Service-Token on every post
         client.DefaultRequestHeaders.Remove(ServiceAuthExtensions.HeaderName);
         client.DefaultRequestHeaders.Add(ServiceAuthExtensions.HeaderName, apiOptions.Value.ServiceToken);
         var response = await client.PostAsJsonAsync("/internal/runtime/monitor/telemetry", payload, cancellationToken);

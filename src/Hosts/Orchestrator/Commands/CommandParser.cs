@@ -3,7 +3,7 @@ using PiAgent.Infrastructure.Persistence;
 
 namespace PiAgent.Orchestrator.Commands;
 
-/// <summary>Grammar rejections distinguishable at parse time (06 §1); persistence/status decisions and
+/// <summary>Grammar rejections distinguishable at parse time; persistence/status decisions and
 /// the policy checks (repository pause, permitted commands, target types, allowlist) live in the
 /// comment-command processor.</summary>
 public enum CommandRejection
@@ -24,22 +24,21 @@ public sealed record CommandParsed(string Name, string TrailingContext) : Comman
 /// diagnostics (raw token for unknown commands).</summary>
 public sealed record CommandRejectedParse(CommandRejection Reason, string Detail) : CommandParseResult;
 
-/// <summary>No directive-shaped text the grammar can act on — mention-only comments are context only
-/// (decision 45, 01 §8).</summary>
+/// <summary>No directive-shaped text the grammar can act on — mention-only comments are context only.</summary>
 public sealed record NoCommandDetected : CommandParseResult;
 
 /// <summary>
-/// The command-grammar parser (06 §1, decision 6; approved design 2026-11-20):
+/// The command-grammar parser (approved design 2026-11-20):
 /// directives inside blockquotes, fenced/indented code blocks, and inline code are not usable
 /// directives — a stripped occurrence in a comment addressing the bot (case-sensitive login anywhere,
 /// word-bounded) is rejected `command_in_quote_or_code_block` so the user is told to post the command
-/// as plain text (owner decision Q1); without the login it stays context. Exactly one usable directive
+/// as plain text; without the login it stays context. Exactly one usable directive
 /// on the first non-empty line (only whitespace before the mention, ≥1 space before the slash token)
 /// parses; any other directive-shaped text is malformed; two usable directives are ambiguous.
 /// </summary>
 public static partial class CommandParser
 {
-    /// <summary>Slash token → canonical command name (case-insensitive keys, decision per owner Q3).</summary>
+    /// <summary>Slash token → canonical command name (case-insensitive keys).</summary>
     private static readonly Dictionary<string, string> KnownCommands = new(StringComparer.Ordinal)
     {
         ["plan"] = AgentCommandNames.Plan,
@@ -60,7 +59,7 @@ public static partial class CommandParser
     [GeneratedRegex("`[^`]*`")]
     private static partial Regex InlineCodeSpanRegex();
 
-    /// <summary>Indented code block: a tab or ≥4 leading spaces (per line state machine, 06 §1).</summary>
+    /// <summary>Indented code block: a tab or ≥4 leading spaces (per line state machine).</summary>
     [GeneratedRegex(@"^(?:\t| {4,})")]
     private static partial Regex IndentedCodeRegex();
 
@@ -83,13 +82,13 @@ public static partial class CommandParser
     }
 
     /// <summary>A stripped occurrence also covers a bare `/token` inside quote/code content — the
-    /// mention may sit outside the code form (06 §1: the directive is ignored as a unit; owner Q1:
+    /// mention may sit outside the code form (the directive is ignored as a unit:
     /// mention present anywhere + coded command → rejected). Preceded by start, whitespace, or `>`.</summary>
     [GeneratedRegex(@"(?<=^|[\s>])/([A-Za-z0-9_-]+)")]
     private static partial Regex BareTokenRegex();
 
     /// <summary>The bot login addressed anywhere in the body, word-bounded (`@login2` never matches
-    /// login `login`; owner decision Q1: the login typed inside a quote/code still counts as "addressed").</summary>
+    /// login `login`; the login typed inside a quote/code still counts as "addressed".</summary>
     private static readonly Dictionary<string, Regex> MentionCache = new(StringComparer.Ordinal);
 
     private static Regex MentionAnywhere(string botLogin)
@@ -189,7 +188,7 @@ public static partial class CommandParser
     private static bool ContainsShape(string text, Regex shape) => shape.IsMatch(text);
 
     /// <summary>Inline-code span contents are stripped regions too: a token typed fully inside
-    /// backticks counts as a stripped occurrence (owner decision Q1).</summary>
+    /// backticks counts as a stripped occurrence.</summary>
     private static bool SpansContainShape(string text, Regex shape) =>
         InlineCodeSpanRegex().Matches(text).Any(m => shape.IsMatch(m.Value[1..^1]) || BareTokenRegex().IsMatch(m.Value[1..^1]));
 }

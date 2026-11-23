@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace PiAgent.Orchestrator.Config;
 
 /// <summary>
-/// Strict unit-string parsing for configuration knob sizes (01 §16 tables): `256KiB`, `50MiB`, `2GiB`.
+/// Strict unit-string parsing for configuration knob sizes: `256KiB`, `50MiB`, `2GiB`.
 /// (Durations live in Platform's SystemYaml.ParseDurationValue — single grammar for the whole plane.)
 /// Bad values throw ArgumentException naming the offending value.
 /// </summary>

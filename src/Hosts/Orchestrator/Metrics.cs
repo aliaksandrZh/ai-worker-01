@@ -25,9 +25,9 @@ public sealed class OrchestratorMetrics(WorkerLoopState state, CommandMetrics co
         yield return new KeyValuePair<string, object?>("jobsClaimedTotal", queueMetrics.JobsClaimedTotal);
         yield return new KeyValuePair<string, object?>("leaseExpirationsTotal", queueMetrics.LeaseExpirationsTotal);
         yield return new KeyValuePair<string, object?>("claimCancellationsTotal", queueMetrics.ClaimCancellationsTotal);
-        // context assembler (ticket 11, decision 63)
+        // context assembler
         yield return new KeyValuePair<string, object?>("claimContextTooLargeTotal", queueMetrics.ClaimContextTooLargeTotal);
-        // profile image builds (task 10, decision 81)
+        // profile image builds
         yield return new KeyValuePair<string, object?>("buildJobsPending", buildMetrics.BuildJobsPending);
         yield return new KeyValuePair<string, object?>("buildJobsPolling", buildMetrics.BuildJobsPolling);
         yield return new KeyValuePair<string, object?>("oldestPendingBuildAgeSeconds", buildMetrics.OldestPendingBuildAgeSeconds);

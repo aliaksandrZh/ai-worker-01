@@ -6,8 +6,8 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Task 02 configuration-plane model: the five config-plane entities with spec-mandated
-/// uniqueness (02 §2/§8/§12/§12a/§23), snake_case names (ER diagram), and jsonb/interval columns.
+/// Task 02 configuration-plane model: the five config-plane entities with
+/// uniqueness (owner/name, cursors, versions/routing, sequence), snake_case names (ER diagram), and jsonb/interval columns.
 /// </summary>
 public class ConfigurationPlaneModelTests
 {
@@ -119,7 +119,7 @@ public class ConfigurationPlaneModelTests
     }
 
     [Fact]
-    public void StreamConstants_MatchDecision53EndpointFamilies()
+    public void StreamConstants_MatchEndpointFamilies()
     {
         Assert.Equal(
             new[] { "issues", "pulls", "issue_comments", "pr_reviews", "pr_review_comments", "timeline" },

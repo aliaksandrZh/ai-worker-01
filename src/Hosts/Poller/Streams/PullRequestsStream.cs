@@ -5,7 +5,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// `pulls` stream (decision 53): repo-wide `GET /repos/{o}/{r}/pulls?state=all&amp;sort=updated&amp;direction=desc`
+/// `pulls` stream: repo-wide `GET /repos/{o}/{r}/pulls?state=all&amp;sort=updated&amp;direction=desc`
 /// (state=all — closed/merged PRs must be caught on their updated_at bump; there is no `since` there), so
 /// paging stops client-side: the pass walks pages newest-first while items are newer than `position −
 /// overlap`, filtering partial pages. One DB transaction per page — cursor advances only after durable save.
@@ -47,7 +47,7 @@ public sealed class PullRequestsStream : IRepositoryStream
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing advances (decision 53)
+            throw; // the cycle must stop for the whole run — nothing advances
         }
         catch (Exception exception)
         {

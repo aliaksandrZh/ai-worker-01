@@ -7,7 +7,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Poller;
 
 /// <summary>
-/// Snapshot diff → decision-78 normalized detections (02 §7): created/closed/updated with change map,
+/// Snapshot diff → normalized detections: created/closed/updated with change map,
 /// pull_request_synchronized on head drift, review request set-diff per login, deterministic dedupe
 /// fingerprints, and the re-detection collision pin (identical before/after → identical dedupe_key).
 /// </summary>

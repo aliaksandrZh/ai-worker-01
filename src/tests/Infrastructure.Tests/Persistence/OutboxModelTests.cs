@@ -6,8 +6,8 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Task 03 outbox model: OutboxAction with decision-67 lease columns (ruling 1), spec-mandated
-/// indexes (02 §20/§23), jsonb payload, and the Restrict FK to repository.
+/// Outbox model: OutboxAction with lease columns, mandated
+/// indexes, jsonb payload, and the Restrict FK to repository.
 /// </summary>
 public class OutboxModelTests
 {

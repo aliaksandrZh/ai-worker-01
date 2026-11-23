@@ -7,7 +7,7 @@ repositories:
 #   - owner: example-org
 #     name: example-repo
 #     enabled: true
-#     # allowlist absent = enabled and seeded with the repository owner (decision 49);
+#     # allowlist absent = enabled and seeded with the repository owner;
 #     # allowlist: [] explicitly empties it, disabling list filtering (write-permission baseline remains).
 #     allowlist: [alice, bob]
 #     permitted_commands: [plan, status, stop, help, retry]

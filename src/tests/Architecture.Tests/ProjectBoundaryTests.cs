@@ -4,7 +4,7 @@ using Xunit;
 namespace PiAgent.Architecture.Tests;
 
 /// <summary>
-/// Day-one decision-65/81 contour: the Host Monitor and Build Worker hosts must not have any
+/// Day-one contour: the Host Monitor and Build Worker hosts must not have any
 /// database access compiled in — they reference Platform only (user-approved boundary).
 /// Guard test: verifies a boundary the implementation already honors.
 /// </summary>

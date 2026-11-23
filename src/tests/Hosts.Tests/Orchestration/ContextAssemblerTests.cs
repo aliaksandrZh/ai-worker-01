@@ -10,7 +10,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Orchestration;
 
 /// <summary>
-/// Ticket 11: the Orchestrator-side Context Assembler. Plans see the issue body + every synced comment
+/// The Orchestrator-side Context Assembler. Plans see the issue body + every synced comment
 /// chronologically (tombstones excluded but recorded as exclusions); coders carry the never-pruned
 /// approved-plan Artifact plus agent-branch facts; reviewers get the pinned Head/Base revisions with
 /// reviews + grouped inline threads; budget overflows prune newest-first with per-element exclusion
@@ -248,7 +248,7 @@ public class ContextAssemblerTests(PostgresFixture postgres) : IClassFixture<Pos
         var planEntry = artifacts.EnumerateArray().Single(a => a.GetProperty("id").GetString() == planArtifact.Id.ToString());
         Assert.Equal("approved_plan", planEntry.GetProperty("purpose").GetString());
         Assert.Equal("# The approved plan", planEntry.GetProperty("content").GetString());
-        // prior Workflow artifacts are context; a log_reference travels by reference only (decision 43)
+        // prior Workflow artifacts are context; a log_reference travels by reference only
         Assert.Equal("old summary",
             artifacts.EnumerateArray().Single(a => a.GetProperty("id").GetString() == oldSummary.Id.ToString()).GetProperty("content").GetString());
         var logEntry = artifacts.EnumerateArray().Single(a => a.GetProperty("id").GetString() == logReference.Id.ToString());
@@ -309,7 +309,7 @@ public class ContextAssemblerTests(PostgresFixture postgres) : IClassFixture<Pos
         Assert.False(result.TooLarge, result.TooLargeDetail);
         var content = Content(result.Assembled!);
 
-        // pinned revisions for the runtime diff (decision 64)
+        // pinned revisions for the runtime diff
         Assert.Equal("head-pinned", content.GetProperty("task").GetProperty("targetHeadSha").GetString());
         Assert.Equal("base-pinned", content.GetProperty("task").GetProperty("targetBaseSha").GetString());
         Assert.Equal("review", content.GetProperty("command").GetString());
@@ -322,7 +322,7 @@ public class ContextAssemblerTests(PostgresFixture postgres) : IClassFixture<Pos
 
         var threads = content.GetProperty("threads").EnumerateArray().ToList();
         Assert.Equal(2, threads.Count);
-        // newest thread first; unknown resolution (`resolved: null`) is treated as unresolved (OBS-7)
+        // newest thread first; unknown resolution (`resolved: null`) is treated as unresolved
         Assert.Equal(301, threads[0].GetProperty("githubCommentId").GetInt64());
         Assert.Equal(201, threads[1].GetProperty("githubCommentId").GetInt64());
         Assert.True(threads[0].GetProperty("resolved").ValueKind is JsonValueKind.Null);

@@ -1,9 +1,9 @@
 namespace PiAgent.Infrastructure.Persistence;
 
 /// <summary>
-/// Execution Host Monitor telemetry (01 §2, decision 62): the Host Monitor observes session-file
+/// Execution Host Monitor telemetry: the Host Monitor observes session-file
 /// activity, container state/processes/CPU and managed-storage usage on the execution host via the
-/// local Docker API and posts it here with its own service credential (ticket 13). The Runtime API
+/// local Docker API and posts it here with its own service credential. The Runtime API
 /// persists the LATEST observation (single-row upsert — the Orchestrator's reconciliation reads only
 /// current facts); the control plane never reads execution-host paths or process tables itself.
 /// </summary>

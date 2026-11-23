@@ -5,7 +5,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// `issues` stream (decision 53): repo-wide `GET /repos/{o}/{r}/issues?state=all&amp;sort=updated&amp;direction=desc`,
+/// `issues` stream: repo-wide `GET /repos/{o}/{r}/issues?state=all&amp;sort=updated&amp;direction=desc`,
 /// `since = position − overlap` on incremental passes (server-side window filter), page size via `per_page`,
 /// `Link`-header pagination. Payloads carrying a `pull_request` marker are skipped — PRs are the `pulls`
 /// stream's business; the two streams keep independent cursor positions. One DB transaction per page
@@ -54,7 +54,7 @@ public sealed class IssuesStream : IRepositoryStream
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing advances (decision 53)
+            throw; // the cycle must stop for the whole run — nothing advances
         }
         catch (Exception exception)
         {

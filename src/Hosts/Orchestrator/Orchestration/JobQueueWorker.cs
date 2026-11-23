@@ -9,20 +9,20 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The durable job queue consumer (02 §19, 03 §8, task 07). Per tick: sweep expired claim leases (job
+/// The durable job queue consumer. Per tick: sweep expired claim leases (job
 /// `pending`, Task `claimed → queued`, never-dispatched `pending` Run rows deleted — but a claim whose
 /// Run was already handed off is restored to the hand-off state instead: never a rewind that would
-/// re-execute the work, task 16), then claim a FIFO
+/// re-execute the work), then claim a FIFO
 /// batch (`available_at`, then `priority`, higher priority first) up to the global
 /// `max_concurrent_runs` cap — the claim transaction locks job rows `FOR UPDATE SKIP LOCKED` so
 /// concurrent workers never double-claim. Queued Tasks and `pending` Jobs occupy no slot; the slot
-/// math counts Claims (`task.claimed`) plus Runs in `starting|running|stopping` (decision 75; the
-/// terminal-Run-with-unconfirmed-stop release half activates with tickets 09/14). Outside the claim
-/// transaction each claim revalidates its preconditions (04 §2, 06 §12): Workflow not failed/closed,
+/// math counts Claims (`task.claimed`) plus Runs in `starting|running|stopping`; the
+/// terminal-Run-with-unconfirmed-stop release half activates with the run pipeline. Outside the claim
+/// transaction each claim revalidates its preconditions: Workflow not failed/closed,
 /// repository not paused (skip, not cancel), WorkItem open, pinned version still ready, plan input
 /// present for implement Tasks, pinned review SHA unchanged, permission recheck — an invalid claim is
 /// cancelled with a recorded reason (TaskLifecycle), a transient check releases it; a valid claim is
-/// prepared (RunPrepare) and handed to the dispatch stub (ticket 09 replaces the no-op).
+/// prepared (RunPrepare) and handed to the dispatcher.
 /// </summary>
 public sealed class JobQueueWorker(
     IServiceScopeFactory scopeFactory,
@@ -33,14 +33,14 @@ public sealed class JobQueueWorker(
     JobQueueMetrics metrics,
     ILogger<JobQueueWorker> logger) : IWorkerCycle
 {
-    /// <summary>Worker identity for `locked_by`; per-process (single-instance V1, lease-recovered).</summary>
+    /// <summary>Worker identity for `locked_by`; per-process (single instance, lease-recovered).</summary>
     private readonly string _workerId =
         $"{Environment.MachineName}:{Environment.ProcessId}:{Guid.NewGuid():N}";
     private readonly JobQueueOptions _options = options.Value;
 
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
-        // cold-start gate (01 §13): no claim, no sweep, until configuration synchronization succeeded
+        // cold-start gate: no claim, no sweep, until configuration synchronization succeeded
         if (!configurationState.Synchronized)
             return;
 
@@ -52,9 +52,9 @@ public sealed class JobQueueWorker(
         await RefreshGaugesAsync(cancellationToken);
     }
 
-    /// <summary>Sweeps claim leases left by a terminated Orchestrator (03 §8). An expired claim whose
+    /// <summary>Sweeps claim leases left by a terminated Orchestrator. An expired claim whose
     /// Run was already handed off (the Runtime API flipped it out of `pending` inside /start) never
-    /// rewinds the Task — rewinding would re-execute the same work (task 16); it restores the hand-off
+    /// rewinds the Task — rewinding would re-execute the same work; it restores the hand-off
     /// state and lets the terminal-Run consumer own the transition.
     /// Per tick: expired `processing` leases — job `pending` (or hand-off restored), Task `claimed →
     /// queued` only when nothing was dispatched, never-dispatched `pending` Run rows deleted.</summary>
@@ -114,7 +114,7 @@ public sealed class JobQueueWorker(
             }
             if (task.Status == OrchestrationTaskStatuses.Claimed)
             {
-                // the only spec edge back from `claimed` (03 §2: claim lease expires) — the claim never
+                // the only edge back from `claimed` (the claim lease expires) — the claim never
                 // handed off, so returning the work to the queue cannot duplicate execution
                 task.Status = OrchestrationTaskStatuses.Queued;
                 task.ClaimedAt = null;
@@ -148,9 +148,9 @@ public sealed class JobQueueWorker(
         var now = DateTime.UtcNow;
         var limit = Math.Min(free, _options.BatchLimit);
         var skip = skipped.ToArray();
-        // Paused repositories are skipped in the claim query itself (decision 75: queued Tasks stay
+        // Paused repositories are skipped in the claim query itself (queued Tasks stay
         // unclaimed, never claimed-and-released); `skipped` keeps jobs released/swept earlier this tick
-        // from being instantly re-claimed; future `available_at` (retry backoff, ticket 15) waits.
+        // from being instantly re-claimed; future `available_at` (retry backoff) waits.
         var candidates = await db.OrchestrationJobs
             .FromSqlInterpolated($"SELECT j.* FROM orchestration_job j JOIN task t ON t.id = j.task_id JOIN workflow w ON w.id = t.workflow_id JOIN work_item wi ON wi.id = w.work_item_id JOIN repository r ON r.id = wi.repository_id WHERE j.status = {OrchestrationJobStatuses.Pending} AND j.available_at <= {now} AND r.is_enabled AND NOT (j.id = ANY({skip})) ORDER BY j.available_at, j.priority DESC LIMIT {limit} FOR UPDATE SKIP LOCKED")
             .ToListAsync(cancellationToken);
@@ -161,7 +161,7 @@ public sealed class JobQueueWorker(
             var task = await db.OrchestrationTasks.SingleAsync(t => t.Id == job.TaskId, cancellationToken);
             if (task.Status != OrchestrationTaskStatuses.Queued)
             {
-                // never execute inconsistent work; /retry (ticket 15) creates the fresh job instead
+                // never execute inconsistent work; /retry creates the fresh job instead
                 job.Status = OrchestrationJobStatuses.Failed;
                 job.LastError = $"task not in queued state ('{task.Status}')";
                 job.UpdatedAt = now;
@@ -194,7 +194,7 @@ public sealed class JobQueueWorker(
         return claimedTasks + activeRuns;
     }
 
-    /// <summary>Whether the bot is still among the synced requested reviewers (ticket 19, 06 §11).</summary>
+    /// <summary>Whether the bot is still among the synced requested reviewers.</summary>
     private static bool RequestedReviewerPresent(WorkItem workItem, string? botLogin)
     {
         if (string.IsNullOrEmpty(botLogin) || string.IsNullOrWhiteSpace(workItem.RequestedReviewers))
@@ -239,11 +239,11 @@ public sealed class JobQueueWorker(
             skipped.Add(job.Id); // released this tick: never reclaimed within the same cycle
         }
 
-        // ---- claim-time rechecks (order per 04 §2/06 §12 + design doc) ----
+        // ---- claim-time rechecks (in validation order) ----
         if (workflow.Status == WorkflowStatuses.Failed)
         {
             await CancelAsync(AgentCommandRejectionReasons.WorkflowFailed);
-            return; // decision 71
+            return; // failed Workflow stays failed
         }
         if (workflow.Status == WorkflowStatuses.Closed)
         {
@@ -252,7 +252,7 @@ public sealed class JobQueueWorker(
         }
         if (!repository.IsEnabled)
         {
-            // decision 75: pause — queued work stays unclaimed (not cancelled), resumes on re-enable
+            // pause — queued work stays unclaimed (not cancelled), resumes on re-enable
             await ReleaseAsync();
             return;
         }
@@ -268,27 +268,27 @@ public sealed class JobQueueWorker(
         }
         if (version.State != ProfileVersionStates.Ready)
         {
-            await CancelAsync(AgentCommandRejectionReasons.AgentImageNotReady); // decision 35
+            await CancelAsync(AgentCommandRejectionReasons.AgentImageNotReady); // version not ready
             return;
         }
         if (task.Type == OrchestrationTaskTypes.Implement
             && !await db.TaskArtifactInputs.AnyAsync(i => i.TaskId == task.Id, cancellationToken))
         {
-            await CancelAsync(AgentCommandRejectionReasons.PlanNotAvailable); // decision 80
+            await CancelAsync(AgentCommandRejectionReasons.PlanNotAvailable); // approved plan required
             return;
         }
         if (task.Type == OrchestrationTaskTypes.Review && task.TriggerGithubEventId is not null
             && (task.FailureReason == AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution
                 || !RequestedReviewerPresent(workItem, configurationState.BotLogin)))
         {
-            // ticket 19 (06 §11): the automatic initial review re-checks the bot's request before it starts
+            // the automatic initial review re-checks the bot's request before it starts
             await CancelAsync(AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution);
             return;
         }
         if (task.Type == OrchestrationTaskTypes.Review
             && !string.Equals(workItem.HeadSha, task.TargetHeadSha, StringComparison.Ordinal))
         {
-            await CancelAsync(AgentCommandRejectionReasons.ReviewHeadChanged); // decision 31
+            await CancelAsync(AgentCommandRejectionReasons.ReviewHeadChanged); // head drifted
             return;
         }
         var permission = await ClaimPermissionCheck.RecheckAsync(db, permissionGate, repository, command, cancellationToken);
@@ -308,7 +308,7 @@ public sealed class JobQueueWorker(
             db, task, job, version, workflow, workItem, repository, command, cancellationToken);
         if (contextTooLarge)
         {
-            // ticket 11: the Task already failed terminal with `context_too_large` (no Run rows, job
+            // the Task already failed terminal with `context_too_large` (no Run rows, job
             // failed, command failed) — nothing to release
             return;
         }
@@ -330,12 +330,12 @@ public sealed class JobQueueWorker(
                 await CancelAsync(AgentCommandRejectionReasons.RuntimeDispatchFailed);
                 break;
             case DispatchOutcome.Superseded:
-                break; // ticket 14: the claim lost to /stop mid-flight — prepared rows removed, nothing to release
+                break; // the claim lost to /stop mid-flight — prepared rows removed, nothing to release
         }
     }
 
     /// <summary>
-    /// Ticket 11 (decision 63): the Context Assembler runs BEFORE RunPrepare so that — per the spec —
+    /// The Context Assembler runs BEFORE RunPrepare so that
     /// mandatory context that cannot fit fails the Task with `context_too_large` while the Run is
     /// NEVER created (no Run/AgentSession/Container/Workspace rows, no snapshot, no dispatch). When the
     /// context fits, the Run is prepared carrying the assembled package for the dispatcher to freeze.

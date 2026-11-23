@@ -7,11 +7,11 @@ using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller.GitHub;
 
-/// <summary>Result of the deleted-comment sweep's direct re-check (decision 77): GitHub reports the
+/// <summary>Result of the deleted-comment sweep's direct re-check: GitHub reports the
 /// resource with `Found=false` exactly on a confirmed 404 — every other outcome is an exception.</summary>
 public sealed record GitHubSingle(bool Found, JsonElement? Item);
 
-/// <summary>One GitHub REST list page (decision 53): parsed items, `Link` rel="next" target, and the
+/// <summary>One GitHub REST list page: parsed items, `Link` rel="next" target, and the
 /// rate-limit/conditional-response headers. A 304 (If-None-Match hit) yields NotModified=true with no
 /// items — GitHub reports it before counting against the primary limit.</summary>
 public sealed record GitHubPage(
@@ -24,7 +24,7 @@ public sealed record GitHubPage(
     int? RetryAfterSeconds);
 
 /// <summary>
-/// GitHub REST reads the Poller needs (decisions 4/53): list endpoints with page size 100, `Link`
+/// GitHub REST reads the Poller needs: list endpoints with page size 100, `Link`
 /// header paging, `If-None-Match` conditional requests, and `Retry-After`/`X-RateLimit-Reset`
 /// extraction. Header discipline mirrors the Outbox worker's GitHubWriteClient: Bearer PAT, GitHub
 /// JSON accept, own user agent. Exception messages carry path, status, and response detail — with the
@@ -73,7 +73,7 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
         }
     }
 
-    /// <summary>Single-object GET for direct re-checks (deleted-comment sweep, decision 77): `Found=false`
+    /// <summary>Single-object GET for direct re-checks (deleted-comment sweep): `Found=false`
     /// exactly on a confirmed 404; 200 yields the parsed object. Any other status keeps the shared
     /// classification — rate-limit exceptions propagate to the cycle, other failures throw
     /// GitHubReadException so ambiguous outcomes can never mean deletion.</summary>
@@ -106,7 +106,7 @@ public sealed class GitHubReadClient(HttpClient httpClient, string pat)
     {
         var detail = GitHubHttp.Redact((await response.Content.ReadAsStringAsync(cancellationToken)).Trim(), _pat);
         var message = $"{path}: HTTP {(int)response.StatusCode}: {detail}";
-        // decision 53: 403-with-primary-limit-exhausted and 429 are rate limits; every other 403 is a
+        // 403-with-primary-limit-exhausted and 429 are rate limits; every other 403 is a
         // plain error (mirrors the outbox classification precedent).
         if (response.StatusCode == HttpStatusCode.Forbidden)
         {

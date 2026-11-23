@@ -9,8 +9,8 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.Platform.Http;
 
 /// <summary>
-/// Uniform operational endpoints every service exposes (§13/§14):
-/// /healthz liveness, /readyz aggregated readiness, /metrics §14 baseline.
+/// Uniform operational endpoints every service exposes:
+/// /healthz liveness, /readyz aggregated readiness, /metrics baseline.
 /// </summary>
 public static class PlatformEndpoints
 {

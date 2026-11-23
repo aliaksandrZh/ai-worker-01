@@ -83,7 +83,7 @@ public class CommentsSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
         await new IssueCommentsStream().SyncAsync(PollerTestSupport.NewRun(db, repo, handler), CancellationToken.None);
 
         var row = await db.GitHubComments.AsNoTracking().SingleAsync(c => c.GithubCommentId == 999);
-        Assert.Equal("v2 - edited", row.Body); // body is always the latest synced version (02 §5)
+        Assert.Equal("v2 - edited", row.Body); // body is always the latest synced version
         Assert.Equal(new DateTime(2026, 11, 19, 12, 0, 0, DateTimeKind.Utc), row.UpdatedAtGithub);
         var events = await db.GitHubEvents.AsNoTracking().ToListAsync();
         Assert.Single(events, e => e.EventType == GitHubEventTypes.IssueCommentCreated);

@@ -11,7 +11,7 @@ public interface IWorkerMetrics
     IEnumerable<KeyValuePair<string, object?>> Collect();
 }
 
-/// <summary>Worker baseline metrics per §13: running + heartbeat + last-successful-cycle, plus host extras.</summary>
+/// <summary>Worker baseline metrics: running + heartbeat + last-successful-cycle, plus host extras.</summary>
 public abstract class WorkerMetricsBase(WorkerLoopState state) : IWorkerMetrics
 {
     public IEnumerable<KeyValuePair<string, object?>> Collect()

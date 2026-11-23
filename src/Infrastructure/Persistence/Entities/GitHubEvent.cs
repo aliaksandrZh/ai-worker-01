@@ -1,7 +1,7 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Normalized detection events (02 §7, decision 78 names). The `*CommentDeleted` variants are
-/// produced by the deleted-comment sweep (ticket 05); the rest are produced by tickets 04 streams.</summary>
+/// <summary>Normalized detection events. The `*CommentDeleted` variants are
+/// produced by the deleted-comment sweep; the rest are produced by the Poller streams.</summary>
 public static class GitHubEventTypes
 {
     public const string WorkItemCreated = "work_item_created";
@@ -20,8 +20,8 @@ public static class GitHubEventTypes
     public const string PullRequestSynchronized = "pull_request_synchronized";
 }
 
-/// <summary>Detection path enumeration (02 §7/decision 78). Ticket 04 emits rest_resource_sync and
-/// snapshot_diff; timeline_api and full_reconciliation arrive with ticket 05.</summary>
+/// <summary>Detection path enumeration. Current sources: rest_resource_sync and
+/// snapshot_diff; timeline_api and full_reconciliation are reserved.</summary>
 public static class GitHubEventSources
 {
     public const string RestResourceSync = "rest_resource_sync";
@@ -30,9 +30,9 @@ public static class GitHubEventSources
     public const string FullReconciliation = "full_reconciliation";
 }
 
-/// <summary>Orchestrator-driven lifecycle (03 §7): the Poller always writes `pending`; the command
-/// processor (ticket 06) transitions comment events pending → processing → processed/failed (or back
-/// to pending when the authorization check defers). The event consumer (ticket 07) extends the set.</summary>
+/// <summary>Orchestrator-driven lifecycle: the Poller always writes `pending`; the command
+/// processor transitions comment events pending → processing → processed/failed (or back
+/// to pending when the authorization check defers). The event consumer extends the set.</summary>
 public static class GitHubEventStatuses
 {
     public const string Pending = "pending";
@@ -42,10 +42,9 @@ public static class GitHubEventStatuses
 }
 
 /// <summary>
-/// Raw GitHub timeline event names (task 05, decision 79). NOT decision-78 normalized types: rows with
-/// these event_type values are the raw timeline records (audit trail + decision-79 reservation —
-/// `connected`/`disconnected` create no WorkItemLink rows). Ticket 07's event processor must treat
- 
+/// Raw GitHub timeline event names. NOT normalized types: rows with
+/// these event_type values are the raw timeline records (audit trail —
+/// `connected`/`disconnected` create no WorkItemLink rows). The event processor must treat
 /// unknown/raw types as recorded no-ops (dispatch by (source, event_type)).
 /// </summary>
 public static class GitHubTimelineEvents
@@ -57,7 +56,7 @@ public static class GitHubTimelineEvents
 }
 
 /// <summary>
-/// A change the Poller detected (02 §7): one row per detection with a decision-78 normalized event_type,
+/// A change the Poller detected: one row per detection with a normalized event_type,
 /// a JSONB payload describing the change, and a `dedupe_key` — stable external ID or deterministic
 /// fingerprint — unique per (source, dedupe_key). WorkItemId is nullable until resolved; FK SetNull.
 /// </summary>

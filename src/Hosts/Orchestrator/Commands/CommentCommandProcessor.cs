@@ -12,23 +12,23 @@ namespace PiAgent.Orchestrator.Commands;
 /// <summary>
 /// Consumes `issue_comment_created` GitHubEvent rows (Poller-written, `pending`) and turns synchronized
 /// comments into persisted `AgentCommand` rows: the shared acceptance stage (CommandIngestion, also
-/// used by the task-08 `POST /internal/commands` hook) runs the grammar and policy checks from the
+/// used by the `POST /internal/commands` hook) runs the grammar and policy checks from the
 /// synced `Repository.Configuration` (repository pause, permitted commands/types, command-target types),
-/// then this file runs the allowlist + collaborator-permission check (decision 66).
+/// then this file runs the allowlist + collaborator-permission check.
 /// A comment produces at most one AgentCommand ever (unique GitHub comment ID =
-/// idempotency key, 02 §11); event replays after a crash are no-ops. Rejections persist their reason
-/// and enqueue exactly one Outbox reply (ticket 03 delivers). After authorization: task-producing
-/// commands are admitted (task 07); control commands /status and /help are answered by
-/// ControlCommandHandler (task 08) with exactly one Outbox reply and no Workflow/Task/Run writes
-/// (decision 29); /stop (14) and /retry (15) remain `authorized` for later tickets. Transient
+/// idempotency key); event replays after a crash are no-ops. Rejections persist their reason
+/// and enqueue exactly one Outbox reply. After authorization: task-producing
+/// commands are admitted; control commands /status and /help are answered by
+/// ControlCommandHandler with exactly one Outbox reply and no Workflow/Task/Run writes;
+/// /stop and /retry remain `authorized` for their handlers. Transient
 /// permission-lookup failures
-/// leave the command `received` with the event released back to `pending` — retried on a later tick
-/// (decision 66); a 401/non-rate-limit 403 is a system configuration error (log + metric, never a
-/// per-user rejection, no PAT fallback — decisions 65/66). The loop only claims
-/// `issue_comment_created`: edits never retrigger (decision 39) and review comments are context only
-/// (06 §1). Cold-start gate: nothing is claimed or persisted until configuration synchronization
-/// completes. Single-instance V1: claim + orphan recovery rely on the Orchestrator being one process;
-/// the durable-job leases + queue consumer arrived with task 07 and serialize work the same way.
+/// leave the command `received` with the event released back to `pending` — retried on a later tick;
+/// a 401/non-rate-limit 403 is a system configuration error (log + metric, never a
+/// per-user rejection, no PAT fallback). The loop only claims
+/// `issue_comment_created`: edits never retrigger and review comments are context only.
+/// Cold-start gate: nothing is claimed or persisted until configuration synchronization
+/// completes. Single instance: claim + orphan recovery rely on the Orchestrator being one process;
+/// the durable-job leases + queue consumer serialize work the same way.
 /// </summary>
 public sealed class CommentCommandProcessor(
     IServiceScopeFactory scopeFactory,
@@ -45,7 +45,7 @@ public sealed class CommentCommandProcessor(
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
         if (!configurationState.Synchronized || string.IsNullOrEmpty(configurationState.BotLogin))
-            return; // cold-start gate (01 §13): defer — claim nothing, persist nothing
+            return; // cold-start gate: defer — claim nothing, persist nothing
         if (DateTime.UtcNow < _pauseUntilUtc)
             return; // the permission lookup is honoring rate-limit backoff — this tick defers
 
@@ -54,7 +54,7 @@ public sealed class CommentCommandProcessor(
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            // Crash recovery: a `processing` comment event cannot survive a tick (single-instance V1),
+            // Crash recovery: a `processing` comment event cannot survive a tick (single instance),
             // so leftovers at tick start are released for the claim below — saved FIRST so the claim
             // query (which runs against the committed DB state) sees them.
             var orphans = await db.GitHubEvents
@@ -142,7 +142,7 @@ public sealed class CommentCommandProcessor(
 
             if (string.Equals(comment.AuthorLogin, configurationState.BotLogin, StringComparison.Ordinal))
             {
-                // bot-authored comments never trigger (06 §1) — no row, no reply
+                // bot-authored comments never trigger — no row, no reply
                 MarkProcessed(githubEvent);
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
@@ -161,7 +161,7 @@ public sealed class CommentCommandProcessor(
                     workItem, repository, cancellationToken);
                 if (accepted is null || accepted.Status != AgentCommandStatuses.Received)
                 {
-                    // mentioned but context-only (decision 45), or fresh and already rejected
+                    // mentioned but context-only, or fresh and already rejected
                     MarkProcessed(githubEvent);
                     await db.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
@@ -174,11 +174,11 @@ public sealed class CommentCommandProcessor(
                 MarkProcessed(githubEvent);
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                return; // idempotent replay: the command was already handled (04 §2)
+                return; // idempotent replay: the command was already handled
             }
 
             // Authorization-only retry for a `received` command: no reparse, no policy recheck —
-            // exactly the deferred check (decision 66; claim-time rechecks are ticket 07's contract).
+            // exactly the deferred check (claim-time rechecks are the queue worker's contract).
             var deferred = await AuthorizeCommandAsync(db, command, comment, workItem, repository, cancellationToken);
             if (deferred is { } pause)
             {
@@ -202,9 +202,9 @@ public sealed class CommentCommandProcessor(
             if (outcome is { } rejection)
                 await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);
             else if (command.Status == AgentCommandStatuses.Authorized && command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
-                // Control commands: /status//help answered in place (task 08, decisions 29/71/75); /stop is
-                // a state-changing control path handled by StopCommandHandler (ticket 14, decisions 38/61)
-                // and /retry by RetryCommandHandler (ticket 15, decisions 27/65/70). The runtime-signal
+                // Control commands: /status//help answered in place; /stop is
+                // a state-changing control path handled by StopCommandHandler
+                // and /retry by RetryCommandHandler. The runtime-signal
                 // client rides the scope (same transaction precedent as the collaborator permission lookup HTTP).
                 await ControlCommandHandler.HandleAsync(db, command, workItem, repository,
                     scope.ServiceProvider.GetService<RuntimeApiClient>(), metrics, cancellationToken);
@@ -268,9 +268,9 @@ public sealed class CommentCommandProcessor(
                 return null;
 
             default:
-                // Transient → stays `received`, event released, check deferred (decision 66).
+                // Transient → stays `received`, event released, check deferred.
                 // SystemConfigError → the PAT problem: same deferral + surfaced system error;
-                // never a per-user rejection and never a different PAT (decisions 65/66).
+                // never a per-user rejection and never a different PAT.
                 if (outcome.Kind == PermissionKind.SystemConfigError)
                     metrics.RecordAuthorizationSystemError();
                 return outcome.RetryAfter is { } retryAfter

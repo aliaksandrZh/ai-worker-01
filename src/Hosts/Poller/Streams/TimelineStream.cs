@@ -10,7 +10,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// `timeline` stream (decision 53 family `issues/{n}/timeline`, task 05): raw per-work-item timeline
+/// `timeline` stream (`issues/{n}/timeline` family): raw per-work-item timeline
 /// events feeding WorkItemLink derivation. Visit rule (approved D3): an item is visited when its synced
 /// `updated_at_github` moved past the stored visit — closure, cross-references, review requests, and
 /// connect/disconnect all bump it. Timelines list ascending by event id and support no `since`; pages
@@ -21,12 +21,12 @@ namespace PiAgent.Poller.Streams;
 /// The six in-scope event types persist as `github_event` rows (`source = timeline_api`): raw GitHub
 /// names for `cross-referenced`/`closed`/`connected`/`disconnected`, normalized names for
 /// `review_requested`/`review_request_removed` (identical strings). Dedupe key `tl:{event_id}` (stable
-/// external id; deterministic fingerprint fallback, 02 §7). Links (02 §4, decision 51; D1 typed role
-/// columns, D2 option A strict): `cross-referenced` between a stored same-repository Issue↔PR pair →
+/// external id; deterministic fingerprint fallback). Links (typed role
+/// columns, strict option): `cross-referenced` between a stored same-repository Issue↔PR pair →
 /// `related_to` (`github_cross_reference`); `closed` on an ISSUE timeline whose `commit_id` commit
 /// message carries closing keywords resolves the introducing merged PR via the ad-hoc
 /// `commits/{commit_id}/pulls` read → `closes` (`github_closing_reference`). `connected`/`disconnected`
-/// stay raw linkless records (decision 79); branch names are never consulted anywhere.
+/// stay raw linkless records; branch names are never consulted anywhere.
 ///
 /// An unresolved link event holds back the item's whole visit — the cursor entry is not written, so
 /// the next cycle re-fetches once the counterpart WorkItem syncs (comments-stream boundary pattern;
@@ -71,7 +71,7 @@ public sealed class TimelineStream : IRepositoryStream
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing advances (decision 53)
+            throw; // the cycle must stop for the whole run — nothing advances
         }
         catch (Exception exception)
         {
@@ -214,7 +214,7 @@ public sealed class TimelineStream : IRepositoryStream
             case "review_requested":
             case "review_request_removed":
             default:
-                return (false, null); // raw record only — no link semantics (decision 79 for the first two)
+                return (false, null); // raw record only — no link semantics for the first two
         }
     }
 
@@ -224,11 +224,11 @@ public sealed class TimelineStream : IRepositoryStream
         if (snapshot.SourceIssueNumber is not { } source)
             return (false, null);
 
-        // same-repository guard (decision 51 scope): the referencing item must live in our repository
+        // same-repository guard: the referencing item must live in our repository
         if (!IsSameRepository(run, snapshot.SourceIssueRepositoryUrl))
             return (false, null);
 
-        // V1 links are Issue↔PR pairs (D1 typed role columns): owner issue + referencing PR, or the mirror
+        // links are Issue↔PR pairs (typed role columns): owner issue + referencing PR, or the mirror
         var ownerIsIssue = owner.Type == WorkItemTypes.Issue;
         var sourceIsPullRequest = snapshot.SourceIsPullRequest == true;
         if (ownerIsIssue != sourceIsPullRequest)
@@ -264,7 +264,7 @@ public sealed class TimelineStream : IRepositoryStream
         if (introducers is null)
             return (true, null); // transient commits lookup failure — retry next visit
         if (introducers.Count == 0)
-            return (false, null); // direct keyword commit without a PR — decision 51 links are Issue↔PR only
+            return (false, null); // direct keyword commit without a PR — links are Issue↔PR only
 
         var resolved = new List<Guid>();
         foreach (var introducer in introducers)
@@ -282,9 +282,9 @@ public sealed class TimelineStream : IRepositoryStream
         @"(?i)\b(close[sd]?|fix(ed|es)?|resolv(e[sd]|es)?)\s*:?\s*#\d+",
         RegexOptions.Compiled);
 
-    /// <summary>Ad-hoc `GET commits/{sha}/pulls` read (approved D2): the merged PR that introduced the
+    /// <summary>Ad-hoc `GET commits/{sha}/pulls` read: the merged PR that introduced the
     /// closing commit. 404 → no associated PR; any other failure → transient holdback; rate limits
-    /// propagate to the cycle (decision 53).</summary>
+    /// propagate to the cycle.</summary>
     private static async Task<List<IntroducerPullRequestSnapshot>?> IntroducersAsync(StreamRun run,
         string commitId, CancellationToken cancellationToken)
     {
@@ -358,8 +358,8 @@ public sealed class TimelineStream : IRepositoryStream
         _ => false,
     };
 
-    /// <summary>Stable external event id when present (`tl:{id}`), else a deterministic fingerprint
-    /// (02 §7): owner, event, unix second, and the distinguishing fields.</summary>
+    /// <summary>Stable external event id when present (`tl:{id}`), else a deterministic fingerprint:
+    /// owner, event, unix second, and the distinguishing fields.</summary>
     private static string EventKey(long number, TimelineEventSnapshot snapshot) => snapshot.Id is { } id
         ? $"tl:{id}"
         : $"tl:fp:{number}:{snapshot.EventType}:{Unix(snapshot.CreatedAt ?? DateTime.UtcNow)}:{Sha8(string.Join('|',

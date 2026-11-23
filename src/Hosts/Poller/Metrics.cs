@@ -4,7 +4,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.Poller;
 
-/// <summary>§14 poller metrics (live since task 04): cycle duration, success lag, error/rate-limit counters.</summary>
+/// <summary>Poller metrics: cycle duration, success lag, error/rate-limit counters.</summary>
 public sealed class PollerMetrics(WorkerLoopState state, PollerState pollerState) : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()

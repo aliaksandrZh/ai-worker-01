@@ -4,8 +4,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Config;
 
 /// <summary>
-/// Config-plane YAML parsing (task 02): strict schema, unit-string values, diagnosable errors
-/// naming file and path, and the decision-49/§21 distinctions (allowlist absent vs empty).
+/// Config-plane YAML parsing: strict schema, unit-string values, diagnosable errors
+/// naming file and path, and the allowlist distinctions (absent vs empty).
 /// Fixtures write temp-dir config trees; ConfigParser.Parse(configRoot) is the public surface.
 /// </summary>
 public class ConfigParserTests : IDisposable
@@ -450,7 +450,7 @@ public class ConfigParserTests : IDisposable
         Assert.Contains("planner", exception.Message);
     }
 
-    /// <summary>Shipped configuration integrity (ticket 12): the real shipped tree (deploy/config yamls
+    /// <summary>Shipped configuration integrity: the real shipped tree (deploy/config yamls
     /// + repo-root agents/ profiles) must parse under the strict schema — a dropped key in a
     /// profile.yaml aborts the Orchestrator at startup otherwise, which CI should catch, not the next
     /// stack start. Skipped when the layout is absent (packaged CI).</summary>
@@ -465,9 +465,9 @@ public class ConfigParserTests : IDisposable
             var parsed = ConfigParser.Parse(configRoot);
             Assert.Contains(parsed.Profiles, p => p.Name == "planner");
             var planner = parsed.Profiles.Single(p => p.Name == "planner");
-            Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
-            Assert.Equal("1.2.0", planner.BridgeVersion); // ticket 13 bumped the shared bridge (permission_blocked recording)
-            // ticket 19: the reviewer profile is shipped beside the planner and parses under the same strict schema
+            Assert.Equal(["github-write-pat.txt"], planner.Secrets); // the repo write PAT reference
+            Assert.Equal("1.2.0", planner.BridgeVersion); // the shared bridge version (permission_blocked recording)
+            // the reviewer profile is shipped beside the planner and parses under the same strict schema
             var reviewer = parsed.Profiles.Single(p => p.Name == "reviewer");
             Assert.Equal(["github-write-pat.txt"], reviewer.Secrets);
             Assert.Equal("1.2.0", reviewer.BridgeVersion);

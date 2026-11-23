@@ -12,7 +12,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.BuildWorker;
 
 /// <summary>
-/// The Build Worker internal build API + runner over the POST/GET contract (04 §6, decision 81):
+/// The Build Worker internal build API + runner over the POST/GET contract:
 /// idempotency by buildId (202 as-is; payload conflict → 409), 404 for unknown ids, service-token
 /// auth, terminal docker-build failures with a durable build log, pinned-context validation, and
 /// execution-retry semantics against a fake Docker Engine.

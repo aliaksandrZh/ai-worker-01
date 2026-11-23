@@ -3,10 +3,10 @@ using PiAgent.Orchestrator.Commands;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The GitHub notification lines for claim-time cancellations of queued Tasks (04 §2: "a Task that
-/// became invalid is cancelled or rejected with a recorded reason"; 06 §13: precondition-failed
+/// The GitHub notification lines for claim-time cancellations of queued Tasks ("a Task that
+/// became invalid is cancelled or rejected with a recorded reason"; precondition-failed
 /// commands notify). Published through the Outbox with the same reason code recorded on the
-/// Task/Job/Command rows. Decision 31 text for `review_head_changed_before_execution` explicitly asks
+/// Task/Job/Command rows. For `review_head_changed_before_execution` the text explicitly asks
 /// for another `/review`.
 /// </summary>
 public static class ClaimCancellationNotices

@@ -7,8 +7,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Config;
 
 /// <summary>
-/// ConfigSyncService over real postgres: one transaction (no partial rows), decision-49/§21
-/// configuration JSON, decision-53 cursors, decision-81 version dedup/rule re-point, and the
+/// ConfigSyncService over real postgres: one transaction (no partial rows), the
+/// configuration JSON, sync cursors, version dedup/rule re-point, and the
 /// owner-approved resync semantics (pause/remove/disable).
 /// </summary>
 public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
@@ -74,7 +74,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         var result = await new ConfigSyncService(db).SyncAsync(sync);
 
         Assert.Equal(1, result.RepositoriesCreated);
-        Assert.Equal(7, result.CursorsCreated); // six decision-53 stream families + the deleted-comment sweep row
+        Assert.Equal(7, result.CursorsCreated); // six stream families + the deleted-comment sweep row
         Assert.Equal(1, result.VersionsAdded);
         Assert.Equal(1, result.RoutingRulesUpserted);
 
@@ -190,7 +190,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         await using var db = postgres.NewDbContext();
         var sync = Sync(config, _lastRoot, "abc123");
         await new ConfigSyncService(db).SyncAsync(sync);
-        var v1 = await db.AgentProfileVersions.AsNoTracking().SingleAsync();
+        var first = await db.AgentProfileVersions.AsNoTracking().SingleAsync();
 
         var changedConfig = Parse(plannerYaml: ConfigSamples.PlannerProfile.Replace("max_context_tokens: 200000", "max_context_tokens: 250000"));
         var changed = Sync(changedConfig, _lastRoot, "abc123");
@@ -201,7 +201,7 @@ public class ConfigSyncServiceTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(2, versions.Count);
         Assert.Equal(ProfileVersionStates.Draft, versions[1].State);
         Assert.Equal(2, versions[1].Version);
-        Assert.NotEqual(v1.ConfigHash, versions[1].ConfigHash);
+        Assert.NotEqual(first.ConfigHash, versions[1].ConfigHash);
 
         var rule = await db.AgentProfileRoutingRules.AsNoTracking().SingleAsync();
         Assert.Equal(versions[1].Id, rule.AgentProfileVersionId);

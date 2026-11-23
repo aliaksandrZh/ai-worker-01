@@ -1,19 +1,19 @@
 namespace PiAgent.Orchestrator.Context;
 
 /// <summary>
-/// Hard size limits of the Context Assembler (02 §14a/§17, 04 §7, decision 63). All values are
-/// UTF-8 BYTES. V1 has no tokenizer (decision 56: model selection is V2), so token limits are
-/// enforced through <see cref="ContextTokenEstimator"/> — see OBS-6 in docs/observations.md.
+/// Hard size limits of the Context Assembler. All values are
+/// UTF-8 BYTES. There is no tokenizer (model selection is deferred), so token limits are
+/// enforced through <see cref="ContextTokenEstimator"/>.
 /// </summary>
 public static class ContextBudgets
 {
-    /// <summary>Per-artifact cap (02 §17 / decision 32; also enforced by the Runtime API at artifact creation).</summary>
+    /// <summary>Per-artifact cap (also enforced by the Runtime API at artifact creation).</summary>
     public const long MaxArtifactBytes = 256 * 1024;
 
-    /// <summary>Total artifact content cap per Task input (02 §17 / decision 32).</summary>
+    /// <summary>Total artifact content cap per Task input.</summary>
     public const long MaxArtifactTotalBytes = 512 * 1024;
 
-    /// <summary>Cap over the whole serialized input — the frozen RunContextSnapshot content (decision 63).</summary>
+    /// <summary>Cap over the whole serialized input — the frozen RunContextSnapshot content.</summary>
     public const long MaxSerializedInputBytes = 512 * 1024;
 
     /// <summary>The effective main budget over the serialized input: min(serialized-input limit, token limit
@@ -24,16 +24,16 @@ public static class ContextBudgets
 }
 
 /// <summary>
-/// THE V1 token estimator (decision 63's `max_context_tokens` enforcement). V1 has no tokenizer: model
-/// selection is deferred to V2 (decision 56), so tokens are approximated deterministically as
+/// THE token estimator (`max_context_tokens` enforcement). There is no tokenizer: model
+/// selection is deferred, so tokens are approximated deterministically as
 /// `ceil(utf8_bytes / 4)` over the serialized input. The estimate is applied to the serialized JSON —
-/// the Bridge renders that JSON as ONE structured Markdown prompt (04 §4, decision 63) of roughly the
+/// the Bridge renders that JSON as ONE structured Markdown prompt of roughly the
 /// same size — and is conservative (JSON overhead, escaped non-ASCII and ASCII-only content are all
-/// over-counted rather than under-counted). See OBS-6 in docs/observations.md for the revisit trigger.
+/// over-counted rather than under-counted).
 /// </summary>
 public static class ContextTokenEstimator
 {
-    /// <summary>The V1 heuristic: bytes per token (ASCII-heavy JSON averages ~4 bytes/token).</summary>
+    /// <summary>The heuristic: bytes per token (ASCII-heavy JSON averages ~4 bytes/token).</summary>
     public const int BytesPerToken = 4;
 
     /// <summary>`ceil(utf8Bytes / BytesPerToken)` — never fractional.</summary>
@@ -51,7 +51,7 @@ public static class ContextTokenEstimator
     public static long TokenBudgetBytes(long maxContextTokens)
     {
         if (maxContextTokens <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxContextTokens), "max_context_tokens must be positive (decision 56)");
+            throw new ArgumentOutOfRangeException(nameof(maxContextTokens), "max_context_tokens must be positive");
         return maxContextTokens * BytesPerToken;
     }
 }

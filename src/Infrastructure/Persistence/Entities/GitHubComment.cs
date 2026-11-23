@@ -1,6 +1,6 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>GitHubComment discriminator (02 §5): conversation comment (Issue or PR) vs inline PR review comment.</summary>
+/// <summary>GitHubComment discriminator: conversation comment (Issue or PR) vs inline PR review comment.</summary>
 public static class GitHubCommentKinds
 {
     public const string IssueComment = "issue_comment";
@@ -8,9 +8,9 @@ public static class GitHubCommentKinds
 }
 
 /// <summary>
-/// A GitHub comment (02 §5): `issue_comment` for Issue/PR conversation comments, `review_comment` for
+/// A GitHub comment: `issue_comment` for Issue/PR conversation comments, `review_comment` for
 /// inline PR review comments. `body` is always the latest synced version; deleted comments are
-/// tombstoned (`is_deleted`/`deleted_at`), never removed (sweep = ticket 05, decision 77).
+/// tombstoned (`is_deleted`/`deleted_at`), never removed (the deleted-comment sweep tombstones only).
 /// `github_review_id` is an external ID only — no DB FK, the review row may not be known yet.
 /// </summary>
 public class GitHubComment
@@ -25,13 +25,13 @@ public class GitHubComment
     public DateTime UpdatedAtGithub { get; set; }
     /// <summary>Local reference when the API provides one.</summary>
     public long? InReplyToCommentId { get; set; }
-    /// <summary>External review ID for inline comments; no DB FK (02 §5).</summary>
+    /// <summary>External review ID for inline comments; no DB FK.</summary>
     public long? GithubReviewId { get; set; }
     public string? Path { get; set; }
     public string? CommitSha { get; set; }
     public int? DiffPosition { get; set; }
     public DateTime LastSyncedAt { get; set; }
-    /// <summary>Tombstone flag; set by the deleted-comment sweep (ticket 05); record stays.</summary>
+    /// <summary>Tombstone flag; set by the deleted-comment sweep; record stays.</summary>
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
 }

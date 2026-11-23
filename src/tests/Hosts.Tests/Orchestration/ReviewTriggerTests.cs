@@ -12,7 +12,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Orchestration;
 
 /// <summary>
-/// Ticket 19 (06 §11, decisions 17/31/74): system-owned automatic initial review triggers and their
+/// System-owned automatic initial review triggers and their
 /// claim-time cancellation. Covers the once-per-Workflow guard, draft deferral and the draft→ready
 /// transition, the explicit-`/review` suppression, and request withdrawal before execution.
 /// </summary>
@@ -95,7 +95,7 @@ public class ReviewTriggerTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(OrchestrationTaskTypes.Review, task.Type);
         Assert.Equal(first.Id, task.TriggerGithubEventId);
         Assert.Null(task.TriggerCommandId);
-        Assert.NotNull(task.TriggerAtGithub); // no-new-input gate anchor (owner decision 2026-11-23)
+        Assert.NotNull(task.TriggerAtGithub); // no-new-input gate anchor
         Assert.Equal("head-1", task.TargetHeadSha);
         Assert.Equal("base-1", task.TargetBaseSha);
         Assert.NotNull(workflow.InitialReviewCreatedAt);
@@ -237,7 +237,7 @@ public class ReviewTriggerTests(PostgresFixture postgres) : IClassFixture<Postgr
     [Fact]
     public async Task AutomaticReview_HeadDriftBeforeStart_CancelsWithHeadChanged_AndNotifies()
     {
-        // SHA drift before a queued automatic review starts: cancel + system comment asking for /review (decision 31)
+        // SHA drift before a queued automatic review starts: cancel + system comment asking for /review
         await postgres.ResetAsync();
         await using var db = postgres.NewDbContext();
         var workItem = await SeedPullRequestAsync(db, head: "head-1");

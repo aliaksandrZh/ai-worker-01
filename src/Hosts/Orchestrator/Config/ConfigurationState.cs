@@ -3,14 +3,14 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Orchestrator.Config;
 
 /// <summary>
-/// Cold-start gate (01 §13): until configuration synchronization completes successfully the
+/// Cold-start gate: until configuration synchronization completes successfully the
 /// Orchestrator accepts no task-producing commands; /status, /help and health endpoints stay available.
-/// The synchronized `github.bot_login` and the execution cap (`max_concurrent_runs`, decision 10) travel
+/// The synchronized `github.bot_login` and the execution cap (`max_concurrent_runs`) travel
 /// with the gate state — startup-only sync, no hot reload (comment processor + job-queue runtime).
 /// </summary>
 public sealed class ConfigurationState
 {
-    /// <summary>The global execution cap from system.yaml (`max_concurrent_runs`, decision 10); default matches the parsed-config default.</summary>
+    /// <summary>The global execution cap from system.yaml (`max_concurrent_runs`); default matches the parsed-config default.</summary>
     public int MaxConcurrentRuns { get; private set; } = 10;
 
     public bool Synchronized { get; private set; }

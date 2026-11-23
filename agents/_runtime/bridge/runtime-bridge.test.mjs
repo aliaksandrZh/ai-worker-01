@@ -1,5 +1,5 @@
 /**
- * Node test suite for the ticket-09 Runtime Bridge + stub agent. The shared bridge source lives at
+ * Node test suite for the Runtime Bridge + stub agent. The shared bridge source lives at
  * * agents/_runtime/bridge/ (single copy, merged into every profile's pinned build snapshot — see
  * ConfigSnapshotBuilder); the stub CLI it drives stays baked in the stub profile. Runs with:
  *   node --test agents/_runtime/bridge/runtime-bridge.test.mjs
@@ -26,7 +26,7 @@ function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-// ---- EventMapper: pi→RunEvent mapping (04 §4) ----
+// ---- EventMapper: pi→RunEvent mapping ----
 
 test("EventMapper maps the prompt event sequence one to one", () => {
   const emitted = [];
@@ -61,7 +61,7 @@ test("EventMapper aggregates text deltas (no per-token events) and flushes on se
     JSON.stringify({ type: "agent_settled", data: {} }),
   ]) mapper.onLine(line);
   const assistant = emitted.filter((e) => e.type === "assistant_output");
-  assert.equal(assistant.length, 1); // aggregated BEFORE persistence (decision 58)
+  assert.equal(assistant.length, 1); // aggregated BEFORE persistence
   assert.deepEqual(assistant[0].payload, { text: "one two" });
 });
 
@@ -69,7 +69,7 @@ test("EventMapper: thinking deltas, queue updates and empty text are not events"
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    // real pi thinking stream events are typed and never become RunEvents (decision 58)
+    // real pi thinking stream events are typed and never become RunEvents
     JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "hmm" } }),
     JSON.stringify({ type: "message_update", data: { delta: "" } }),
     JSON.stringify({ type: "queue_update", data: { queued: 1 } }),
@@ -79,7 +79,7 @@ test("EventMapper: thinking deltas, queue updates and empty text are not events"
   assert.equal(emitted.length, 0);
 });
 
-// ---- real pi record shapes (pi docs json.md; ticket 12) ----
+// ---- real pi record shapes (pi docs json.md) ----
 
 test("EventMapper maps real pi shapes: nested text deltas, top-level tool events", () => {
   const emitted = [];
@@ -108,7 +108,7 @@ test("EventMapper maps real pi shapes: nested text deltas, top-level tool events
   assert.deepEqual(completed.payload, { toolCallId: "c9", toolName: "mcp__github__add_issue_comment", isError: false });
 });
 
-/** Mirrors the Bridge's decision-59 correlation set building (only error-free completed ends count). */
+/** Mirrors the Bridge's correlation set building (only error-free completed ends count). */
 function completedToolCallsFrom(records) {
   const set = new Set();
   const mapper = new EventMapper((entry) => {
@@ -132,7 +132,7 @@ test("isSuccessfulToolEnd: pi isError and stub status determine the correlation 
   assert.equal(isSuccessfulToolEnd(null), false);
 });
 
-// ---- rpc response correlation (pi docs rpc.md; ticket 12) ----
+// ---- rpc response correlation (pi docs rpc.md) ----
 
 test("RpcCorrelator correlates command ids and resolves the matching response", async () => {
   const sent = [];
@@ -207,7 +207,7 @@ test("validateManifest rejects paths escaping the workspace", () => {
   rmSync(outside, { force: true });
 });
 
-test("validateManifest enforces publication correlation (decision 42)", () => {
+test("validateManifest enforces publication correlation", () => {
   const workspace = tempDir("ws-");
   const manifest = {
     schemaVersion: 1, summary: "done", artifacts: [],
@@ -218,7 +218,7 @@ test("validateManifest enforces publication correlation (decision 42)", () => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("validateManifest enforces the mandated publication kinds (task 12, decision 42)", () => {
+test("validateManifest enforces the mandated publication kinds", () => {
   const workspace = tempDir("ws-");
   // a manifest that lists no publication at all still fails when the kind is mandated — an agent
   // that never attempted its mandatory publication cannot "succeed" unverified
@@ -237,7 +237,7 @@ test("validateManifest enforces the mandated publication kinds (task 12, decisio
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("terminalFromManifest carries the Bridge-discovered session file path (decision 57)", () => {
+test("terminalFromManifest carries the Bridge-discovered session file path", () => {
   process.env.PI_WORKSPACE = tempDir("ws-nogit-");
   const terminal = terminalFromManifest({ schemaVersion: 1, summary: "s", artifacts: [] }, "run-9",
     "/session/2026-11-21T15-31-18-187Z_run-9.jsonl");
@@ -271,7 +271,7 @@ test("gitFacts return nulls when there is no repository", () => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("renderPrompt renders the ticket-11 context package sections", () => {
+test("renderPrompt renders the context package sections", () => {
   const prompt = renderPrompt({
     schemaVersion: 2,
     profile: { name: "planner", version: 4 },
@@ -383,7 +383,7 @@ test("spool redelivers the same eventIds after a bridge restart", async () => {
   rmSync(spoolDir, { recursive: true, force: true });
 });
 
-// ---- log trio with the shared 50 MiB budget (decision 43) ----
+// ---- log trio with the shared 50 MiB budget ----
 
 test("log trio rotates under the shared budget, oldest segments first", () => {
   const logsDir = tempDir("logs-");
@@ -442,7 +442,7 @@ test("stub handshake: get_state echoes the discovered session file, then the pro
   assert.equal(state.success, true);
   assert.equal(state.id, "req-1");
   assert.equal(state.data.sessionId, "handshake-1");
-  assert.equal(state.data.sessionFile, join(sessionDir, "handshake-1.jsonl")); // decision 57 discovery
+  assert.equal(state.data.sessionFile, join(sessionDir, "handshake-1.jsonl")); // discovery
   const accepted = records.find((r) => r.type === "response" && r.command === "prompt");
   assert.equal(accepted.id, "req-2");
   assert.equal(accepted.data.disposition, "started");
@@ -478,7 +478,7 @@ test("stub agent needs_human behavior writes the outcome flag", async () => {
   rmSync(workspace, { recursive: true, force: true });
 });
 
-// ---- graceful stop (ticket 14, decision 61) ----
+// ---- graceful stop ----
 
 import { cancelledTerminal, listChildPids } from "./stop.mjs";
 import { createServer } from "node:http";
@@ -499,7 +499,7 @@ test("cancelledTerminal: deterministic id, reason and session path carried", () 
 });
 
 test("listChildPids: detects children via /proc, degrades to empty without it", async () => {
-  // ticket 14's (6) verification works on Linux hosts with /proc; macOS/other hosts degrade to []
+  // the /proc verification works on Linux hosts with /proc; macOS/other hosts degrade to []
   const hasProc = existsSync("/proc");
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
   try {
@@ -653,7 +653,7 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   rmSync(dirname(tokenFile), { recursive: true, force: true });
 });
 
-// ---- ticket 13: permission_blocked / required_permission_denied (decision 69) ----
+// ---- permission_blocked / required_permission_denied ----
 
 test("EventMapper maps permission_denied to permission_blocked and collects the denial", () => {
   const emitted = [];
@@ -725,5 +725,5 @@ test("stub agent never_start behavior accepts the prompt and emits nothing (star
   clearTimeout(timer);
   child.kill("SIGKILL");
   assert.equal(accepted, true);
-  assert.equal(sawAgentStart, false); // the readiness fact never comes — ticket 13's sweeper judges it
+  assert.equal(sawAgentStart, false); // the readiness fact never comes — the sweeper judges it
 });

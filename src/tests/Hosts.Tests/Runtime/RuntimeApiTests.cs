@@ -21,7 +21,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// Ticket 09: the Runtime Run Pipeline API — the single Orchestrator-owned `/start` provisioning
+/// The Runtime Run Pipeline API — the single Orchestrator-owned `/start` provisioning
 /// endpoint (per-Run tree, per-Run credential, container via Docker with the profile version's
 /// resource limits), the four callback routes persisting RunEvents before acknowledgement (idempotent
 /// by eventId, scoped to the runId, revoked after terminal delivery), the input pull channel, stop,
@@ -55,7 +55,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(ContainerDesiredStates.Running, container.DesiredState);
         Assert.Equal("agent-stub:v1", container.ContainerImage);
         Assert.Equal("Local", container.HostId);
-        // session: 1:1, in_use, --session-id pinned per decision 57
+        // session: 1:1, in_use, --session-id pinned
         var session = await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
         Assert.Equal(AgentSessionStatuses.InUse, session.Status);
         Assert.Equal(preparation.Run.Id.ToString(), session.RuntimeSessionId);
@@ -149,7 +149,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Contains("no built image", await response.Content.ReadAsStringAsync());
     }
 
-    // ---- callback auth (decision 60) ----
+    // ---- callback auth ----
 
     private static Task<HttpResponseMessage> PostCallback(RuntimeApi api, Guid runId, string token, string route, string body)
     {
@@ -238,7 +238,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
 
         var unknown = await PostCallback(api, preparation.Run.Id, token, "events",
             $@"{{""eventId"":""evt-weird"",""type"":""thinking_delta"",""occurredAt"":""{DateTime.UtcNow:O}""}}");
-        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode); // not part of the 02 §18 set
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode); // not part of the RunEvent set
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         var logReference = artifacts.Single(a => a.Type == ArtifactTypes.LogReference);
         Assert.Equal(run.LogStorageReference, logReference.Content); // points at the directory, no content copy
 
-        // credential revoked after terminal delivery (decision 60)
+        // credential revoked after terminal delivery
         var revokedHeartbeat = await PostCallback(api, preparation.Run.Id, token, "heartbeat",
             $@"{{""eventId"":""hb-after-terminal"",""occurredAt"":""{DateTime.UtcNow:O}""}}");
         Assert.Equal(HttpStatusCode.Forbidden, revokedHeartbeat.StatusCode);
@@ -302,7 +302,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         var session = await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
         Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
 
-        // note: a terminal redelivery after revocation answers 403 by design (decision 60: revocation
+        // note: a terminal redelivery after revocation answers 403 by design (revocation
         // follows the confirmation; the Bridge removes the spool entry upon the persisted 2xx)
         Assert.Equal(2, (await db.Artifacts.AsNoTracking().Where(a => a.TaskId == preparation.Task.Id).ToListAsync()).Count);
     }
@@ -368,7 +368,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     [Fact]
     public async Task TerminalCallbacks_RecordTheBridgeDiscoveredSessionFilePath()
     {
-        // decision 57 (ticket 12): the Bridge discovers the REAL pi session path (<timestamp>_<id>.jsonl)
+        // the Bridge discovers the REAL pi session path (<timestamp>_<id>.jsonl)
         // and reports it on the terminal callbacks — the AgentSession row records the actual path.
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
         var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
@@ -518,7 +518,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
         using var stopped = JsonDocument.Parse(await stop.Content.ReadAsStringAsync());
         Assert.Equal("stopping", stopped.RootElement.GetProperty("status").GetString());
-        // ticket 14: the signal is recorded (decision-61 timeline) but the container is NOT stopped —
+        // the signal is recorded but the container is NOT stopped —
         // the Bridge performs the graceful sequence and the terminal cancelled callback stops it
         Assert.Empty(api.Docker.Stopped);
 
@@ -574,7 +574,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
 
         var unknown = await bearer.GetAsync($"/internal/runtime/runs/{Guid.NewGuid()}/stop-request");
         // the valid per-Run credential is scoped to run A — presented against another runId it is refused
-        // as callback_scope_denied (decision 60 scoping; the route 404 applies to unauthenticated callers)
+        // as callback_scope_denied (credential scoping; the route 404 applies to unauthenticated callers)
         Assert.Equal(HttpStatusCode.Forbidden, unknown.StatusCode);
         Assert.Contains("another run", await unknown.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         var bare = await api.App.GetTestClient().GetAsync($"/internal/runtime/runs/{preparation.Run.Id}/stop-request");
@@ -603,7 +603,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
         Assert.Equal(RunStatuses.Cancelled, run.Status);
         Assert.NotNull(run.CompletedAt);
-        // the cancelled delivery is a RunEvent (02 §18 vocabulary) with the delivered body persisted
+        // the cancelled delivery is a RunEvent with the delivered body persisted
         var cancelledEvent = await db.RunEvents.AsNoTracking().SingleAsync(e => e.RunId == preparation.Run.Id && e.Type == RunEventTypes.Cancelled);
         Assert.Contains("evt-terminal-cancelled", cancelledEvent.Payload, StringComparison.Ordinal);
         // terminal facts: log trio reference artifact, credential revoked, session terminated
@@ -611,8 +611,8 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.NotNull((await db.RunCredentials.AsNoTracking().SingleAsync(c => c.RunId == preparation.Run.Id)).RevokedAt);
         var session = await db.AgentSessions.AsNoTracking().SingleAsync(s => s.RunId == preparation.Run.Id);
         Assert.Equal(AgentSessionStatuses.Terminated, session.Status);
-        Assert.Equal("/session/discovered.jsonl", session.SessionFilePath); // the decision-57 path write-back
-        // decision 75: terminal delivery stops the container and releases the workspace
+        Assert.Equal("/session/discovered.jsonl", session.SessionFilePath); // the discovered-path write-back
+        // terminal delivery stops the container and releases the workspace
         Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single());
         Assert.Equal(RunStatuses.Cancelled, run.Status);
 
@@ -622,7 +622,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
             occurredAt = DateTime.UtcNow,
             reason = AgentCommandRejectionReasons.StopRequested,
         });
-        // decision 60: the per-Run credential was revoked at confirmed terminal delivery — every later
+        // the per-Run credential was revoked at confirmed terminal delivery — every later
         // callback (even an idempotent replay) is refused; the Bridge tolerates the refusal on the
         // cancelled route because the terminal state already exists.
         Assert.Equal(HttpStatusCode.Forbidden, redelivery.StatusCode);
@@ -644,7 +644,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
             (await api.Db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
         Assert.Empty(api.Docker.Stopped);
 
-        // Docker outage: desired state preserved, nothing corrupted, the sweep retries (decision 22)
+        // Docker outage: desired state preserved, nothing corrupted, the sweep retries
         await api.Db.Runs.Where(r => r.Id == preparation.Run.Id)
             .ExecuteUpdateAsync(u => u.SetProperty(r => r.StopRequestedAt, DateTime.UtcNow - StopConfirmSweeper.GraceWindow - TimeSpan.FromSeconds(10)));
         api.Docker.StopSucceeds = false;
@@ -656,7 +656,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         await sweeper.RunCycleAsync(default);
         var db = postgres.NewDbContext();
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
-        Assert.Equal(RunStatuses.Cancelled, run.Status); // reconciled cancellation (06 §8: "or reconciliation")
+        Assert.Equal(RunStatuses.Cancelled, run.Status); // reconciled cancellation ("or reconciliation")
         Assert.Contains("stop unconfirmed", run.ErrorMessage ?? "", StringComparison.Ordinal);
         Assert.Contains(preparation.Run.Id.ToString(), api.Docker.Stopped.Single()); // the hard backstop
         Assert.True(await db.Artifacts.AsNoTracking().AnyAsync(a => a.TaskId == preparation.Task.Id && a.Type == ArtifactTypes.LogReference));
@@ -708,7 +708,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         // observed: the death was confirmed (failed) and the reconciled terminal stopped it
         Assert.Equal(ContainerObservedStates.Stopped, container.ObservedState);
         Assert.NotNull(container.LastStoppedAt);
-        // ticket 13: the container died without a terminal callback — the reconciler finalizes the Run
+        // the container died without a terminal callback — the reconciler finalizes the Run
         var reloadedRun = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id);
         Assert.Equal(RunStatuses.Failed, reloadedRun.Status);
         Assert.Equal(RunErrorCodes.RuntimeFailure, reloadedRun.ErrorCode);
@@ -718,7 +718,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     [Fact]
     public async Task Reconciler_Inspect404_IsRemoved_RunsTheDeathReconciliation()
     {
-        // decision 82: Docker inspect 404 = the container is GONE (observed `removed`), never an outage —
+        // Docker inspect 404 = the container is GONE (observed `removed`), never an outage —
         // a running Run whose container vanished is reconciled failed like any other silent death.
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
         var (preparation, client, _) = await SeedWithStart(api);
@@ -763,7 +763,7 @@ internal static class RuntimeHttpClientExtensions
             new StringContent("""{"reason":"stop_requested"}""", Encoding.UTF8, "application/json"));
 }
 
-// ---- secret mounting (decision 54, exercised by the provisioning path) ----
+// ---- secret mounting (exercised by the provisioning path) ----
 
 public class StartContainerPlanTests
 {
@@ -802,10 +802,10 @@ public class StartContainerPlanTests
         Assert.Contains("github_agent_pat", error);
     }
 
-    // ---- runtime-side reference grammar (frozen rows; ticket 11b) — mirrors the Config Loader check ----
+    // ---- runtime-side reference grammar (frozen rows) — mirrors the Config Loader check ----
 
     [Fact]
-    public void ReservedCallbackName_FailsStartClosed() // per-Run callback credential mount (decision 60)
+    public void ReservedCallbackName_FailsStartClosed() // per-Run callback credential mount
     {
         var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(secretsDir);
@@ -834,7 +834,7 @@ public class StartContainerPlanTests
         Assert.Single(plan!.Binds, v => v.EndsWith(":/run/secrets/github_agent_pat:ro"));
     }
 
-    // ---- mount-source hygiene (decision 54 fail-closed; ticket 11b review) ----
+    // ---- mount-source hygiene (fail-closed) ----
 
     [Fact]
     public void SecretFile_IsEmpty_FailsStartClosed()
@@ -886,9 +886,9 @@ public class StartContainerPlanTests
         Assert.Null(error);
         var secretMounts = plan!.Binds.Where(v => v.Contains("/run/secrets/") && !v.Contains("callback-token")).ToList();
         Assert.Single(secretMounts);
-        // read-only host-managed file — only the profile's referenced name, path shape per decision 54
+        // read-only host-managed file — only the profile's referenced name, path shape per the grammar
         Assert.EndsWith("/etc/pi-agent/secrets/github_agent_pat:/run/secrets/github_agent_pat:ro", secretMounts[0]);
-        // decision 54: values travel by file mount only — the name must not leak into the environment either
+        // values travel by file mount only — the name must not leak into the environment either
         Assert.DoesNotContain("github_agent_pat", plan.Env ?? []);
     }
 
@@ -909,7 +909,7 @@ public class StartContainerPlanTests
             out var plan, out error) ? plan : null;
 
     [Fact]
-    public void RepositoryFullName_TravelsAsGitCloneRepo() // ticket 12: workspace clone provisioning input
+    public void RepositoryFullName_TravelsAsGitCloneRepo() // workspace clone provisioning input
     {
         var secretsDir = Path.Combine(Path.GetTempPath(), "plan-secrets", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(secretsDir);
@@ -924,7 +924,7 @@ public class StartContainerPlanTests
     }
 
     [Fact]
-    public void ReviewTask_TravelsPinnedShas_AndPrNumber() // ticket 19: the reviewer checks out the pinned head and forms base..head locally
+    public void ReviewTask_TravelsPinnedShas_AndPrNumber() // the reviewer checks out the pinned head and forms base..head locally
     {
         var secretsDir = Path.Combine(Path.GetTempPath(), "review-secrets", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(secretsDir);

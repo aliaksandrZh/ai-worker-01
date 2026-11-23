@@ -8,11 +8,11 @@ namespace PiAgent.HostMonitor;
 
 public sealed class HostMonitorOptions
 {
-    /// <summary>Decision 52: plain directories on persistent host storage.</summary>
+    /// <summary>Plain directories on persistent host storage.</summary>
     public string ManagedRoot { get; set; } = "/var/lib/pi-agent/workflows";
 }
 
-/// <summary>§13 health check: managed storage root reachable/exists.</summary>
+/// <summary>Health check: managed storage root reachable/exists.</summary>
 public sealed class StorageReadinessCheck(IOptions<HostMonitorOptions> options) : IReadinessCheck
 {
     public string Name => "storage";
@@ -25,7 +25,7 @@ public sealed class StorageReadinessCheck(IOptions<HostMonitorOptions> options) 
     }
 }
 
-/// <summary>§14 baseline: storage + last-cycle observation counts (ticket 13).</summary>
+/// <summary>Baseline: storage + last-cycle observation counts.</summary>
 public sealed class HostMonitorMetrics(IOptions<HostMonitorOptions> options, WorkerLoopState state, HostMonitorCycle? cycle)
     : WorkerMetricsBase(state)
 {

@@ -1,4 +1,4 @@
-# Planner agent profile image (decisions 54/56; ticket 12 mirrors the PoC pi-worker image).
+# Planner agent profile image. Own build context, own Git clone path.
 # Pi is PINNED at build time (never floating `latest`; a Pi upgrade = a new AgentProfileVersion) and
 # the profile configuration is baked at /opt/pi-agent/profile, selected via PI_CODING_AGENT_DIR
 # (settings/models/MCP/system-prompt land here as the profile defines them).
@@ -25,7 +25,7 @@ COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
 WORKDIR /workspace
 # Profile configuration (control plane) + the pinned Runtime Bridge; uid 1000 (`node`) is the user the
 # Runtime API chowns the per-Run mounts to (task 09). `/opt/pi-agent/profile` is chowned to `node`
-# below — the FILES remain image-baked (decision 56: the image is the sole source; nothing mounts over
+# below — the FILES remain image-baked (the image is the sole source; nothing mounts over
 # them), the ownership only lets pi write its own state files (mcp.log et al.) inside the ephemeral
 # container layer the same way the PoC's owned /home/pi/.pi/agent did.
 COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json /opt/pi-agent/profile/
@@ -33,11 +33,11 @@ COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
 COPY entry /usr/local/bin/agent-entry
 
 ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
-# Agent launch (decision 56): real pi in RPC mode; the Bridge appends --session-dir/--session-id per
-# Run (decision 57). PI_REQUIRED_PUBLICATION_KINDS pins the decision-42 publication mandate in the
+# Agent launch: real pi in RPC mode; the Bridge appends --session-dir/--session-id per
+# Run. PI_REQUIRED_PUBLICATION_KINDS pins the publication mandate in the
 # image: the run cannot finish `completed` without a confirmed (error-free) issue-comment publication.
 # PI_REQUIRED_PUBLICATION_KINDS / the token-file path pointer are non-secret configuration paths only —
-# the token VALUE stays in the host-managed secret file (decision 54).
+# the token VALUE stays in the host-managed secret file.
 ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=issue_comment \

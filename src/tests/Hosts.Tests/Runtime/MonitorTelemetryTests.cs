@@ -15,8 +15,8 @@ using Xunit;
 
 namespace PiAgent.Hosts.Tests.Runtime;
 
-/// <summary>Ticket 13: the Host-Monitor telemetry route (decision 62: its own service credential;
-/// stored in PostgreSQL) and the decision-77 orphan reconciler (grace → quarantine → delete, never
+/// <summary>The Host-Monitor telemetry route (its own service credential;
+/// stored in PostgreSQL) and the orphan reconciler (grace → quarantine → delete, never
 /// while a container binds the tree, never without fresh telemetry).</summary>
 public class MonitorTelemetryTests : IClassFixture<WebApplicationFactory<DockerProvisioningClient>>
 {

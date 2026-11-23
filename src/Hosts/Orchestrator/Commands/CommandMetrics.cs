@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 namespace PiAgent.Orchestrator.Commands;
 
 /// <summary>
-/// Command pipeline counters (§14: Orchestrator observes "commands, authorization, state transitions").
+/// Command pipeline counters (Orchestrator observes "commands, authorization, state transitions").
 /// Read by OrchestratorMetrics; not per-run gauges, cumulative process counters.
 /// </summary>
 public sealed class CommandMetrics

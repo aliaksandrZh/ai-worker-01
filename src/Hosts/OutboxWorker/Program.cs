@@ -15,14 +15,14 @@ builder.Services.AddPiWorkerLoop();
 builder.Services.AddSingleton<IWorkerMetrics, OutboxMetrics>();
 builder.Services.AddSingleton(new OutboxState());
 
-// Startup configuration (plan rulings 2/5): the write PAT and the one §16 knob are read ONCE here —
+// Startup configuration: the write PAT and the one knob are read ONCE here —
 // both fail the host startup with a diagnosable error (same stance as the Orchestrator's config plane).
 builder.Services.AddSingleton(Options.Create(OutboxWorkerConfig.Read(
     builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config")));
 builder.Services.AddSingleton(new GitHubWriteClient(
     new HttpClient { BaseAddress = new Uri("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30) },
     PiAgent.Platform.Secrets.PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_WRITE_PAT_FILE"], "PI_AGENT_GITHUB_WRITE_PAT_FILE",
-    "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT (decision 50)")));
+    "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT")));
 builder.Services.AddScoped<OutboxActionStore>();
 builder.Services.AddSingleton<IWorkerCycle, OutboxDispatcher>();
 

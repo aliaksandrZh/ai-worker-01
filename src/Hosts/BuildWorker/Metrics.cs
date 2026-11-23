@@ -6,7 +6,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.BuildWorker;
 
-/// <summary>§14 baseline: image builds, build errors, execution retries (worker heartbeat from the loop).</summary>
+/// <summary>Baseline: image builds, build errors, execution retries (worker heartbeat from the loop).</summary>
 public sealed class BuildWorkerMetrics(WorkerLoopState state, RunnerCounters counters, BuildDurableStore store) : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()

@@ -3,8 +3,8 @@ using Microsoft.EntityFrameworkCore;
 namespace PiAgent.Infrastructure.Persistence;
 
 /// <summary>
-/// Control-plane orchestration state (spec decision 19). Task 01 shipped the initial (near-empty)
-/// migration; task 02 adds the configuration-plane entities; task 07 adds the orchestration core
+/// Control-plane orchestration state. The initial (near-empty) migration ships the
+/// orchestration core; later migrations add the configuration-plane entities and
 /// (Workflow, Task, Run, AgentSession, OrchestrationJob, ContainerInstance, TaskArtifactInput, Artifact).
 /// </summary>
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
@@ -85,13 +85,13 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // ---- build pipeline (task 10, 02 §12b/decision 81) ----
+        // ---- build pipeline ----
 
         // (comment markers preserved in the migration below)
         modelBuilder.Entity<BuildJob>(entity =>
         {
             entity.ToTable("build_job");
-            // One BuildJob per AgentProfileVersion (02 §12b); retries reuse the same buildId
+            // One BuildJob per AgentProfileVersion; retries reuse the same buildId
             entity.HasIndex(j => j.AgentProfileVersionId).IsUnique();
             entity.HasIndex(j => new { j.State, j.NextRetryAt });
             entity.Property(j => j.DispatchPayload).HasColumnType("jsonb");
@@ -140,7 +140,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<WorkItemLink>(entity =>
         {
             entity.ToTable("work_item_link");
-            // (issue, pr, relation) unique — 02 §4/§23 source/target uniqueness in typed-role shape
+            // (issue, pr, relation) unique — source/target uniqueness in typed-role shape
             entity.HasIndex(l => new { l.IssueWorkItemId, l.PrWorkItemId, l.RelationType }).IsUnique();
             entity.HasOne<WorkItem>()
                 .WithMany()
@@ -157,7 +157,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("github_comment");
             entity.HasIndex(c => new { c.Kind, c.GithubCommentId }).IsUnique();
             entity.HasIndex(c => new { c.WorkItemId, c.CreatedAtGithub });
-            // github_review_id is an external ID only — no DB FK (02 §5)
+            // github_review_id is an external ID only — no DB FK
             entity.HasOne<WorkItem>()
                 .WithMany()
                 .HasForeignKey(c => c.WorkItemId)
@@ -177,7 +177,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<GitHubEvent>(entity =>
         {
             entity.ToTable("github_event");
-            // (source, dedupe_key) unique, 02 §23 — PostgreSQL NULLs are distinct, so unkeyed events
+            // (source, dedupe_key) unique — PostgreSQL NULLs are distinct, so unkeyed events
             // need no partial filter
             entity.HasIndex(e => new { e.Source, e.DedupeKey }).IsUnique();
             entity.HasIndex(e => new { e.RepositoryId, e.ProcessingStatus, e.ReceivedAt });
@@ -196,7 +196,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<AgentCommand>(entity =>
         {
             entity.ToTable("agent_command");
-            // The command idempotency key (02 §11/§23): one comment ever produces one AgentCommand
+            // The command idempotency key: one comment ever produces one AgentCommand
             entity.HasIndex(c => c.GithubCommentId).IsUnique();
             entity.HasIndex(c => new { c.Status, c.CreatedAt });
             entity.Property(c => c.Arguments).HasColumnType("jsonb");
@@ -206,12 +206,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // ---- orchestration core (task 07, 02 §9/§10/§10a/§13/§14/§15/§19) ----
+        // ---- orchestration core ----
 
         modelBuilder.Entity<Workflow>(entity =>
         {
             entity.ToTable("workflow");
-            // One long-lived Workflow per root WorkItem in V1; reopen never resurrects a closed one (decisions 9/73)
+            // One long-lived Workflow per root WorkItem; reopen never resurrects a closed one
             entity.HasIndex(w => w.WorkItemId).IsUnique();
             entity.HasIndex(w => new { w.Status, w.UpdatedAt });
             entity.HasOne<WorkItem>()
@@ -222,17 +222,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<OrchestrationTask>(entity =>
         {
-            // Every Task carries at least one trigger reference (owner decision 2026-11-23): a command
+            // Every Task carries at least one trigger reference: a command
             // row for command-created Tasks, or the producing GitHub event for system-created ones.
             entity.ToTable("task", tb => tb.HasCheckConstraint("ck_task_has_trigger",
                 "trigger_command_id IS NOT NULL OR trigger_github_event_id IS NOT NULL"));
             entity.HasIndex(t => new { t.WorkflowId, t.Sequence }).IsUnique();
             entity.HasIndex(t => new { t.Status, t.CreatedAt });
-            // One command creates at most one Task (02 §23)
+            // One command creates at most one Task
             entity.HasIndex(t => t.TriggerCommandId)
                 .IsUnique()
                 .HasFilter("trigger_command_id IS NOT NULL");
-            // The one-unfinished-Task-per-Workflow invariant (02 §23, decision 79) — admission applies
+            // The one-unfinished-Task-per-Workflow invariant — admission applies
             // the lock + recheck; this index is the backstop. Snake_case names match the shipped schema.
             entity.HasIndex(t => t.WorkflowId)
                 .IsUnique()
@@ -251,7 +251,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(t => t.TriggerCommandId)
                 .OnDelete(DeleteBehavior.Restrict);
-            // Ticket 19: one system trigger event creates at most one automatic Task
+            // One system trigger event creates at most one automatic Task
             entity.HasIndex(t => t.TriggerGithubEventId)
                 .IsUnique()
                 .HasFilter("trigger_github_event_id IS NOT NULL");
@@ -274,7 +274,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<AgentSession>(entity =>
         {
             entity.ToTable("agent_session");
-            // One-shot 1:1 with Run (decision 57)
+            // One-shot 1:1 with Run
             entity.HasIndex(s => s.RunId).IsUnique();
             entity.Property(s => s.Metadata).HasColumnType("jsonb");
             entity.Property(s => s.StorageStatus).HasDefaultValue(AgentSessionStorageStatuses.Available);
@@ -343,12 +343,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // ---- run pipeline (task 09, 02 §14a/§16/§18) ----
+        // ---- run pipeline ----
 
         modelBuilder.Entity<RunEvent>(entity =>
         {
             entity.ToTable("run_event");
-            // The callback idempotency key (02 §18, 04 §8)
+            // The callback idempotency key
             entity.HasIndex(e => new { e.RunId, e.EventId }).IsUnique();
             entity.HasIndex(e => new { e.RunId, e.ReceivedAt });
             entity.Property(e => e.Payload).HasColumnType("jsonb");
@@ -361,7 +361,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<RunCredential>(entity =>
         {
             entity.ToTable("run_credential");
-            // One credential per Run, scoped to it (decision 60)
+            // One credential per Run, scoped to it
             entity.HasIndex(c => c.RunId).IsUnique();
             entity.Property(c => c.TokenHash).HasColumnType("varchar(64)");
             entity.HasOne<Run>()
@@ -373,7 +373,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<Workspace>(entity =>
         {
             entity.ToTable("workspace");
-            // One Workspace per Task (02 §16/§23)
+            // One Workspace per Task
             entity.HasIndex(w => w.TaskId).IsUnique();
             entity.HasOne<OrchestrationTask>()
                 .WithMany()
@@ -384,13 +384,13 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<RunContextSnapshot>(entity =>
         {
             entity.ToTable("run_context_snapshot");
-            // Immutable, one per Run (02 §14a/§23)
+            // Immutable, one per Run
             entity.HasIndex(s => s.RunId).IsUnique();
             entity.Property(s => s.IncludedSources).HasColumnType("jsonb");
             entity.Property(s => s.ExcludedSources).HasColumnType("jsonb");
-            // ticket 11: content is a `text` blob — jsonb would reorder keys and re-space the JSON on
+            // content is a `text` blob — jsonb would reorder keys and re-space the JSON on
             // storage, breaking the frozen-bytes identity (the content_hash and budget both apply to the
-            // EXACT serialized input the Bridge gets via /input, 02 §14a + decision 63).
+            // EXACT serialized input the Bridge gets via /input).
             entity.Property(s => s.Content).HasColumnType("text");
             entity.HasOne<Run>()
                 .WithMany()
@@ -402,7 +402,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // ---- host monitor + reconciliation (task 13, decisions 62/68/77) ----
+        // ---- host monitor + reconciliation ----
 
         modelBuilder.Entity<MonitorObservation>(entity =>
         {

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Scheduled config-plane Git snapshots (decisions 52/76). Skips with a log line when
+# Scheduled config-plane Git snapshots. Skips with a log line when
 # CONFIG_SNAPSHOT_REPO_URL is unset; CONFIG_SNAPSHOT_RUN_ONCE=1 runs one attempt and exits.
 
 set -eu

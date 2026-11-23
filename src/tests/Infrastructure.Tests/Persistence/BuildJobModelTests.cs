@@ -5,7 +5,7 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Task 10 build-pipeline model (02 §12b, decision 81): one BuildJob per AgentProfileVersion (unique),
+/// Build-pipeline model: one BuildJob per AgentProfileVersion (unique),
 /// buildId-before-dispatch lineage (jsonb dispatch payload), backoff bookkeeping, and the
 /// validated-result columns.
 /// </summary>
@@ -34,7 +34,7 @@ public class BuildJobModelTests
                  })
             Assert.True(present.Contains(name), $"BuildJob.{name} missing");
 
-        // one BuildJob per AgentProfileVersion (02 §12b); retries reuse the same buildId
+        // one BuildJob per AgentProfileVersion; retries reuse the same buildId
         var uniqueIndexes = entityType.GetIndexes().Where(index => index.IsUnique).ToList();
         Assert.Single(uniqueIndexes, index =>
             index.Properties.Select(property => property.Name).SequenceEqual([nameof(BuildJob.AgentProfileVersionId)]));

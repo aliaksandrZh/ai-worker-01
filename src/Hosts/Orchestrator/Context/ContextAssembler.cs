@@ -6,32 +6,32 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.Orchestrator.Context;
 
 /// <summary>
-/// The Orchestrator-side Context Assembler (02 §14a, decision 63; ticket 11): builds one Run's input —
-/// the context package (v2 shape) — within the profile's `max_context_tokens` and the hard byte limits
+/// The Orchestrator-side Context Assembler: builds one Run's input —
+/// the context package — within the profile's `max_context_tokens` and the hard byte limits
 /// (256 KiB per artifact / 512 KiB artifacts total / 512 KiB serialized input), and books every
 /// considered source element into `included_sources` / `excluded_sources` (per-element pruning reason).
-/// Owner simplification (ticket 11 discussion): V1 simply COLLECTS everything available — issue body,
+/// Owner simplification: simply COLLECTS everything available — issue body,
 /// all synced comments, related work-item links, prior artifacts — and consumes it as-is; the only
 /// pruning is budget-driven and deterministic (`newest-first kept`: a section stops at its first
 /// overflowing element and everything older is excluded with the same reason) — no significance
 /// heuristics beyond the mandatory set.
 ///
-/// Assembly per task type (06 §3–§6, 04 §5): task-type instructions + pinned profile identity; the user
-/// command with `source_body_snapshot` (the trailing comment text is user context, decision 79) as its
+/// Assembly per task type: task-type instructions + pinned profile identity; the user
+/// command with `source_body_snapshot` (the trailing comment text is user context) as its
 /// own element; the WorkItem (title / body / state / labels); all comments chronologically with author
-/// and timestamp (tombstones excluded — recorded as exclusions, decisions 39/77); `relatedWorkItems`
-/// from WorkItemLink rows (ticket 05); prior Artifacts of the Workflow (the `TaskArtifactInput`-linked
-/// approved plan is mandatory and never pruned — decision 80; `log_reference` rows travel by reference,
-/// never as log content, decision 43); repository data; coder tasks carry the current agent-branch facts
+/// and timestamp (tombstones excluded — recorded as exclusions); `relatedWorkItems`
+/// from WorkItemLink rows; prior Artifacts of the Workflow (the `TaskArtifactInput`-linked
+/// approved plan is mandatory and never pruned; `log_reference` rows travel by reference,
+/// never as log content); repository data; coder tasks carry the current agent-branch facts
 /// from the Workspace; reviewer tasks carry the pinned `target_head_sha`/`target_base_sha` for the
-/// runtime diff (decision 64 — the diff itself is formed locally in the workspace at provisioning,
+/// runtime diff (the diff itself is formed locally in the workspace at provisioning,
 /// never via GitHub) plus submitted reviews and grouped inline review threads (newest-first; `resolved`
-/// is `null` in V1, see OBS-7 in docs/observations.md — unknown resolution counts as unresolved).
+/// is `null` — unknown resolution counts as unresolved).
 ///
 /// No silent truncation anywhere: if the MANDATORY context cannot fit, nothing is pruned — the Run is
 /// never started and the Task fails with `context_too_large` (the caller owns that transition via
 /// TaskLifecycle). The frozen JSON is measured byte-exactly while it is composed, so budgets control the
-/// same bytes that get frozen; token checks go through <see cref="ContextTokenEstimator"/> (see OBS-6).
+/// same bytes that get frozen; token checks go through <see cref="ContextTokenEstimator"/>.
 /// </summary>
 public static class ContextAssembler
 {
@@ -141,7 +141,7 @@ public static class ContextAssembler
         ComposeArtifacts(composer, included, excluded, artifacts, artifactPurposes);
         ComposeRelatedWorkItems(composer, included, excluded, related);
         // the conversation carries the ISSUE/PR conversation comments (kind issue_comment) — inline review
-        // comments are threads, above. Tombstoned inline comments are still recorded as exclusions (decision 39).
+        // comments are threads, above. Tombstoned inline comments are still recorded as exclusions.
         foreach (var tombstone in comments.Where(c => c.IsDeleted && c.Kind == GitHubCommentKinds.ReviewComment))
             excluded.Add(new { kind = SourceKinds.Comment, githubCommentId = tombstone.GithubCommentId, reason = ExcludedReasons.DeletedComment });
         ComposeConversation(composer, included, excluded,
@@ -182,7 +182,7 @@ public static class ContextAssembler
         return true;
     }
 
-    // ---- reviewer context (06 §10, decision 64) ----
+    // ---- reviewer context ----
 
     private static void ComposeReviews(Composer composer, List<object?> included, List<object?> excluded,
         IReadOnlyList<GitHubReview> reviews)
@@ -260,7 +260,7 @@ public static class ContextAssembler
             var element = Serialize(new
             {
                 githubCommentId = root.GithubCommentId,
-                resolved = (bool?)null, // OBS-7: resolution state is not part of the V1 (REST) sync
+                resolved = (bool?)null, // resolution state is not part of the REST sync
                 state,
                 path,
                 line,
@@ -307,7 +307,7 @@ public static class ContextAssembler
         return current.GithubCommentId;
     }
 
-    // ---- artifacts (02 §17, decision 80: the approved plan is mandatory) ----
+    // ---- artifacts (the approved plan is mandatory) ----
 
     private sealed record ArtifactEntry(Artifact Artifact, int TaskSequence)
     {
@@ -412,13 +412,13 @@ public static class ContextAssembler
             purpose,
             format = artifact.Format,
             createdAt = artifact.CreatedAt,
-            content = isLogReference ? null : artifact.Content, // decision 43: log content never copies into PostgreSQL
+            content = isLogReference ? null : artifact.Content, // log content never copies into PostgreSQL
             reference = isLogReference ? artifact.Content : null,
         });
         return (element, Utf8.GetByteCount(artifact.Content ?? ""));
     }
 
-    // ---- related WorkItems (WorkItemLink rows, ticket 05) ----
+    // ---- related WorkItems (WorkItemLink rows) ----
 
     private sealed record RelatedItem(string Relation, string Repository, string OtherType, long Number, string Title, string State);
 
@@ -504,7 +504,7 @@ public static class ContextAssembler
         var live = comments.Where(c => !c.IsDeleted).ToList(); // chronological: index 0 = oldest
 
         // Phase 1 — decide newest-first so recent user answers and unfinished discussions survive a
-        // squeeze (decision 63): walking from the newest end, the first element that does not fit marks
+        // squeeze: walking from the newest end, the first element that does not fit marks
         // the cutoff — it and everything older is excluded with the same reason. Phase 2 composes the
         // document in chronological order (the agent reads the conversation chronologically).
         var includedIds = new HashSet<long>();
@@ -532,7 +532,7 @@ public static class ContextAssembler
         {
             if (comment.IsDeleted)
             {
-                // decisions 39/77: tombstones never enter a future context — recorded as exclusions
+                // tombstones never enter a future context — recorded as exclusions
                 excluded.Add(new { kind = SourceKinds.Comment, githubCommentId = comment.GithubCommentId, reason = ExcludedReasons.DeletedComment });
                 continue;
             }
@@ -606,7 +606,7 @@ public static class ContextAssembler
     /// <summary>Excluded-source reason vocabulary (recorded verbatim in run_context_snapshot.excluded_sources).</summary>
     public static class ExcludedReasons
     {
-        /// <summary>Tombstoned comment swept by the Poller (decisions 39/77).</summary>
+        /// <summary>Tombstoned comment swept by the Poller.</summary>
         public const string DeletedComment = "deleted_comment";
         /// <summary>Budget-pruned element (main serialized-input / max_context_tokens budget).</summary>
         public const string PrunedByLimit = "pruned_by_limit";

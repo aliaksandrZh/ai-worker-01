@@ -4,7 +4,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Poller;
 
 /// <summary>
-/// Sync-cursor serialization for sync_cursor.cursor_value (02 §8 opaque string): timestamp cursors
+/// Sync-cursor serialization for sync_cursor.cursor_value (opaque string): timestamp cursors
 /// (position + optional etag) and per-PR etag maps, camelCase JSON, malformed/absent → null (bootstrap;
 /// fingerprint dedupe makes re-sync idempotent).
 /// </summary>

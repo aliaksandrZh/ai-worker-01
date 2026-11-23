@@ -9,7 +9,7 @@ using Xunit;
 
 namespace PiAgent.Hosts.Tests.Runtime;
 
-/// <summary>Decision 82: the Docker provisioner's failure semantics — the rules Komodo's locks used to
+/// <summary>The Docker provisioner's failure semantics — the rules Komodo's locks used to
 /// provide. 404 = the container is gone (idempotent success); daemon/socket failures throw (desired
 /// state preserved, callers retry); a create-name collision force-removes the stale container and retries.</summary>
 public class DockerProvisioningTests

@@ -5,9 +5,9 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.Orchestrator.Commands;
 
 /// <summary>
-/// The resolved per-repository command policy (02 §21) with the ticket-02 defaults applied (all V1
-/// commands, both target types). Extracted from CommentCommandProcessor (task 06) so the claim-time
-/// authorization recheck (task 07) parses the identical policy shape.
+/// The resolved per-repository command policy with the defaults applied (all
+/// commands, both target types). Extracted from CommentCommandProcessor so the claim-time
+/// authorization recheck parses the identical policy shape.
 /// </summary>
 public sealed record RepoCommandConfig(
     IReadOnlyList<string> PermittedCommands,

@@ -10,7 +10,7 @@ namespace PiAgent.Hosts.Tests.Config;
 /// </summary>
 public class GitHubClientTests
 {
-    // Review-focus input: the PAT itself must never leak into exception messages (§14/§76).
+    // Review-focus input: the PAT itself must never leak into exception messages.
     private const string Pat = "s3cret-pat-value";
 
     private sealed class StubHandler(Func<string, HttpResponseMessage> respond) : HttpMessageHandler
@@ -59,7 +59,7 @@ public class GitHubClientTests
             () => FromStub(handler).GetAuthenticatedLoginAsync(CancellationToken.None));
         Assert.Contains("GET /user", exception.Message);
         Assert.Contains("401", exception.Message);
-        // decision 65 (ticket 11b): the proper error names the PAT problem — no fallback exists
+        // the proper error names the PAT problem — no fallback exists
         Assert.Contains("revoked, expired, or invalid", exception.Message);
         Assert.Contains("no automatic fallback", exception.Message);
     }

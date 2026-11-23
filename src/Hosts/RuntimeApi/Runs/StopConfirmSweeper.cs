@@ -10,21 +10,21 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// The stop-confirm sweeper — ticket 14's reconciliation leg of "Run/Task `cancelled` after runtime
-/// confirmation OR reconciliation" (06 §8; ticket 13's general reconciler does not exist). A Run left
+/// The stop-confirm sweeper — the reconciliation leg of "Run/Task `cancelled` after runtime
+/// confirmation OR reconciliation". A Run left
 /// in `stopping` whose stop signal is older than the grace window without a terminal callback gets the
 /// hard backstop: docker stop (idempotent) and Run `cancelled` with the identical terminal facts a
 /// delivery would record (log reference, credential revocation, session terminated, workspace
 /// release). The Bridge's worst-case sequence is ~46 s + delivery retries — the window leaves
 /// headroom; a Bridge that delivers `cancelled` later meets "already terminal" and gives up cleanly.
-/// Orchestrator-owned Task/Workflow transitions stay with the terminal-Run consumer (03 §2).
+/// Orchestrator-owned Task/Workflow transitions stay with the terminal-Run consumer.
 /// </summary>
 public sealed class StopConfirmSweeper(
     IServiceScopeFactory scopeFactory,
     ILogger<StopConfirmSweeper> logger) : IWorkerCycle
 {
     /// <summary>Grace granted to the Bridge's graceful sequence + terminal delivery before the
-    /// reconciled cancellation runs. Constant in V1: only /stop can put a Run into `stopping`.</summary>
+    /// reconciled cancellation runs. Constant: only /stop can put a Run into `stopping`.</summary>
     public static readonly TimeSpan GraceWindow = TimeSpan.FromSeconds(90);
 
     public async Task RunCycleAsync(CancellationToken cancellationToken)

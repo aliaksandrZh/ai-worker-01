@@ -1,10 +1,10 @@
 /**
- * Durable callback spool (decision 60): every callback is written to the per-Run `callback-spool/`
+ * Durable callback spool: every callback is written to the per-Run `callback-spool/`
  * directory on the persistent tree BEFORE its first send, with:
  *  - events/terminal appended as ordered JSON entries (`000001-<id>.json`; the terminal id is
  *    deterministic so a redelivered terminal can never duplicate);
  *  - heartbeats coalesced to the latest value in a single slot (`heartbeat.json` — an un-delivered
- *    older beat is replaced on the sender side, 04 §4);
+ *    older beat is replaced on the sender side);
  *  - delivery completing only when the Runtime API answers 2xx — then the entry is removed; a
  *    delivered terminal writes the `.terminal-delivered` marker;
  *  - restart redelivery: `next()` re-serves pending entries in order, same eventIds.
@@ -45,7 +45,7 @@ export function openSpool(spoolDir, options = {}) {
       writeFileSync(join(spoolDir, name), JSON.stringify({ id: entry.id, route: entry.route, body: entry.body }));
     },
 
-    /** Single-slot coalescing heartbeat: replaces any un-delivered previous beat (decision 60). */
+    /** Single-slot coalescing heartbeat: replaces any un-delivered previous beat. */
     coalescingHeartbeats(heartbeatId) {
       const slot = join(spoolDir, BEAT_SLOT);
       return ({ occurredAt }) => {
@@ -77,7 +77,7 @@ export function openSpool(spoolDir, options = {}) {
     /** 2xx answered → the callback is durably delivered; the entry leaves the spool. */
     remove(entry) {
       rmSync(entry.path, { force: true });
-      // terminal routes (incl. the ticket-14 `cancelled`) write the done marker
+      // terminal routes (incl. the `cancelled`) write the done marker
       if (entry.route === "completed" || entry.route === "failed" || entry.route === "cancelled") onTerminalDelivered();
       if (serving === entry) serving = null;
     },

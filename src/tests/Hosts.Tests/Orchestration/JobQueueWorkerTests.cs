@@ -14,11 +14,11 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Orchestration;
 
 /// <summary>
-/// The durable job queue (task 07, 02 §19, decisions 10/38/75, 04 §2): FIFO claim (available_at, then
+/// The durable job queue: FIFO claim (available_at, then
 /// priority), the global cap counting claimed/starting/running(/stopping) work — queued Tasks and
 /// pending Jobs occupy no slot — transactional claims that never double-claim, expired leases rolling
 /// back to pending, and the claim-time rechecks (open WorkItem, pinned review SHA, ready profile,
-/// plan present, permissions rechecked) that cancel-or-release but never execute (06 §12).
+/// plan present, permissions rechecked) that cancel-or-release but never execute.
 /// </summary>
 public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -365,7 +365,7 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
         var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
         var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false);
-        seeded.Task.Status = OrchestrationTaskStatuses.Failed; // e.g. failed before any new Run (decision 70 ordering)
+        seeded.Task.Status = OrchestrationTaskStatuses.Failed; // e.g. failed before any new Run
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
         var harness = OrchestrationTestSupport.NewWorker(postgres);
@@ -381,7 +381,7 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Empty(await db.Runs.AsNoTracking().ToListAsync()); // no Run ever starts while the Task is Failed
     }
 
-    // ---- pause (decision 75) ----
+    // ---- pause ----
 
     [Fact]
     public async Task ClaimSkipsPausedRepository_AndResumesAfterReenable()
@@ -415,7 +415,7 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal(1, harness.Metrics.JobsClaimedTotal);
     }
 
-    // ---- claim-time rechecks (04 §2, 06 §12; cancel-or-release, never execute) ----
+    // ---- claim-time rechecks (cancel-or-release, never execute) ----
 
     [Fact]
     public async Task Recheck_WorkItemClosed_CancelsWithReason()
@@ -701,8 +701,8 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
     [Fact]
     public async Task Claim_WaitsForJobsAvailableInTheFuture()
     {
-        // ticket 15: the automatic retry's backoff rides job.available_at — a pending job scheduled in
-        // the future is never claimed before its time (02 §19 FIFO by available_at)
+        // the automatic retry's backoff rides job.available_at — a pending job scheduled in
+        // the future is never claimed before its time (FIFO by available_at)
         await postgres.ResetAsync();
         await using var db = postgres.NewDbContext();
         var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);

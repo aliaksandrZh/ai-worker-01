@@ -5,10 +5,10 @@ using PiAgent.Orchestrator.Commands;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// Routing-rule/profile resolution for one task type (02 §12a, decisions 35/36): the repository-specific
+/// Routing-rule/profile resolution for one task type: the repository-specific
 /// enabled rule wins over the global one, higher priority first; the profile must be enabled and the
-/// pinned version `ready`. Shared by command admission (task 07) and the /help availability filter
-/// (task 08) so both apply the identical gate: missing/disabled → `agent_profile_not_configured`,
+/// pinned version `ready`. Shared by command admission and the /help availability filter
+/// so both apply the identical gate: missing/disabled → `agent_profile_not_configured`,
 /// known but not `ready` → `agent_image_not_ready`.
 /// </summary>
 public static class ProfileGate

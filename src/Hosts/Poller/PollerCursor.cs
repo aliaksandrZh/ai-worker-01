@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace PiAgent.Poller;
 
-/// <summary>Shared JSON shape of the two `sync_cursor.cursor_value` payloads (02 §8 opaque strings):
+/// <summary>Shared JSON shape of the two `sync_cursor.cursor_value` payloads (opaque strings):
 /// camelCase, tolerant readers — malformed/absent parses to null and the stream bootstraps again
 /// (fingerprint dedupe keeps re-sync idempotent).</summary>
 public static class PollerCursorJson
@@ -15,7 +15,7 @@ public static class PollerCursorJson
 }
 
 /// <summary>
-/// Cursor for the timestamp streams (issues, pulls, issue_comments, pr_review_comments, 02 §8):
+/// Cursor for the timestamp streams (issues, pulls, issue_comments, pr_review_comments):
 /// `position` = newest `updated_at_github` durably saved (the boundary of guaranteed-processed), plus
 /// an optional etag for fixed-shape list requests. Incremental passes re-query at `position − overlap`.
 /// </summary>
@@ -39,7 +39,7 @@ public sealed record TimestampCursor(DateTime? Position, string? Etag = null)
     }
 }
 
-/// <summary>Cursor shard for one work item's `issues/{n}/timeline` (decision 53 families): `last_visit`
+/// <summary>Cursor shard for one work item's `issues/{n}/timeline`: `last_visit`
 /// = the `updated_at_github` observed at the last successfully-processed visit — the visit gate is
 /// `item.UpdatedAtGithub > last_visit` (closure/cross-reference/review-request/connected-disconnected
 /// bumps revisit the item); `position` = the highest timeline event id durably saved (timeline lists
@@ -47,7 +47,7 @@ public sealed record TimestampCursor(DateTime? Position, string? Etag = null)
 /// event holds back BOTH values by not writing the entry (next cycle revisits; dedupe keeps it idempotent).</summary>
 public sealed record TimelineItemCursor(DateTime LastVisit, long? Position);
 
-/// <summary>Cursor for the `timeline` stream (decision 53): per-work-item entries keyed by number.</summary>
+/// <summary>Cursor for the `timeline` stream: per-work-item entries keyed by number.</summary>
 public sealed record TimelineCursor(IReadOnlyDictionary<long, TimelineItemCursor> Items)
 {
     public string Serialize() => JsonSerializer.Serialize(this, PollerCursorJson.Options);
@@ -68,7 +68,7 @@ public sealed record TimelineCursor(IReadOnlyDictionary<long, TimelineItemCursor
     }
 }
 
-/// <summary>Cursor for the `pr_reviews` stream (decision 53): per-PR etags from conditional
+/// <summary>Cursor for the `pr_reviews` stream: per-PR etags from conditional
 /// `pulls/{n}/reviews` requests; 304s skip without consuming the primary limit (GitHub-side).</summary>
 public sealed record PrReviewCursor(IReadOnlyDictionary<long, string> Etags)
 {

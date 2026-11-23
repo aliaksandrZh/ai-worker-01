@@ -12,15 +12,15 @@ using PiAgent.Platform.Workers;
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddPiJsonLogging("build-worker");
-// §13 dependencies: the Docker API over its (read-only mounted) unix socket + durable local build state.
+// Dependencies: the Docker API over its (read-only mounted) unix socket + durable local build state.
 builder.Services.AddDockerSocket(builder.Configuration);
 builder.Services.Configure<BuildOptions>(builder.Configuration.GetSection("Build"));
 builder.Services.AddPiWorkerLoop();
 builder.Services.AddSingleton<IWorkerMetrics, BuildWorkerMetrics>();
 builder.Services.AddSingleton<RunnerCounters>();
-// Decision-65 contour: the orchestrator's own service credential guards the two build endpoints.
+// Contour: the orchestrator's own service credential guards the two build endpoints.
 builder.Services.AddServiceTokens(builder.Configuration);
-// Build mechanics (decision 81): durable local state, single-consumer runner, docker over the socket.
+// Build mechanics: durable local state, single-consumer runner, docker over the socket.
 builder.Services.AddSingleton<IDockerEngine, DockerEngineClient>();
 builder.Services.AddSingleton<BuildDurableStore>();
 builder.Services.AddSingleton<BuildChannel>();

@@ -7,9 +7,9 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The claim-time authorization recheck (02 §21, decision 66): a queued Task revalidates the
+/// The claim-time authorization recheck: a queued Task revalidates the
 /// collaborator permission (fresh or ≤60 s cached) when claimed — permissions can change between
-/// admission and execution. System-created Tasks (no command, e.g. ticket 12's automatic reviews) and
+/// admission and execution. System-created Tasks (no command, e.g. automatic reviews) and
 /// tasks without a recorded author are not rechecked here.
 /// </summary>
 public sealed record ClaimPermissionOutcome(bool Denied, string? RejectionReason, bool Transient, bool SystemConfigError = false);
@@ -49,10 +49,10 @@ public static class ClaimPermissionCheck
 }
 
 /// <summary>
-/// Claim-time task cancellation (04 §2, 06 §12): a queued Task that failed its recheck turns terminal
+/// Claim-time task cancellation: a queued Task that failed its recheck turns terminal
 /// — Task `cancelled` with the recorded reason, Job `cancelled`, command `failed` + reason, Workflow
 /// back to `waiting_for_human`, never-dispatched (`pending`) Run rows deleted, and one Outbox notice
-/// per the 06 §13 table. Reused by tickets 09/13/15 via the same recorded-reason contract.
+/// per the failure-notice table. Reused by the reconciliation/retry paths via the same recorded-reason contract.
 /// </summary>
 public static class TaskLifecycle
 {
@@ -66,7 +66,7 @@ public static class TaskLifecycle
         JobQueueMetrics metrics,
         CancellationToken cancellationToken)
     {
-        // ticket 14: /stop may have cancelled this claimed Task while its claim was in flight — a fresh
+        // /stop may have cancelled this claimed Task while its claim was in flight — a fresh
         // read makes the racing cancellation a no-op (no spurious notice, no resurrected rows).
         var currentStatus = await db.OrchestrationTasks.AsNoTracking()
             .Where(t => t.Id == task.Id)
@@ -108,12 +108,12 @@ public static class TaskLifecycle
     }
 
     /// <summary>
-    /// Claim-time task failure because the mandatory context cannot fit (ticket 11, decision 63): the
+    /// Claim-time task failure because the mandatory context cannot fit: the
     /// Context Assembler ran BEFORE any Run row existed — nothing to delete (the guard deletes stray
     /// never-dispatched Run rows anyway) — and no snapshot was written (snapshots exist only per
     /// created Run). Task `failed` (final: context_too_large is not a transient infra error), job
     /// `failed` + detail, command `failed` + reason, Workflow back to `waiting_for_human`.
-    /// The final-failure Outbox notification stays deferred to ticket 15's retry/notification semantics
+    /// The final-failure Outbox notification stays deferred to the retry/notification semantics
     /// (same deliberate deferral as RunTerminalConsumer's run-side failures — recorded, not yet posted).
     /// </summary>
     public static async Task FailTaskContextTooLargeAsync(

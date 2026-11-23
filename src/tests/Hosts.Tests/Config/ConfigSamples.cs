@@ -32,7 +32,7 @@ public static class ConfigSamples
         #   - owner: example-org
         #     name: example-repo
         #     enabled: true
-        #     # allowlist absent = enabled and seeded with the repository owner (decision 49);
+        #     # allowlist absent = enabled and seeded with the repository owner;
         #     # allowlist: [] explicitly empties it, disabling list filtering (write-permission baseline remains).
         #     allowlist: [alice, bob]
         #     permitted_commands: [plan, status, stop, help, retry]
@@ -43,8 +43,8 @@ public static class ConfigSamples
 
     public const string Routing = """
         # Global default rules (repository_id = NULL); per-repo overrides win, the version is
-        # pinned on the Task at creation (02 §12a). Phase 1 ships the planner profile only,
-        # so only the plan rule is seeded (decision 36).
+        # pinned on the Task at creation. Phase 1 ships the planner profile only,
+        # so only the plan rule is seeded.
         rules:
           - task_type: plan
             profile: planner

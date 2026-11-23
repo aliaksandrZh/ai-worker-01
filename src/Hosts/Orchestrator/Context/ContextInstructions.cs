@@ -3,11 +3,10 @@ namespace PiAgent.Orchestrator.Context;
 using PiAgent.Infrastructure.Persistence;
 
 /// <summary>
-/// The per-task-type directive the assembler carries into every input (06 §3–§6: "any configured
+/// The per-task-type directive the assembler carries into every input ("any configured
 /// instructions"). The profile's actual system prompt is NOT duplicated here — the baked profile image
-/// is the sole effective runtime configuration (decision 56); this text only frames the task for the
-/// agent. The agent-facing artifact type / result-manifest wording matches the manifest contract in
-/// 04 §4 (decision 59).
+/// is the sole effective runtime configuration; this text only frames the task for the
+/// agent. The agent-facing artifact type / result-manifest wording matches the manifest contract.
 /// </summary>
 public static class ContextInstructions
 {
