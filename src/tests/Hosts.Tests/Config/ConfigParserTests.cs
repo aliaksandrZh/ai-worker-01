@@ -116,9 +116,9 @@ public class ConfigParserTests : IDisposable
     }
 
     [Fact]
-    public void DurationValue_BadUnit_ThrowsWithValueInMessage()
+    public void ParseDurationValue_BadUnit_ThrowsWithValueInMessage()
     {
-        var exception = Assert.Throws<ArgumentException>(() => DurationValue.Parse("10min"));
+        var exception = Assert.Throws<ArgumentException>(() => PiAgent.Platform.Config.SystemYaml.ParseDurationValue("10min"));
         Assert.Contains("10min", exception.Message);
     }
 

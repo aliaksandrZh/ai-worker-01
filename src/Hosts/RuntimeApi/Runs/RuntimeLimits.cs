@@ -1,7 +1,7 @@
+using PiAgent.Platform.Config;
 using PiAgent.RuntimeApi.Provisioning;
 using PiAgent.RuntimeApi.Api;
 using PiAgent.RuntimeApi.Runs;
-using System.Globalization;
 using YamlDotNet.Serialization;
 
 namespace PiAgent.RuntimeApi.Runs;
@@ -31,42 +31,28 @@ public sealed class RuntimeLimits
         try
         {
             // a narrow reader of the §16 duration knobs only — unknown keys are ignored here (the
-            // Orchestrator's strict ConfigParser validates the whole system.yaml document)
+            // Orchestrator's strict ConfigParser validates the whole system.yaml document). The knob
+            // grammar is the shared SystemYaml duration (integer s/m/h, positive) — the former local
+            // lenient copy accepted decimals and negatives the Orchestrator's schema rejects.
             var dto = new DeserializerBuilder().IgnoreUnmatchedProperties().Build()
                 .Deserialize<SystemDto>(File.ReadAllText(path)) ?? new();
             return new RuntimeLimits
             {
-                StartupTimeout = Parse("startup_timeout", dto.StartupTimeout, TimeSpan.FromMinutes(10)),
-                IdleTimeout = Parse("idle_timeout", dto.IdleTimeout, TimeSpan.FromMinutes(60)),
-                MaxRunDuration = Parse("max_run_duration", dto.MaxRunDuration, TimeSpan.FromHours(4)),
-                HeartbeatInterval = Parse("heartbeat_interval", dto.HeartbeatInterval, TimeSpan.FromSeconds(30)),
-                OrphanGracePeriod = Parse("orphan_grace_period", dto.OrphanGracePeriod, TimeSpan.FromHours(24)),
-                OrphanQuarantinePeriod = Parse("orphan_quarantine_period", dto.OrphanQuarantinePeriod, TimeSpan.FromHours(24)),
+                StartupTimeout = SystemYaml.Duration("startup_timeout", dto.StartupTimeout, TimeSpan.FromMinutes(10)),
+                IdleTimeout = SystemYaml.Duration("idle_timeout", dto.IdleTimeout, TimeSpan.FromMinutes(60)),
+                MaxRunDuration = SystemYaml.Duration("max_run_duration", dto.MaxRunDuration, TimeSpan.FromHours(4)),
+                HeartbeatInterval = SystemYaml.Duration("heartbeat_interval", dto.HeartbeatInterval, TimeSpan.FromSeconds(30)),
+                OrphanGracePeriod = SystemYaml.Duration("orphan_grace_period", dto.OrphanGracePeriod, TimeSpan.FromHours(24)),
+                OrphanQuarantinePeriod = SystemYaml.Duration("orphan_quarantine_period", dto.OrphanQuarantinePeriod, TimeSpan.FromHours(24)),
             };
         }
         catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or IOException)
         {
             throw new InvalidOperationException($"system.yaml: cannot read the runtime limits ({exception.Message})");
         }
-    }
-
-    private static TimeSpan Parse(string key, string? value, TimeSpan fallback)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return fallback;
-        var text = value.Trim();
-        // duration knob shape used across the plane: `10m`, `60s`, `4h`, `24h`, `30s`
-        var unit = text[^1];
-        var numberText = text[..^1];
-        if (!double.TryParse(numberText, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
-            throw new InvalidOperationException($"system.yaml: {key} '{value}' is not a duration (e.g. 10m, 60s, 4h)");
-        return unit switch
-        {
-            's' => TimeSpan.FromSeconds(number),
-            'm' => TimeSpan.FromMinutes(number),
-            'h' => TimeSpan.FromHours(number),
-            _ => throw new InvalidOperationException($"system.yaml: {key} '{value}' must end in s/m/h"),
-        };
+        // a malformed/negative knob value surfaces as the shared ConfigException (naming the key) —
+        // deliberately not wrapped: it is exactly the failure the Orchestrator's strict schema
+        // validation rejects, so both hosts now agree on what makes system.yaml invalid.
     }
 
     private sealed class SystemDto

@@ -1,3 +1,4 @@
+using PiAgent.Platform.Config;
 using YamlDotNet.Serialization;
 
 namespace PiAgent.Orchestrator.Config;
@@ -122,7 +123,7 @@ public static class ConfigParser
 
         try
         {
-            return DurationValue.Parse(value);
+            return SystemYaml.ParseDurationValue(value);
         }
         catch (ArgumentException exception)
         {
@@ -326,14 +327,14 @@ public static class ConfigParser
                 Memory = dto.Resources?.Memory,
                 MaxAutomaticRetries = dto.RetryPolicy?.MaxAutomaticRetries,
                 InitialBackoff = dto.RetryPolicy?.InitialBackoff is { } backoff
-                    ? ParseValue(relativeName, "retry_policy.initial_backoff", backoff, DurationValue.Parse)
+                    ? ParseValue(relativeName, "retry_policy.initial_backoff", backoff, SystemYaml.ParseDurationValue)
                     : null,
                 BridgeVersion = dto.Bridge?.Version,
                 BridgeHeartbeatInterval = dto.Bridge?.HeartbeatInterval is { } heartbeat
-                    ? ParseValue(relativeName, "bridge.heartbeat_interval", heartbeat, DurationValue.Parse)
+                    ? ParseValue(relativeName, "bridge.heartbeat_interval", heartbeat, SystemYaml.ParseDurationValue)
                     : null,
                 BridgeEventCadence = dto.Bridge?.EventCadence is { } cadence
-                    ? ParseValue(relativeName, "bridge.event_cadence", cadence, DurationValue.Parse)
+                    ? ParseValue(relativeName, "bridge.event_cadence", cadence, SystemYaml.ParseDurationValue)
                     : null,
                 BridgeBehavior = dto.Bridge?.Behavior,
                 Skills = dto.Skills,
@@ -354,7 +355,7 @@ public static class ConfigParser
             return null;
         try
         {
-            return DurationValue.Parse(value);
+            return SystemYaml.ParseDurationValue(value);
         }
         catch (ArgumentException exception)
         {

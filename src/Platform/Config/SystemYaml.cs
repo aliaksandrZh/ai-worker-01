@@ -43,23 +43,40 @@ public static class SystemYaml
         }
     }
 
+    /// <summary>The bare duration grammar of the plane (single copy — formerly repeated as the
+    /// Orchestrator's `DurationValue` and the Runtime API's lenient last-char/double parser):
+    /// `60s`, `5m`, `4h` — an integer followed by s/m/h. Throws `ArgumentException` so callers can
+    /// add file/key context (the Orchestrator's `ParseKnobDuration` does exactly that).</summary>
+    public static TimeSpan ParseDurationValue(string value)
+    {
+        var match = DurationPattern.Match(value.Trim());
+        if (!match.Success)
+            throw new ArgumentException($"duration '{value}' must be an integer followed by s, m, or h (e.g. 60s, 5m, 4h)");
+        var amount = long.Parse(match.Groups[1].Value);
+        return match.Groups[2].Value switch
+        {
+            "s" => TimeSpan.FromSeconds(amount),
+            "m" => TimeSpan.FromMinutes(amount),
+            _ => TimeSpan.FromHours(amount),
+        };
+    }
+
     /// <summary>Duration knob: `60s`, `5m`, `4h` — integer followed by s/m/h, positive; whitespace-only
     /// falls back to the default. Messages name the knob so the failing key is diagnosable.</summary>
     public static TimeSpan Duration(string knob, string? value, TimeSpan fallback)
     {
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
-        var match = DurationPattern.Match(value.Trim());
-        if (!match.Success)
+        TimeSpan parsed;
+        try
+        {
+            parsed = ParseDurationValue(value);
+        }
+        catch (ArgumentException)
+        {
             throw new ConfigException(
                 $"configuration error: {knob} '{value}' must be an integer followed by s, m, or h (e.g. 60s, 5m, 4h)");
-        var amount = long.Parse(match.Groups[1].Value);
-        var parsed = match.Groups[2].Value switch
-        {
-            "s" => TimeSpan.FromSeconds(amount),
-            "m" => TimeSpan.FromMinutes(amount),
-            _ => TimeSpan.FromHours(amount),
-        };
+        }
         if (parsed <= TimeSpan.Zero)
             throw new ConfigException($"configuration error: {knob} '{value}' must be positive");
         return parsed;
