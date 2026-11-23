@@ -1,0 +1,39 @@
+#!/bin/sh
+# Coder agent entry (planner pi-worker-entry shape): clone GIT_CLONE_REPO into /workspace with the
+# mounted token, scrub the token from the remote, configure the commit identity and the push
+# credential helper (baked at /usr/local/bin/git-credential-pat-file — it reads the token file AT
+# PUSH TIME), then exec the Runtime Bridge (the supervisor). Workspace persistence is per-Task
+# (retry reuse): clone only into an EMPTY workspace.
+# The repo NAME arrives from the Runtime API at /start (GIT_CLONE_REPO — not a secret); the token
+# lives ONLY in the host-managed file mounted read-only at /run/secrets/<name>
+# (GIT_CLONE_TOKEN_FILE is a baked path pointer) — never in env vars, git config, or image layers.
+set -eu
+
+token=""
+if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
+  token="$(tr -d '\r' < "${GIT_CLONE_TOKEN_FILE}" | head -n1)"
+fi
+
+if [ -n "${GIT_CLONE_REPO:-}" ]; then
+  # Workspace persistence is per-Task (retry reuse): clone only into an EMPTY workspace.
+  if [ -z "$(ls -A /workspace 2>/dev/null)" ]; then
+    : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to run without the repository clone}"
+    GIT_TERMINAL_PROMPT=0 git clone \
+      "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+    git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub the token
+    echo "agent-entry: cloned ${GIT_CLONE_REPO} into /workspace"
+  else
+    echo "agent-entry: /workspace not empty — keeping the existing workspace (retry reuse)"
+  fi
+
+  # Commit identity for the agent's commits (not a secret; GitHub attributes pushes via the token
+  # account, the commit author string is cosmetic).
+  git -C /workspace config user.name  "${GIT_AUTHOR_NAME:-pi-coder-agent}"
+  git -C /workspace config user.email "${GIT_AUTHOR_EMAIL:-pi-coder-agent@users.noreply.github.com}"
+
+  # Push auth with NO token in any remote URL or persisted config: the helper reads the mounted
+  # token file per credential request (see /usr/local/bin/git-credential-pat-file).
+  git -C /workspace config credential.helper /usr/local/bin/git-credential-pat-file
+fi
+
+exec "$@"

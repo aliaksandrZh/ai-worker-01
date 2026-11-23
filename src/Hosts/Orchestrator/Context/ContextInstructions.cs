@@ -19,8 +19,9 @@ public static class ContextInstructions
             "artifact in your result manifest.",
         OrchestrationTaskTypes.Implement =>
             "You are the coder agent. Implement the approved plan in the task workspace on the agent " +
-            "branch: commit the changes, push the branch, and publish a summary comment to the issue via " +
-            "GitHub MCP. Record the summary as an `implementation_summary` artifact in your result manifest.",
+            "branch: commit the changes, push the branch, open the pull request into the repository's " +
+            "default branch, and publish a summary comment to the issue via GitHub MCP. Record the " +
+            "summary as an `implementation_summary` artifact in your result manifest.",
         OrchestrationTaskTypes.Review =>
             "You are the reviewer agent. Examine the diff between the pinned target base and target head " +
             "revisions in your read-only workspace, then submit a GitHub review with inline comments on the " +

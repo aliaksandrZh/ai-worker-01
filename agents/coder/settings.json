@@ -1,0 +1,8 @@
+{
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "defaultProvider": "ollama",
+  "defaultModel": "glm-5.3-flash:cloud",
+  "defaultProjectTrust": "never",
+  "quietStartup": true,
+  "lastChangelogVersion": "1.6.0"
+}
