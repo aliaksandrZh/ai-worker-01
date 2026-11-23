@@ -21,7 +21,9 @@ public static class RunErrorCodes
     public const string GithubPublicationFailed = "github_publication_failed";
     public const string RuntimeFailure = "runtime_failure";
     public const string ArtifactTooLarge = "artifact_too_large";
-    public const string ManifestInvalid = "manifest_invalid";
+    /// <summary>The Bridge's publication toolcheck: a mandated publication kind stayed unconfirmed
+    /// after the settle/nudge rounds (the agent never self-reports — there is no result manifest).</summary>
+    public const string PublicationMissing = "publication_missing";
     // The three execution-limit codes + the permission denial.
     public const string StartupTimeout = "startup_timeout";
     public const string IdleTimeout = "idle_timeout";

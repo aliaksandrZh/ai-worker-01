@@ -24,9 +24,13 @@ COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
 COPY entry /usr/local/bin/agent-entry
 
 ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
+# PI_REQUIRED_PUBLICATION_KINDS pins the publication mandate in the image: the Bridge's toolcheck
+# verifies the review submission against the observed tool executions (nudging a missing one;
+# PI_PUBLICATION_NUDGES caps those follow-up prompts). Non-secret configuration only.
 ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=review \
+    PI_PUBLICATION_NUDGES=2 \
     GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
 
 RUN chmod +x /usr/local/bin/agent-entry /usr/local/bin/github-mcp-server \

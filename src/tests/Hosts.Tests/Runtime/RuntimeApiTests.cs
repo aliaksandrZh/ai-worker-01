@@ -242,7 +242,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
     }
 
     [Fact]
-    public async Task Completed_PersistsManifest_Artifacts_AndFinalizesTheRun()
+    public async Task Completed_PersistsCollectedArtifacts_AndFinalizesTheRun()
     {
         await using var api = await RuntimeTestSupport.NewApiAsync(postgres);
         var preparation = await RuntimeTestSupport.SeedPreparedRunAsync(api);
@@ -444,7 +444,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
         var failed = await PostCallback(api, preparation.Run.Id, token, "failed", $@"{{
             ""eventId"":""evt-fail"",
             ""occurredAt"":""{DateTime.UtcNow:O}"",
-            ""error"": {{""code"":""artifact_too_large"",""message"":""result manifest invalid""}}
+            ""error"": {{""code"":""artifact_too_large"",""message"":""artifact collection failed""}}
         }}");
         Assert.Equal(HttpStatusCode.OK, failed.StatusCode);
         Assert.Equal(RunStatuses.Failed, (await db.Runs.AsNoTracking().SingleAsync(r => r.Id == preparation.Run.Id)).Status);
@@ -464,7 +464,7 @@ public class RuntimeApiTests(PostgresFixture postgres) : IClassFixture<PostgresF
             ""result"": {{""summary"":""s"",""artifacts"": [{{""type"":""implementation_summary"",""format"":""markdown"",""path"":""../outside.md""}}]}}
         }}";
         var completed = await PostCallback(api, preparation.Run.Id, token, "completed", completedBody);
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, completed.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, completed.StatusCode);
         Assert.Contains("escapes the workspace", await completed.Content.ReadAsStringAsync());
     }
 

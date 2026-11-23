@@ -1,108 +1,121 @@
 /**
- * Run result manifest: after `agent_settled` the agent must have written
- * `result.json` in its writable directory. The Bridge validates the manifest and artifact files in
- * place (within the workspace, ≤256 KiB), correlates `requiredPublications` with the observed
- * `tool_execution_end` records (the verification), and builds the terminal callback body
- * (outcome: `completed` | `needs_human_input`); branch/commitSha are derived via Git here.
+ * Publication toolcheck: after `agent_settled` the Bridge verifies the mandated publication kinds
+ * against the OBSERVED event stream (tool names with an error-free completed `tool_execution_end`) —
+ * the agent never self-reports, there is no result manifest. A missing mandate gets a follow-up
+ * prompt (the Bridge nudges, at most PI_PUBLICATION_NUDGES times); a permission-denied mandate fails
+ * immediately. On success the Bridge collects the `artifacts/` directory by convention (no agent-side
+ * JSON), derives branch/commitSha via Git, and builds the terminal `completed` callback body.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, extname, join } from "node:path";
 
 const MAX_ARTIFACT_BYTES = 256 * 1024; // max_artifact_size, hard limit
-const FORMAT = new Set(["markdown", "json", "text"]);
-const TYPE = new Set(["plan", "test_cases", "review_report", "implementation_summary"]);
 
-export function loadManifest(workspace, log = () => {}) {
-  const path = join(workspace, "result.json");
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    log(`result.json is not valid JSON: ${error.message}\n`);
-    return null;
+/** Mandated publication kind → the GitHub MCP tool(s) whose successful execution confirms it. */
+export const PUBLICATION_TOOLS = {
+  issue_comment: ["add_issue_comment"],
+  pull_request: ["pull_request_write"],
+  review: ["pull_request_review_write"],
+};
+
+/**
+ * Verifies every mandated publication kind against the observed tool stream.
+ * `completedToolNames`: tool names of error-free completed `tool_execution_end` records.
+ * `deniedToolNames`: tool names the unattended permission policy denied — a mandated publication
+ * whose tool was DENIED is a fundamentally different failure from a transport/GitHub one: fail the
+ * run with `required_permission_denied` immediately (a nudge cannot help).
+ * @returns {ok: true} when every mandated kind is confirmed, else {ok: false, missing, denied}.
+ */
+export function checkPublications(requiredKinds, completedToolNames = new Set(), deniedToolNames = new Set()) {
+  const missing = [];
+  const denied = [];
+  for (const kind of requiredKinds) {
+    const tools = PUBLICATION_TOOLS[kind] ?? [];
+    if (tools.some((tool) => completedToolNames.has(tool))) continue;
+    if (tools.some((tool) => deniedToolNames.has(tool))) denied.push(kind);
+    else missing.push(kind);
   }
+  return missing.length === 0 && denied.length === 0
+    ? { ok: true, missing: [], denied: [] }
+    : { ok: false, missing, denied };
+}
+
+/** The follow-up prompt the Bridge sends after a settle that left a mandated publication unconfirmed. */
+export function nudgePrompt(missing) {
+  return [
+    "Your run cannot be completed yet: the mandatory publication(s) were not confirmed:",
+    `${missing.join(", ")}.`,
+    "",
+    "Perform the missing publication(s) now via the GitHub MCP tools. If you already attempted one,",
+    "verify on GitHub whether it landed BEFORE re-posting — never duplicate a comment, pull request",
+    "or review. If a publication is impossible, say so clearly in your final message.",
+  ].join("\n");
 }
 
 /**
- * Validates `{schemaVersion, summary, artifacts[], requiredPublications[], outcome?}`; every artifact
- * file must exist inside the workspace and be ≤256 KiB — no silent truncation, ever.
- * `requiredPublicationKinds`: each mandated kind must have at least one
- * publication whose `toolCallId` observed a completed, error-free `tool_execution_end` — an agent that
- * never even attempted its mandatory publication fails here instead of “succeeding” unverified.
- * `observedCompletedToolCalls` is the Bridge-built set of error-free completed tool call ids.
- * @returns null when valid, else the diagnosable reason string.
+ * Collects the run's artifacts by convention: every file in `<workspace>/artifacts/` is an artifact.
+ * The type comes from the file stem (plan.md → `plan`, implementation-summary.md →
+ * `implementation_summary`, review.md → `review_report`, test-cases → `test_cases`, anything else →
+ * `custom`); the format from the extension (.md → markdown, .json → json, else text). No agent-side
+ * JSON ever describes them. Oversize artifacts fail the run — no silent truncation, ever.
+ * @returns {artifacts, error} — error: {code, message} | null.
  */
-export function validateManifest(manifest, workspace, observedCompletedToolCalls = new Set(), requiredPublicationKinds = [], deniedToolCallIds = new Set()) {
-  if (manifest === null) return "manifest_invalid: the agent did not write a result.json";
-  if (manifest.schemaVersion !== 1) return "manifest_invalid: schemaVersion must be 1";
-  if (typeof manifest.summary !== "string" || manifest.summary.length === 0)
-    return "manifest_invalid: summary is required";
-  const artifacts = manifest.artifacts ?? [];
-  if (!Array.isArray(artifacts)) return "manifest_invalid: artifacts must be a list";
-  const root = resolve(workspace);
-  for (const artifact of artifacts) {
-    if (!artifact || typeof artifact.type !== "string" || typeof artifact.format !== "string" || typeof artifact.path !== "string")
-      return "manifest_invalid: artifacts[] entries need type/format/path";
-    if (!TYPE.has(artifact.type)) return `manifest_invalid: artifact type '${artifact.type}' is not valid`;
-    if (!FORMAT.has(artifact.format)) return `manifest_invalid: artifact format '${artifact.format}' is not supported`;
-    const absolute = resolve(root, artifact.path);
-    if (!absolute.startsWith(root + sep)) return `manifest_invalid: artifact path '${artifact.path}' escapes the workspace`;
-    if (!existsSync(absolute)) return `manifest_invalid: artifact file '${artifact.path}' does not exist in the workspace`;
-    const bytes = statSync(absolute).size;
+export function collectArtifacts(workspace) {
+  const dir = join(workspace, "artifacts");
+  if (!existsSync(dir)) return { artifacts: [], error: null };
+  const artifacts = [];
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    if (!statSync(path).isFile()) continue;
+    const bytes = statSync(path).size;
     if (bytes > MAX_ARTIFACT_BYTES)
-      return `artifact_too_large: artifact '${artifact.path}' is ${bytes} bytes; the limit is ${MAX_ARTIFACT_BYTES}`;
+      return {
+        artifacts: [],
+        error: { code: "artifact_too_large", message: `artifact 'artifacts/${name}' is ${bytes} bytes; the limit is ${MAX_ARTIFACT_BYTES}` },
+      };
+    const ext = extname(name).toLowerCase();
+    const stem = basename(name, ext).toLowerCase();
+    artifacts.push({
+      type: ARTIFACT_TYPE_BY_STEM.get(stem) ?? "custom",
+      format: FORMAT_BY_EXT.get(ext) ?? "text",
+      path: `artifacts/${name}`,
+    });
   }
-  if (manifest.outcome !== undefined && manifest.outcome !== "needs_human_input")
-    return "manifest_invalid: outcome must be 'needs_human_input' (or absent)";
-  const publications = Array.isArray(manifest.requiredPublications) ? manifest.requiredPublications : [];
-  for (const publication of publications) {
-    if (!publication || typeof publication.toolCallId !== "string" || typeof publication.kind !== "string")
-      return "manifest_invalid: requiredPublications[] entries need toolCallId/kind";
-    if (observedCompletedToolCalls.has(publication.toolCallId)) continue;
-    // the mandatory operation was DENIED by the unattended permission
-    // policy — a fundamentally different failure from a transport/GitHub one: fail the run with
-    // `required_permission_denied` (Task Failed → Workflow waiting_for_human → notification).
-    if (deniedToolCallIds.has(publication.toolCallId))
-      return `required_permission_denied: required publication '${publication.toolCallId}' (${publication.kind}) was denied by the run's permission policy`;
-    return `github_publication_failed: required publication '${publication.toolCallId}' (${publication.kind}) had no completed tool execution`;
-  }
-  for (const kind of requiredPublicationKinds) {
-    const confirmed = publications.some(
-      (publication) => publication?.kind === kind && observedCompletedToolCalls.has(publication.toolCallId));
-    if (confirmed) continue;
-    const denied = publications.some(
-      (publication) => publication?.kind === kind && deniedToolCallIds.has(publication.toolCallId));
-    if (denied)
-      return `required_permission_denied: required publication kind '${kind}' was denied by the run's permission policy`;
-    return `github_publication_failed: required publication kind '${kind}' has no confirmed successful tool execution`;
-  }
-  return null;
+  return { artifacts, error: null };
 }
 
-/** Builds the terminal `completed` body (validation, including publication correlation, precedes it).
+const ARTIFACT_TYPE_BY_STEM = new Map([
+  ["plan", "plan"],
+  ["implementation-summary", "implementation_summary"],
+  ["review", "review_report"],
+  ["review-report", "review_report"],
+  ["test-cases", "test_cases"],
+]);
+const FORMAT_BY_EXT = new Map([
+  [".md", "markdown"],
+  [".json", "json"],
+]);
+
+/** Builds the terminal `completed` body (the publication toolcheck precedes it).
  * `sessionFilePath` is the per-Run path the Bridge discovered at launch (`get_state.sessionFile`,
  * carried so the Runtime API can record the actual path on the AgentSession row). */
-export function terminalFromManifest(manifest, runId, sessionFilePath = null) {
+export function completedTerminal(runId, sessionFilePath, summary, artifacts, facts) {
   return {
     id: `evt-${runId}-terminal`,
     route: "completed",
     body: {
       eventId: `evt-${runId}-terminal`,
       occurredAt: new Date().toISOString(),
-      ...(manifest.outcome === "needs_human_input" ? { outcome: "needs_human_input" } : {}),
       ...(sessionFilePath ? { sessionFilePath } : {}),
       result: {
-        summary: manifest.summary,
-        artifacts: (manifest.artifacts ?? []).map(({ type, format, path }) => ({ type, format, path })),
-        ...gitFacts(workspaceOf()),
+        summary,
+        artifacts,
+        branch: facts.branch,
+        commitSha: facts.commitSha,
       },
     },
   };
-}
-
-function workspaceOf() {
-  return process.env.PI_WORKSPACE || "/workspace";
 }
 
 export function gitFacts(workspace) {

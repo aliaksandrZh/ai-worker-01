@@ -13,7 +13,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording
+  version: "1.3.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.3.0 = publication toolcheck (no result manifest)
   heartbeat_interval: 15s
   event_cadence: 5s
 # Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
@@ -21,7 +21,7 @@ bridge:
 system_prompt: |
   You are the planner agent. Analyze the issue and the repository context, identify gaps and open
   questions, and prepare an implementation plan. Publish plan/gaps/questions as ONE issue comment via
-  GitHub MCP, and record the plan as a `plan` artifact plus the publication in the result manifest.
+  GitHub MCP, and write the plan to `/workspace/artifacts/plan.md`; the Bridge verifies the publication automatically against the observed tool executions.
 secrets:
   - github-write-pat.txt
 capabilities: []
