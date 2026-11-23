@@ -111,6 +111,61 @@ public static class GitHubMappers
         return long.TryParse(last, out var number) ? number : null;
     }
 
+    /// <summary>One Projects v2 item from `/users/{owner}/projectsV2/{n}/items`: content coordinates
+    /// (repository from the full `repository` object or parsed out of the API `url` — PR payloads
+    /// carry no repository object) plus the canonical field list. Missing/unknown shapes degrade to
+    /// sync-only values (null coordinates), never throw.</summary>
+    public static ProjectItemSnapshot MapProjectItem(JsonElement item)
+    {
+        var contentType = String(item, "content_type") ?? "Unknown";
+        var hasContent = item.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object;
+        var fields = new List<ProjectFieldValue>();
+        if (item.TryGetProperty("fields", out var fieldsElement) && fieldsElement.ValueKind == JsonValueKind.Array)
+            foreach (var field in fieldsElement.EnumerateArray())
+                if (Int64(field, "id") is { } fieldId)
+                    fields.Add(new ProjectFieldValue(fieldId, String(field, "name"), CanonicalValue(field)));
+        return new ProjectItemSnapshot(
+            ItemId: item.GetProperty("id").GetInt64(),
+            ItemNodeId: String(item, "node_id"),
+            ContentType: contentType,
+            RepositoryFullName: hasContent ? RepositoryFullNameOf(content) : null,
+            Number: hasContent ? Int32(content, "number") : null,
+            Title: hasContent ? String(content, "title") ?? "" : "",
+            Fields: fields,
+            CreatedAt: Timestamp(item, "created_at") ?? DateTime.UnixEpoch,
+            UpdatedAt: Timestamp(item, "updated_at") ?? DateTime.UnixEpoch);
+    }
+
+    /// <summary>Issue payloads carry the full `repository` object; PR payloads only the API `url`
+    /// (`.../repos/{owner}/{repo}/pulls/{n}`) — both resolve to `owner/repo`.</summary>
+    private static string? RepositoryFullNameOf(JsonElement content)
+    {
+        if (String(content, "repository", "full_name") is { } fullName)
+            return fullName;
+        if (String(content, "url") is not { } url)
+            return null;
+        var marker = url.IndexOf("/repos/", StringComparison.Ordinal);
+        if (marker < 0)
+            return null;
+        var rest = url[(marker + "/repos/".Length)..];
+        var owner = rest.IndexOf('/');
+        var repo = owner >= 0 ? rest.IndexOf('/', owner + 1) : -1;
+        return repo < 0 ? null : rest[..repo];
+    }
+
+    /// <summary>Field `value` in diffable form: single-select options and users collapse to their
+    /// display `name`, strings stay raw, everything else to its JSON text.</summary>
+    private static string CanonicalValue(JsonElement field)
+    {
+        if (!field.TryGetProperty("value", out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return "";
+        if (value.ValueKind == JsonValueKind.String)
+            return value.GetString() ?? "";
+        if (value.ValueKind == JsonValueKind.Object && String(value, "name") is { } name)
+            return name;
+        return value.GetRawText();
+    }
+
     /// <summary>`updated_at` of a raw listing item — position bookkeeping must include items a stream skips.</summary>
     public static DateTime? UpdatedAtOf(JsonElement element)
     {

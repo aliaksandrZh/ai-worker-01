@@ -36,6 +36,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<RunContextSnapshot> RunContextSnapshots => Set<RunContextSnapshot>();
     public DbSet<MonitorObservation> MonitorObservations => Set<MonitorObservation>();
     public DbSet<OrphanCandidate> OrphanCandidates => Set<OrphanCandidate>();
+    public DbSet<ProjectSync> ProjectSyncs => Set<ProjectSync>();
+    public DbSet<ProjectItem> ProjectItems => Set<ProjectItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -57,6 +59,29 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .WithMany()
                 .HasForeignKey(c => c.RepositoryId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ---- projects pass (Projects v2 boards) ----
+
+        modelBuilder.Entity<ProjectSync>(entity =>
+        {
+            entity.ToTable("project_sync");
+            entity.HasIndex(p => new { p.Owner, p.ProjectNumber }).IsUnique();
+        });
+
+        modelBuilder.Entity<ProjectItem>(entity =>
+        {
+            entity.ToTable("project_item");
+            entity.Property(i => i.FieldValues).HasColumnType("jsonb");
+            entity.HasIndex(i => new { i.ProjectSyncId, i.ItemId }).IsUnique();
+            entity.HasOne<ProjectSync>()
+                .WithMany()
+                .HasForeignKey(i => i.ProjectSyncId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Repository>()
+                .WithMany()
+                .HasForeignKey(i => i.RepositoryId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<AgentProfile>(entity =>

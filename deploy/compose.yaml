@@ -177,7 +177,8 @@ services:
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
     restart: unless-stopped
     volumes:
-      # Polling knobs (poll_interval / poll_overlap / per_page from system.yaml).
+      # Polling knobs (poll_interval / poll_overlap / per_page from system.yaml) and the
+      # Projects v2 boards (projects.yaml) the projects pass lists.
       - ../deploy/config:/etc/pi-agent/config:ro
       # Polling knobs (system.yaml only) — per-file mount (see runtime-api above).
       - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
