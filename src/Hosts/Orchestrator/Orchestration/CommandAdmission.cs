@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator.Commands;
 
@@ -102,7 +103,7 @@ public static class CommandAdmission
     /// only, the production path (CommentCommandProcessor) always passes it.</summary>
     public static async Task<AdmissionOutcome?> AdmitAsync(
         AppDbContext db, AgentCommand command, WorkItem workItem, Repository repository,
-        string? botLogin, CancellationToken cancellationToken)
+        string? botLogin, CancellationToken cancellationToken, ILogger? logger = null)
     {
         var name = command.CommandName;
 
@@ -212,7 +213,7 @@ public static class CommandAdmission
             });
         }
 
-        db.OrchestrationJobs.Add(new OrchestrationJob
+        var orchestrationJob = new OrchestrationJob
         {
             Id = Guid.NewGuid(),
             TaskId = task.Id,
@@ -223,7 +224,8 @@ public static class CommandAdmission
             AvailableAt = now,
             CreatedAt = now,
             UpdatedAt = now,
-        });
+        };
+        db.OrchestrationJobs.Add(orchestrationJob);
 
         // the Task occupies the Workflow: waiting_for_human → active
         workflow.Status = WorkflowStatuses.Active;
@@ -233,6 +235,9 @@ public static class CommandAdmission
 
         command.Status = AgentCommandStatuses.Queued;
         command.ProcessedAt = now;
+        logger?.LogInformation(
+            "command {commandId} admitted: /{command} on work item {workItemId} → task {taskId} (job {jobId}, workflow {workflowId}, profile version {versionId})",
+            command.Id, name, workItem.Id, task.Id, orchestrationJob.Id, workflow.Id, version.Id);
         return null;
     }
 

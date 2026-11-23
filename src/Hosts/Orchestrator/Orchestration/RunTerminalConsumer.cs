@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
 using PiAgent.Infrastructure.Persistence;
@@ -24,7 +25,7 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// exhausted-retries closing when silent retries were involved, the plain resubmit text otherwise
 /// (one for every finally-failed Task, `TimedOut` included).
 /// </summary>
-public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWorkerCycle
+public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogger<RunTerminalConsumer> logger) : IWorkerCycle
 {
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
@@ -107,6 +108,9 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     task.AutomaticRetriesUsed += 1;
                     RequeueTaskForAutomaticRetry(db, task, workflow, policy, task.AutomaticRetriesUsed, now);
                     requeued = true; // silent: no notification, no command/workflow terminal writes
+                    logger.LogInformation(
+                        "run {runId} failed pre-execution ({errorCode}) — task {taskId} requeued for automatic retry {retry}/{max}",
+                        run.Id, run.ErrorCode, task.Id, task.AutomaticRetriesUsed, policy.MaxAutomaticRetries);
                     break;
                 }
                 task.Status = OrchestrationTaskStatuses.Failed;
@@ -155,6 +159,12 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory) : IWo
                     preExecution: false, retriesExhausted: false, cancellationToken);
                 break;
         }
+
+        // the terminal transition itself — one line per run outcome for the full-flow trace
+        logger.LogInformation(
+            "run {runId} terminal ({runStatus}): task {taskId} → {taskStatus}{reason}",
+            run.Id, run.Status, task.Id, task.Status,
+            task.FailureReason is null ? "" : $" ({task.FailureReason})");
 
         var job = await db.OrchestrationJobs
             .Where(j => j.TaskId == task.Id

@@ -47,6 +47,18 @@ const logsDir = env.PI_LOGS_DIR || "/logs";
 const spoolDir = env.PI_SPOOL_DIR || "/spool";
 const terminalMarker = join(spoolDir, ".terminal-delivered");
 
+/** One readable console line per mapped RunEvent (mirrors what the Runtime API persists). */
+function echoRunEvent(body) {
+  const payload = body.payload ?? {};
+  let detail = "";
+  if (typeof payload.toolName === "string") detail = ` ${payload.toolName}`;
+  if (body.type === "assistant_output" && typeof payload.text === "string") {
+    const flat = payload.text.replace(/\s+/g, " ");
+    detail = ` ${flat.slice(0, 160)}${flat.length > 160 ? "…" : ""}`;
+  }
+  process.stdout.write(`agent: ${body.type}${detail}\n`);
+}
+
 function fail(message) {
   process.stderr.write(`bridge: ${message}\n`);
   process.exit(4);
@@ -57,8 +69,15 @@ function clampSeconds(value, fallback) {
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const logs = openLogs(logsDir, maxLogBytes, `bridge ${runId} boot (agent: ${agentBin} ${agentArgs.join(" ")})\n`);
-const log = (line) => logs.write("bridge.log", line);
+const bootLine = `bridge ${runId} boot (agent: ${agentBin} ${agentArgs.join(" ")})\n`;
+// console mirror: `docker logs <agent container>` shows the run's activity, not just the entry's
+// clone line; the durable per-Run trio (/logs/*) remains the source of truth.
+const log = (line) => {
+  process.stdout.write(line);
+  logs.write("bridge.log", line);
+};
+const logs = openLogs(logsDir, maxLogBytes, bootLine); // the trio keeps the boot line
+process.stdout.write(bootLine);                        // and the container stdout mirrors it
 
 /** Idempotent container restart: terminal delivered in an earlier lifetime → nothing left to do. */
 if (existsSync(terminalMarker)) {
@@ -214,6 +233,7 @@ async function main() {
   const mapper = new EventMapper((entry) => {
     if (entry.body.type === "tool_completed" && isSuccessfulToolEnd(entry.body.payload))
       observedCompletedToolCalls.add(entry.body.payload.toolCallId);
+    echoRunEvent(entry.body);
     spool.append(entry);
   }, eventCadenceSeconds);
 
@@ -253,7 +273,10 @@ async function main() {
     }
   });
   agent.stderr.setEncoding("utf8");
-  agent.stderr.on("data", (chunk) => logs.write("stderr.log", chunk));
+  agent.stderr.on("data", (chunk) => {
+    logs.write("stderr.log", chunk);
+    process.stderr.write(chunk); // mirror: pi's stderr must be visible in `docker logs` too
+  });
 
   // heartbeat cadence → coalesced single-slot spool entry; heartbeat proves liveness
   // only and never counts as progress. Declared before the launch handshake so the
