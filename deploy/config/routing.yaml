@@ -9,6 +9,12 @@ rules:
     profile: planner
     priority: 1
     enabled: true
+  # /code routes to the coder profile (Node.js + .NET image): implements the approved plan,
+  # pushes the agent branch, publishes the summary comment
+  - task_type: implement
+    profile: coder
+    priority: 1
+    enabled: true
   # /review and automatic initial reviews route to the reviewer profile
   - task_type: review
     profile: reviewer
