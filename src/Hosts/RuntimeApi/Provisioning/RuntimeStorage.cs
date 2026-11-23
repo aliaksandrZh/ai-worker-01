@@ -8,28 +8,28 @@ namespace PiAgent.RuntimeApi.Provisioning;
 
 public sealed class StorageOptions
 {
-    /// <summary>In-container view of the managed root (decision 52: `/var/lib/pi-agent/workflows`).</summary>
+    /// <summary>In-container view of the managed root (`/var/lib/pi-agent/workflows`).</summary>
     public string ManagedRoot { get; set; } = "/var/lib/pi-agent/workflows";
     /// <summary>Host absolute path of the same tree — composed into the container mount strings Periphery resolves.</summary>
     public string HostRoot { get; set; } = "/var/lib/pi-agent/workflows";
-    /// <summary>In-container view of the host-managed profile secrets (decision 54); existence is verified on this path.</summary>
+    /// <summary>In-container view of the host-managed profile secrets; existence is verified on this path.</summary>
     public string SecretsManagedDir { get; set; } = "/etc/pi-agent/secrets";
     /// <summary>Host absolute path handed to the read-only `/run/secrets/<name>` mounts.</summary>
     public string SecretsHostDir { get; set; } = "/etc/pi-agent/secrets";
     /// <summary>Agent containers run as this host uid; per-Run writable dirs are chowned to it.</summary>
     public int ContainerUserId { get; set; } = 1000;
-    /// <summary>§16 `max_log_size` — deployment-level copy kept in sync with system.yaml (documented shortcut).</summary>
+    /// <summary>`max_log_size` — deployment-level copy kept in sync with system.yaml (documented shortcut).</summary>
     public int MaxLogMegabytes { get; set; } = 50;
 }
 
-/// <summary>Per-Run storage tree (decision 52 + the callback-spool addition): `{root}/{workflow_id}/runs/{run_id}/
+/// <summary>Per-Run storage tree (plus the callback-spool addition): `{root}/{workflow_id}/runs/{run_id}/
 /// {pi-session, logs, callback-spool}`, plus the Task workspace `{root}/{workflow_id}/tasks/{task_id}/workspace`.</summary>
 public sealed record RunTreePaths(string RunDir, string SessionDir, string LogsDir, string SpoolDir, string TokenFile);
 
 /// <summary>
 /// Creates and hands out physical per-Run/workspace paths. Paths are returned in both views: the in-cont
-/// iner `ManagedRoot` (what `AgentSession.session_file_path` and `Run.log_storage_reference` record — the
-/// §52/§57 reference shape) and the `HostRoot` absolute host path that must go into container mount strings.
+/// iner `ManagedRoot` (what `AgentSession.session_file_path` and `Run.log_storage_reference` record) and
+/// the `HostRoot` absolute host path that must go into container mount strings.
 /// </summary>
 public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
 {
@@ -73,12 +73,12 @@ public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
 
     public sealed record StorageDeletion(bool Deleted, bool Missing, DateTime DeletedAt);
 
-    /// <summary>Decision-60 evidence probe (task 16): the same host tree is mounted into the Runtime API and
+    /// <summary>Spool-evidence probe: the same host tree is mounted into the Runtime API and
     /// the agent container, so the control plane can see whether a Run's Bridge still holds UNDELIVERED
     /// ORDERED callbacks (the coalesced heartbeat slot does not count — a healthy channel empties the spool
     /// within one sender pass, so a lingering ordered entry means delivery was interrupted and lifecycle
     /// facts like `agent_started` may be in flight). While entries are pending, the reconcilers must not
-    /// adjudicate terminal outcomes on the ABSENCE of facts (decision 22: investigate before stopping).
+    /// adjudicate terminal outcomes on the ABSENCE of facts (investigate before stopping).
     /// Unreadable spool reads are treated as empty: adjudication proceeds as before rather than hanging.</summary>
     public bool SpoolHasUndeliveredEntries(Guid workflowId, Guid runId)
     {
@@ -121,7 +121,7 @@ public sealed class RuntimeStorageService(IOptions<StorageOptions> options)
         Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
             .Sum(file => new FileInfo(file).Length);
 
-    /// <summary>Resolves a profile secret reference (decision 54, fail closed): the returned host path is the
+    /// <summary>Resolves a profile secret reference (fail closed): the returned host path is the
     /// mount source; the checks (single flat name, must exist, must be non-empty, files only — a directory
     /// named like a secret is not a mountable secret) probe the in-container managed view, which is the
     /// only one guaranteed to exist. Error strings are name-free prefixes; the callers add the name.</summary>

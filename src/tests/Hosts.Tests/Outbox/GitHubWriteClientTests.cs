@@ -10,8 +10,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Outbox;
 
 /// <summary>
-/// GitHubWriteClient wire behavior (task 03 plan): POST/GET comment endpoints, bearer PAT header
-/// from ticket-02 discipline, rate-limit header capture for decision-67 classification, and the
+/// GitHubWriteClient wire behavior: POST/GET comment endpoints, bearer PAT header
+/// discipline, rate-limit header capture for delivery classification, and the
 /// never-log-the-token rule — even if a (stubbed, hostile) response echoes it back.
 /// </summary>
 public class GitHubWriteClientTests

@@ -19,7 +19,7 @@ public sealed class WorkerLoopState
 }
 
 /// <summary>
-/// §13 worker heartbeat: ticks every IntervalSeconds, runs all IWorkerCycle units.
+/// Worker heartbeat: ticks every IntervalSeconds, runs all IWorkerCycle units.
 /// Dependency failures inside cycles never stop the loop (startup-restart tolerance);
 /// lastSuccessfulCycleUtc advances only when every cycle succeeds.
 /// </summary>

@@ -6,7 +6,7 @@ namespace PiAgent.Platform.Logging;
 
 public static class LoggingServiceCollectionExtensions
 {
-    /// <summary>Configures the §14 structured JSON console format for one service.</summary>
+    /// <summary>Configures the structured JSON console format for one service.</summary>
     public static ILoggingBuilder AddPiJsonLogging(this ILoggingBuilder builder, string serviceName)
     {
         builder.AddConsole(console => console.FormatterName = CorrelationJsonConsoleFormatter.FormatterName);

@@ -1,10 +1,10 @@
 /**
- * Per-Run log trio (decision 43): `logs/{stdout.log, stderr.log, bridge.log}` written by the Bridge
- * with the §16 `max_log_size` (default 50 MiB per Run, configurable) applied to the trio's TOTAL:
+ * Per-Run log trio: `logs/{stdout.log, stderr.log, bridge.log}` written by the Bridge
+ * with `max_log_size` (default 50 MiB per Run, configurable) applied to the trio's TOTAL:
  * when an append would exceed the shared budget the offending file rotates (`<file>.1` rename, the
  * oldest segment dropped first) and appending continues. A segment is only kept while the budget
  * still holds after it (newest content wins). The session `.jsonl` is NOT part of this cap — it is
- * session storage (decision 57), never log content.
+ * session storage, never log content.
  */
 import { appendFileSync, existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -51,7 +51,7 @@ export class Trio {
     if (existsSync(segment)) rmSync(segment);
     const current = join(this.logsDir, fileName);
     if (existsSync(current)) renameSync(current, segment);
-    appendFileSync(current, `[rotated ${new Date().toISOString()}] log budget reached (decision 43)\n`);
+    appendFileSync(current, `[rotated ${new Date().toISOString()}] log budget reached\n`);
   }
 
   /** Budget holds after every write: oldest segments go first; segment-less overshoot is bounded by

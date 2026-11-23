@@ -15,8 +15,8 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// Ticket 13: the execution-limit reconciler — the pure verdict matrix (TimeoutEvaluator), the
-/// effective-limit cap (§16: profiles may lower but never bypass system constraints), the sweeper
+/// The execution-limit reconciler — the pure verdict matrix (TimeoutEvaluator), the
+/// effective-limit cap (profiles may lower but never bypass system constraints), the sweeper
 /// cycle against real PostgreSQL (startup/idle/max_run_duration reconciliations recording the
 /// identical terminal facts), and the container-death reconciliation with the owner notification.
 /// </summary>
@@ -30,7 +30,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         HeartbeatInterval = TimeSpan.FromSeconds(5),
     };
 
-    // ---- pure verdict matrix (03 §9, decision 68) ----
+    // ---- pure verdict matrix ----
 
     [Theory]
     [InlineData(TimeoutVerdict.None, "running", true, false)]        // fresh progress
@@ -210,7 +210,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(WorkspaceStatuses.Ready, workspace.Status);
     }
 
-    /// <summary>Task 16 (decision 22 posture): a Runtime API restart mid-run — the readiness fact
+    /// <summary>Posture: a Runtime API restart mid-run — the readiness fact
     /// (`agent_started`) may still sit in the Bridge's callback spool while the API was down;
     /// `startup_timeout` must not adjudicate the absence of a fact that is redelivery-in-flight.</summary>
     [Fact]
@@ -276,7 +276,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         Assert.Equal(RunErrorCodes.IdleTimeout, reloaded.ErrorCode);
     }
 
-    /// <summary>Task 16 (04 §8: exactly one terminal writer): a terminal callback delivered while a
+    /// <summary>(exactly one terminal writer): a terminal callback delivered while a
     /// reconciler observed a stale state must win — the reconciled write becomes an idempotent no-op.</summary>
     [Fact]
     public async Task ReconciledTerminal_NeverOverwritesADeliveredTerminalCallback()
@@ -400,7 +400,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         await using var scope = NewScope();
         var run = await SeedRunAsync(RunStatuses.Running, startedAgo: TimeSpan.FromMinutes(5), progressAgo: TimeSpan.FromSeconds(1), heartbeatAgo: TimeSpan.FromSeconds(1));
         // the run WAS executing (the real pipeline persists agent_started before `running`) — a death
-        // after execution began is final: notification, never an automatic retry (decisions 70/29)
+        // after execution began is final: notification, never an automatic retry
         var dbSeed = postgres.NewDbContext();
         dbSeed.RunEvents.Add(new RunEvent
         {

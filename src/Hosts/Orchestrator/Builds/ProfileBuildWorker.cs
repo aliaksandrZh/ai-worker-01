@@ -11,12 +11,12 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.Orchestrator.Builds;
 
 /// <summary>
-/// Decision 81 orchestration side: every AgentProfileVersion is built asynchronously through the Build
+/// Orchestration side: every AgentProfileVersion is built asynchronously through the Build
 /// Worker. Per tick (all steps idempotent — the restart reconciler is this same cycle over durable rows):
 /// <list type="bullet">
 /// <item>Open BuildJobs: a version in `draft` (or `building` without a job — e.g. recovery) gets a durable
 /// BuildJob; the `buildId` is persisted BEFORE dispatch, and `draft → building` flips in the same write.
-/// The Config Loader never builds or dispatches (decision 81); this cycle is the only dispatcher.</item>
+/// The Config Loader never builds or dispatches; this cycle is the only dispatcher.</item>
 /// <item>Dispatch due `pending` BuildJobs: `POST /internal/builds` (idempotent by buildId on the worker) →
 /// `polling`. Transport/5xx/429 = transient: exponential backoff, the version STAYS `building` — network
 /// failures and worker unavailability are never build failures.</item>
@@ -38,7 +38,7 @@ public sealed class ProfileBuildWorker(
 {
     public async Task RunCycleAsync(CancellationToken cancellationToken)
     {
-        // cold-start gate (01 §13): no build dispatch before configuration synchronization succeeded
+        // cold-start gate: no build dispatch before configuration synchronization succeeded
         if (!configurationState.Synchronized)
             return;
 
@@ -47,8 +47,8 @@ public sealed class ProfileBuildWorker(
         await RefreshGaugesAsync(cancellationToken);
     }
 
-    /// <summary>One transaction keeps BuildJob creation and the `building` flip atomic (decision 81:
-    /// the buildId is persisted before dispatch; a crash after commit resumes from the durable row).</summary>
+    /// <summary>One transaction keeps BuildJob creation and the `building` flip atomic (the
+    /// buildId is persisted before dispatch; a crash after commit resumes from the durable row).</summary>
     private async Task OpenBuildJobsAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -244,7 +244,7 @@ public sealed class ProfileBuildWorker(
         }
     }
 
-    /// <summary>Decision 81: the Orchestrator validates the polled result before any version transition —
+    /// <summary>The Orchestrator validates the polled result before any version transition —
     /// the local image tag must match the pinned convention and ID/digest/log reference must be present.</summary>
     private string? ValidateSuccess(BuildResponse status, AgentProfile profile, AgentProfileVersion version)
     {
@@ -266,7 +266,7 @@ public sealed class ProfileBuildWorker(
         var now = DateTime.UtcNow;
         job.State = BuildJobStates.Completed;
         job.ImageTag = status.ImageTag;
-        job.ImageDigest = status.ImageDigest; // mirror target (02 §12b): matches AgentProfileVersion.ImageDigest
+        job.ImageDigest = status.ImageDigest; // mirror target: matches AgentProfileVersion.ImageDigest
         job.BuildLogReference = status.BuildLogReference;
         job.Attempts = 0;
         job.NextRetryAt = null;
@@ -290,7 +290,7 @@ public sealed class ProfileBuildWorker(
         job.NextRetryAt = null;
         job.LastError = $"build failed{(errorCode is null ? "" : $" ({errorCode})")}: {error}";
         job.UpdatedAt = now;
-        version.State = ProfileVersionStates.BuildFailed; // the ONLY terminal trigger (decisions 35/56/81)
+        version.State = ProfileVersionStates.BuildFailed; // the ONLY terminal trigger
         await db.SaveChangesAsync(cancellationToken);
         metrics.BuildsFailedTotal++;
         logger.LogWarning("build {buildId} failed — version {version} set to build_failed: {error}",

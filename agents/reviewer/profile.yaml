@@ -1,4 +1,4 @@
-description: Review a Pull Request at the pinned Head SHA in a fresh read-only workspace; submit the review and inline comments via GitHub MCP (decisions 17/31/42/64/74)
+description: Review a Pull Request at the pinned Head SHA in a fresh read-only workspace; submit the review and inline comments via GitHub MCP
 enabled: true
 runtime_type: pi
 max_context_tokens: 200000
@@ -16,7 +16,7 @@ bridge:
   version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json)
   heartbeat_interval: 15s
   event_cadence: 5s
-# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image (decision 56); this field
+# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
 # stays the control-plane summary that pins it on the version row.
 system_prompt: |
   You are the reviewer agent. Review the pull request at the pinned head SHA using the locally formed

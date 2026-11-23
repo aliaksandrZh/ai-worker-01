@@ -15,10 +15,10 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// Ticket 09: the Orchestrator-side terminal-Run consumer — Task/Workflow transitions derived from
-/// Runtime-persisted facts (03 §2: the Orchestrator owns the machine; agents report facts): promotion
+/// The Orchestrator-side terminal-Run consumer — Task/Workflow transitions derived from
+/// Runtime-persisted facts (the Orchestrator owns the machine; agents report facts): promotion
 /// `starting → running`, the `completed` consumer reading its persisted `outcome` (`succeeded` vs
-/// `blocked`, decision 72), `failed`, and the desired container stop (03 §5).
+/// `blocked`), `failed`, and the desired container stop.
 /// </summary>
 public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -122,7 +122,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
             completedPayload: """{"eventId":"evt-terminal","outcome":"needs_human_input","result":{"summary":"asked"}}""");
         await NewConsumer().RunCycleAsync(default);
 
-        Assert.Equal(OrchestrationTaskStatuses.Blocked, (await ReloadTaskAsync(task.Id)).Status); // decision 72
+        Assert.Equal(OrchestrationTaskStatuses.Blocked, (await ReloadTaskAsync(task.Id)).Status); // agent asked a human
         var db = postgres.NewDbContext();
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
@@ -132,14 +132,14 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
     public async Task CancelledRun_MarksTaskCancelledWithTheStopReason_WaitingForHuman()
     {
         await postgres.ResetAsync();
-        // ticket 14: the graceful stop confirmed by the terminal `cancelled` callback (06 §8.2)
+        // the graceful stop confirmed by the terminal `cancelled` callback
         var (task, run) = await SeedStartingRunAsync(RunStatuses.Cancelled);
         await NewConsumer().RunCycleAsync(default);
 
         var reloaded = await ReloadTaskAsync(task.Id);
         Assert.Equal(OrchestrationTaskStatuses.Cancelled, reloaded.Status);
         Assert.NotNull(reloaded.CancelledAt);
-        Assert.Equal(AgentCommandRejectionReasons.StopRequested, reloaded.FailureReason); // the only V1 canceller
+        Assert.Equal(AgentCommandRejectionReasons.StopRequested, reloaded.FailureReason); // the only canceller
         var db = postgres.NewDbContext();
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
@@ -177,7 +177,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
-    public async Task GithubPublicationFailed_EnqueuesTheDecision42Notification_OnceWithArtifactsKept()
+    public async Task GithubPublicationFailed_EnqueuesTheFailureNotification_OnceWithArtifactsKept()
     {
         await postgres.ResetAsync();
         var db = postgres.NewDbContext();
@@ -192,7 +192,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         await NewConsumer().RunCycleAsync(default);
 
         var notifications = await db.OutboxActions.AsNoTracking().ToListAsync();
-        var notification = Assert.Single(notifications); // exactly one per failed Run (06 §13)
+        var notification = Assert.Single(notifications); // exactly one per failed Run
         Assert.Equal(OutboxActionTypes.Comment, notification.ActionType);
         Assert.Equal(task.Id, notification.TaskId);
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
@@ -203,7 +203,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Contains($"(id: run_{run.Id})", text, StringComparison.Ordinal);
         Assert.Contains("The produced artifacts are kept", text, StringComparison.Ordinal);
         Assert.Contains("(or use /retry)", text, StringComparison.Ordinal);
-        // decision 42: never re-publishes the agent's result — the notification carries diagnostics only
+        // never re-publishes the agent's result — the notification carries diagnostics only
         Assert.DoesNotContain("## Plan", text, StringComparison.Ordinal);
         // deterministic idempotency: the Run's own id is the dedup key of this notification
         Assert.Equal(run.Id.ToString(), notification.IdempotencyKey);
@@ -230,7 +230,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         db.ChangeTracker.Clear();
         await NewConsumer().RunCycleAsync(default);
 
-        // ticket 15 (decision 29): the generic 06 §13 template now covers every finally-failed Task —
+        // the generic failure template covers every finally-failed Task —
         // codes outside the exhausted-retries/publication cases get the plain resubmit closing
         var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
@@ -278,7 +278,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal("completed", outcome2);
     }
 
-    // ---- ticket 15: automatic pre-execution retry (decisions 28/70) ----
+    // ---- automatic pre-execution retry ----
 
     /// <summary>Seeds a terminal-failed attempt over SeedStartingRunAsync: the given error code, attempt
     /// number and spent automatic-retry budget; no `agent_started` event (pre-execution) unless
@@ -315,14 +315,14 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
 
         var db = postgres.NewDbContext();
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == originalTask.Id);
-        Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status); // Failed → Queued, same Task (03 §2)
+        Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status); // Failed → Queued, same Task
         Assert.Null(task.FailureReason);
         Assert.Null(task.CompletedAt);
-        Assert.Equal(1, task.AutomaticRetriesUsed); // decision 28 budget spent
+        Assert.Equal(1, task.AutomaticRetriesUsed); // budget spent
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
         Assert.Equal(WorkflowStatuses.Active, workflow.Status); // retried Task still occupies the Workflow
         Assert.Equal(task.Id, workflow.CurrentTaskId);
-        // silent: the trigger command stays queued, no notification (06 §13)
+        // silent: the trigger command stays queued, no notification
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == task.TriggerCommandId);
         Assert.Equal(AgentCommandStatuses.Queued, command.Status);
         Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
@@ -376,7 +376,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal(AgentCommandStatuses.Failed, command.Status);
         // no fresh job was created behind the exhausted budget
         Assert.Single(await db.OrchestrationJobs.AsNoTracking().Where(j => j.TaskId == task.Id).ToListAsync());
-        // one notification in the 06 §13 template, exhausted-retries closing
+        // one notification with the exhausted-retries closing
         var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
         Assert.Equal(originalRun.Id.ToString(), notification.IdempotencyKey);
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
@@ -411,7 +411,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
     public async Task RuntimeFailure_AfterExecutionBegan_NeverAutoRetries()
     {
         await postgres.ResetAsync();
-        // the agent STARTED (agent_started persisted) — decision 70: /retry is the only recovery path
+        // the agent STARTED (agent_started persisted) — /retry is the only recovery path
         await SeedFailedAttemptAsync(RunErrorCodes.RuntimeFailure, executionStarted: true);
         await NewConsumer().RunCycleAsync(default);
 
@@ -444,7 +444,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         var reloaded = await ReloadTaskAsync(originalTask.Id);
         Assert.Equal(OrchestrationTaskStatuses.Failed, reloaded.Status);
         Assert.Equal("max_run_duration", reloaded.FailureReason);
-        Assert.Equal(0, reloaded.AutomaticRetriesUsed); // never retried (03 §3)
+        Assert.Equal(0, reloaded.AutomaticRetriesUsed); // never retried (execution had begun)
         var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;

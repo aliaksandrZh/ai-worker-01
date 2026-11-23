@@ -1,15 +1,15 @@
 /**
- * Run result manifest (04 §4, decisions 42/59): after `agent_settled` the agent must have written
+ * Run result manifest: after `agent_settled` the agent must have written
  * `result.json` in its writable directory. The Bridge validates the manifest and artifact files in
  * place (within the workspace, ≤256 KiB), correlates `requiredPublications` with the observed
- * `tool_execution_end` records (the decision-42 verification), and builds the terminal callback body
+ * `tool_execution_end` records (the verification), and builds the terminal callback body
  * (outcome: `completed` | `needs_human_input`); branch/commitSha are derived via Git here.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-const MAX_ARTIFACT_BYTES = 256 * 1024; // §16 max_artifact_size, hard limit
+const MAX_ARTIFACT_BYTES = 256 * 1024; // max_artifact_size, hard limit
 const FORMAT = new Set(["markdown", "json", "text"]);
 const TYPE = new Set(["plan", "test_cases", "review_report", "implementation_summary"]);
 
@@ -27,7 +27,7 @@ export function loadManifest(workspace, log = () => {}) {
 /**
  * Validates `{schemaVersion, summary, artifacts[], requiredPublications[], outcome?}`; every artifact
  * file must exist inside the workspace and be ≤256 KiB — no silent truncation, ever.
- * `requiredPublicationKinds` (decision 42, task 12): each mandated kind must have at least one
+ * `requiredPublicationKinds`: each mandated kind must have at least one
  * publication whose `toolCallId` observed a completed, error-free `tool_execution_end` — an agent that
  * never even attempted its mandatory publication fails here instead of “succeeding” unverified.
  * `observedCompletedToolCalls` is the Bridge-built set of error-free completed tool call ids.
@@ -60,7 +60,7 @@ export function validateManifest(manifest, workspace, observedCompletedToolCalls
     if (!publication || typeof publication.toolCallId !== "string" || typeof publication.kind !== "string")
       return "manifest_invalid: requiredPublications[] entries need toolCallId/kind";
     if (observedCompletedToolCalls.has(publication.toolCallId)) continue;
-    // Ticket 13 (decision 69): the mandatory operation was DENIED by the unattended permission
+    // the mandatory operation was DENIED by the unattended permission
     // policy — a fundamentally different failure from a transport/GitHub one: fail the run with
     // `required_permission_denied` (Task Failed → Workflow waiting_for_human → notification).
     if (deniedToolCallIds.has(publication.toolCallId))
@@ -82,7 +82,7 @@ export function validateManifest(manifest, workspace, observedCompletedToolCalls
 
 /** Builds the terminal `completed` body (validation, including publication correlation, precedes it).
  * `sessionFilePath` is the per-Run path the Bridge discovered at launch (`get_state.sessionFile`,
- * decision 57) — carried so the Runtime API can record the actual path on the AgentSession row. */
+ * carried so the Runtime API can record the actual path on the AgentSession row). */
 export function terminalFromManifest(manifest, runId, sessionFilePath = null) {
   return {
     id: `evt-${runId}-terminal`,
@@ -121,8 +121,8 @@ export function gitFacts(workspace) {
 }
 
 /**
- * The structured Markdown prompt the Bridge renders from the frozen input (decision 63, one RPC
- * prompt). The input is the ticket-11 context package (v2 shape); sections are optional — the
+ * The structured Markdown prompt the Bridge renders from the frozen input (one RPC
+ * prompt). The input is the context package; sections are optional — the
  * renderer prints only what the Orchestrator assembled and invents nothing: each section maps 1:1
  * to the frozen RunContextSnapshot content.
  */

@@ -10,7 +10,7 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.RuntimeApi.Api;
 
 /// <summary>
-/// The four callback routes (04 §4): every delivery is persisted as a RunEvent (unique `(run_id, event_id)`)
+/// The four callback routes: every delivery is persisted as a RunEvent (unique `(run_id, event_id)`)
 /// <em>before</em> acknowledgement; duplicates are idempotent no-ops. Terminal routes set the Run's terminal
 /// state, record the log trio facts + a `log_reference` Artifact, revoke the per-Run credential, stop the
 /// container, and release the workspace; `completed` also creates the validated manifest's Artifact rows
@@ -23,7 +23,7 @@ public static class CallbackHandler
     /// the Orchestrator's terminal consumer reads e.g. `outcome` from the completed payload).</summary>
     internal static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web);
 
-    private const long MaxArtifactBytes = 256 * 1024; // §16 max_artifact_size, hard limit
+    private const long MaxArtifactBytes = 256 * 1024; // max_artifact_size, hard limit
     private static readonly string[] ManifestArtifactTypes =
         [ArtifactTypes.Plan, ArtifactTypes.TestCases, ArtifactTypes.ReviewReport, ArtifactTypes.ImplementationSummary];
 
@@ -38,7 +38,7 @@ public static class CallbackHandler
                 request.OccurredAt, cancellationToken) is { } duplicate)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return duplicate; // 200: idempotent replay of an already-persisted beat (02 §18)
+            return duplicate; // 200: idempotent replay of an already-persisted beat
         }
         var now = DateTime.UtcNow;
         await db.Runs.Where(r => r.Id == runId)
@@ -54,7 +54,7 @@ public static class CallbackHandler
         if (string.IsNullOrWhiteSpace(request.EventId))
             return RunPipelineApi.Error(400, "validation", "eventId is required");
         if (!RunEventTypes.All.Contains(request.Type))
-            return RunPipelineApi.Error(400, "unknown_event_type", $"type '{request.Type}' is not part of the RunEvent set (02 §18)");
+            return RunPipelineApi.Error(400, "unknown_event_type", $"type '{request.Type}' is not part of the RunEvent set");
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var eventPayload = request.Payload is { } value ? JsonSerializer.Serialize(value) : null;
@@ -71,7 +71,7 @@ public static class CallbackHandler
             await db.AgentSessions.Where(s => s.RunId == runId)
                 .ExecuteUpdateAsync(set => set.SetProperty(s => s.LastActivityAt, now), cancellationToken);
         }
-        // Ticket 13 (03 §3): `agent_started` is the readiness fact — the Run leaves `starting` (or the
+        // `agent_started` is the readiness fact — the Run leaves `starting` (or the
         // still-dispatching `pending`) for `running` here; the sweeper's startup_timeout judges exactly
         // the runs that never emitted it. Events can legitimately arrive WHILE /start is still
         // provisioning (observed live: a fast container emits agent_start before /start returns), so
@@ -115,8 +115,7 @@ public static class CallbackHandler
             }, cancellationToken);
     }
 
-    /// <summary>Terminal callback of the graceful stop sequence (04 §4 step 7, decision 61, ticket 14):
-    /// the Bridge posts `cancelled` after clearing the queue, aborting, and verifying the process tree is
+    /// <summary>Terminal callback of the graceful stop sequence: the Bridge posts `cancelled` after clearing the queue, aborting, and verifying the process tree is
     /// gone — Run → `cancelled` with the same terminal facts as every terminal delivery (no error code;
     /// the reason is the stop signal's, kept in ErrorMessage for /status).</summary>
     public static async Task<IResult> CancelledAsync(
@@ -195,7 +194,7 @@ public static class CallbackHandler
             }
 
             await FinalizeTerminalRunAsync(db, run, storage, cancellationToken);
-            // decision 57 (ticket 12): record the Bridge-discovered session path when the agent
+            // record the Bridge-discovered session path when the agent
             // reported one — the provisioning-time prediction is provisional, this is the actual path.
             if (!string.IsNullOrWhiteSpace(sessionFilePath))
                 await db.AgentSessions.Where(s => s.RunId == runId)
@@ -218,10 +217,10 @@ public static class CallbackHandler
             .FirstOrDefaultAsync(cancellationToken);
         if (container?.ContainerName is { } containerName)
         {
-            // The stop is the container's own termination: with direct docker stop (decision 82) the
+            // The stop is the container's own termination: with direct docker stop the
             // SIGTERM can kill the Bridge mid-response — the request aborts and the caller's token is
-            // cancelled. The observed-machine facts must not be lost to that abort (decision 22
-            // posture), so this block ignores the request cancellation entirely.
+            // cancelled. The observed-machine facts must not be lost to that abort,
+            // so this block ignores the request cancellation entirely.
             var stopped = await provisioner.StopAsync(containerName, CancellationToken.None);
             if (stopped)
             {
@@ -256,7 +255,7 @@ public static class CallbackHandler
         var workspace = await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == task.Id, cancellationToken);
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
         // the Runtime API reads the workspace through its OWN mount (Storage.ManagedRoot); the row's
-        // storage_reference stays the host-reference shape decision 52 wants on the record
+        // storage_reference stays the host-reference shape
         var workspaceHostPath = storage.WorkspacePath(workflow.Id, task.Id);
 
         var artifacts = new List<Artifact>();
@@ -267,7 +266,7 @@ public static class CallbackHandler
             if (!ManifestArtifactTypes.Contains(manifestArtifact.Type)) // log_reference is Runtime-API generated
                 return RunPipelineApi.Error(422, "manifest_invalid", $"artifact type '{manifestArtifact.Type}' is not a valid manifest artifact type");
 
-            // in-place validation (04 §4): inside the workspace, present, ≤256 KiB — no silent truncation
+            // in-place validation: inside the workspace, present, ≤256 KiB — no silent truncation
             var absolute = Path.GetFullPath(Path.Combine(workspaceHostPath, manifestArtifact.Path));
             if (Path.GetRelativePath(workspaceHostPath, absolute).StartsWith("..", StringComparison.Ordinal))
                 return RunPipelineApi.Error(422, "manifest_invalid", $"artifact path '{manifestArtifact.Path}' escapes the workspace");
@@ -278,7 +277,7 @@ public static class CallbackHandler
                 return RunPipelineApi.Error(422, "artifact_too_large",
                     $"artifact '{manifestArtifact.Path}' is {bytes.Length} bytes; the limit is {MaxArtifactBytes}");
             if (ArtifactFormats.Markdown != manifestArtifact.Format && ArtifactFormats.Json != manifestArtifact.Format && ArtifactFormats.Text != manifestArtifact.Format)
-                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact format '{manifestArtifact.Format}' is not supported in V1");
+                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact format '{manifestArtifact.Format}' is not supported");
 
             artifacts.Add(new Artifact
             {
@@ -326,8 +325,8 @@ public static class CallbackHandler
     }
 
     /// <summary>Terminal facts every terminal callback records: log trio fields, the `log_reference` Artifact,
-    /// credential revocation (decision 60), and the session's `terminated` state. Internal so the
-    /// ticket-14 stop-confirm sweeper can finalize a reconciled cancellation with identical facts.</summary>
+    /// credential revocation, and the session's `terminated` state. Internal so the
+    /// stop-confirm sweeper can finalize a reconciled cancellation with identical facts.</summary>
     internal static async Task FinalizeTerminalRunAsync(
         AppDbContext db, Run run, RuntimeStorageService storage, CancellationToken cancellationToken)
     {
@@ -336,7 +335,7 @@ public static class CallbackHandler
         var logsDir = $"{storage.Options.ManagedRoot}/{workflowId}/runs/{run.Id}/logs";
         var now = DateTime.UtcNow;
 
-        // decision 43: the reference points at the per-Run log directory; the size is the trio's total on
+        // the reference points at the per-Run log directory; the size is the trio's total on
         // disk; content is never copied into PostgreSQL.
         run.LogStorageReference = logsDir;
         run.LogSizeBytes = Directory.Exists(logsDir) ? RuntimeStorageService.DirectorySizeBytes(logsDir) : null;
@@ -383,7 +382,7 @@ public static class CallbackHandler
         var duplicate = await db.RunEvents.AsNoTracking()
             .AnyAsync(e => e.RunId == runId && e.EventId == eventId, cancellationToken);
         if (duplicate)
-            return Results.Json(new { persisted = true }); // duplicate eventIds are ignored (04 §8)
+            return Results.Json(new { persisted = true }); // duplicate eventIds are ignored
 
         db.RunEvents.Add(new RunEvent
         {

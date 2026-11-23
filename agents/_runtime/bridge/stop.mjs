@@ -1,5 +1,5 @@
 /**
- * Graceful stop (04 §4 graceful stop, decision 61, ticket 14): the Bridge control path for `/stop`.
+ * Graceful stop: the Bridge control path for `/stop`.
  * The signal travels Orchestrator → Runtime API → PostgreSQL (`run.stop_requested_at`) → this Bridge's
  * pull channel (`GET /internal/runtime/runs/{runId}/stop-request`, per-Run bearer). On request the
  * sequence runs: (1) RPC `clear_queue` first (an `abort` alone can continue queued messages), (2)

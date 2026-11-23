@@ -11,7 +11,7 @@ public sealed record ObservedContainer(
     double? CpuPercent, int? ProcessCount, string[] Processes, string[] Binds, bool Busy, string? Note);
 
 /// <summary>
-/// The local Docker Engine surface the Execution Host Monitor observes (01 §2/decision 62): container
+/// The local Docker Engine surface the Execution Host Monitor observes: container
 /// list by label (`pi-run`), per-container process tree (`/top`), CPU usage (`/stats?stream=false`),
 /// state and bind mounts (`/json`) — raw HTTP over the read-only unix socket, the same posture as the
 /// Platform readiness check and the Build Worker's engine client.
@@ -136,7 +136,7 @@ public sealed class DockerMonitorClient(IOptions<DockerOptions> options, ILogger
     }
 
     /// <summary>Busy = an active child process tree beyond the entrypoint/supervisor trio, or notable
-    /// CPU (decision 68: a long-running build/test is not killed for silence — a conservative detector).</summary>
+    /// CPU (a long-running build/test is not killed for silence — a conservative detector).</summary>
     internal static bool BusyProcessTree(IEnumerable<string> processes, double? cpuPercent) =>
         processes.Any(p => !IsSupervisorProcess(p)) || (cpuPercent ?? 0) >= CpuBusyPercent;
 

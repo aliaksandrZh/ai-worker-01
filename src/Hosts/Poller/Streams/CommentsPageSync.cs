@@ -8,7 +8,7 @@ namespace PiAgent.Poller.Streams;
 
 /// <summary>
 /// Shared sync for the two comment streams (issue_comments, pr_review_comments — same resource family
-/// per 02 §7/decision 53): repo-wide `sort=updated&direction=desc` listings, page size 100 via `Link`
+/// per the stream convention): repo-wide `sort=updated&direction=desc` listings, page size 100 via `Link`
 /// headers, one DB transaction per page (cursor advances only after durable save).
 ///
 /// Work-item resolution: comments reference their issue/PR by number; a comment whose WorkItem is not
@@ -54,7 +54,7 @@ public static class CommentsPageSync
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing advances (decision 53)
+            throw; // the cycle must stop for the whole run — nothing advances
         }
         catch (Exception exception)
         {
@@ -173,7 +173,7 @@ public static class CommentsPageSync
     }
 
     /// <summary>`ic:{id}:created` | `rc:{id}:created` | `ic:{id}:upd:{unix}:{sha8(body)}` — deterministic
-    /// 02 §7 fingerprints for comment events (edits within the same second still differ by content).</summary>
+    /// fingerprints for comment events (edits within the same second still differ by content).</summary>
     public static string CommentKey(string kind, long commentId, string change, DateTime? at, string? body) =>
         at is null
             ? $"{KeyPrefix(kind)}:{commentId}:{change}"

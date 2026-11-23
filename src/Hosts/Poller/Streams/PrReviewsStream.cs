@@ -6,7 +6,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller.Streams;
 
 /// <summary>
-/// `pr_reviews` stream (decision 53): one conditional `GET /repos/{o}/{r}/pulls/{n}/reviews` per
+/// `pr_reviews` stream: one conditional `GET /repos/{o}/{r}/pulls/{n}/reviews` per
 /// currently-open PR, each with the PR's stored ETag — a 304 means nothing changed and costs nothing
 /// against the primary limit (GitHub-side; we simply skip the PR, keeping its etag). 200 responses are
 /// persisted per PR in one transaction (rows upserted by `github_review_id`, transition events written);
@@ -24,7 +24,7 @@ public sealed class PrReviewsStream : IRepositoryStream
         try
         {
             var etags = cursorData?.Etags.ToDictionary(kv => kv.Key, kv => kv.Value) ?? new Dictionary<long, string>();
-            // open PRs only: reviews on closed/merged PRs were synced before closure; decision 75 pause still polls
+            // open PRs only: reviews on closed/merged PRs were synced before closure; pause still polls
             var openPrs = await run.Db.WorkItems
                 .OrderBy(w => w.Number)
                 .Where(w => w.RepositoryId == run.Repository.Id
@@ -41,7 +41,7 @@ public sealed class PrReviewsStream : IRepositoryStream
                     $"repos/{run.Repository.Owner}/{run.Repository.Name}/pulls/{pr.Number}/reviews?per_page={run.Options.PerPage}",
                     etag, cancellationToken);
                 if (page.NotModified)
-                    continue; // etag kept; primary limit untouched (decision 53)
+                    continue; // etag kept; primary limit untouched
                 anyModified = true;
                 await PersistAsync(run, pr.Id, pr.Number, page.Items, cancellationToken);
                 if (page.Etag is { } nextEtag)
@@ -54,7 +54,7 @@ public sealed class PrReviewsStream : IRepositoryStream
         }
         catch (GitHubRateLimitedException)
         {
-            throw; // the cycle must stop for the whole run — nothing advances (decision 53)
+            throw; // the cycle must stop for the whole run — nothing advances
         }
         catch (Exception exception)
         {
@@ -146,7 +146,7 @@ public sealed class PrReviewsStream : IRepositoryStream
                                 snapshot.SubmittedAt ?? now),
                         ], cancellationToken);
                     }
-                    // pending first-seen: no event (02 §6 — pending visibility is author-scoped; the
+                    // pending first-seen: no event (pending visibility is author-scoped; the
                     // submitted transition emits later)
                 }
             }

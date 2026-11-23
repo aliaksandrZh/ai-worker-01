@@ -5,7 +5,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Config;
 
 /// <summary>
-/// Immutable version pinning (02 §12, decision 54, owner rulings): the snapshot carries normalized
+/// Immutable version pinning: the snapshot carries normalized
 /// profile.yaml, per-file sha256 AND file contents (rebuildable without Git); config_hash is sha256
 /// over the canonical snapshot JSON. source_commit_sha is optional traceability metadata.
 /// </summary>

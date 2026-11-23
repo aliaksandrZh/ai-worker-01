@@ -2,9 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace PiAgent.Platform.Contracts;
 
-// ---- 04 §6: the asynchronous build contract between the Orchestrator and the Build Worker ----
-// The Orchestrator dispatches and polls; it never holds a connection open for the build itself
-// (decision 81). DTO naming on the wire is explicit (camelCase via JsonPropertyName).
+// ---- the asynchronous build contract between the Orchestrator and the Build Worker ----
+// The Orchestrator dispatches and polls; it never holds a connection open for the build itself. DTO naming on the wire is explicit (camelCase via JsonPropertyName).
 // Single shared copy in Platform: the former per-host mirrors had already drifted (class names and
 // field sets differed — e.g. `BuildStatusResponse` vs `BuildResponse`); this is the union shape.
 // Both sides read with System.Text.Json defaults (unknown members ignored), so extra fields on the
@@ -49,7 +48,7 @@ public static class BuildStates
     public const string Failed = "failed";
 }
 
-/// <summary>§8 error additions for the build contract (documented in docs/tasks/10-build-worker.md).</summary>
+/// <summary>Error-code additions for the build contract.</summary>
 public static class BuildErrorCodes
 {
     public const string BuildNotFound = "build_not_found";

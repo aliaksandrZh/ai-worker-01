@@ -13,10 +13,10 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Poller;
 
 /// <summary>
-/// One IWorkerCycle tick (decision 4/53): every enabled-or-paused repository (decision 75 — pause stops
+/// One IWorkerCycle tick: every enabled-or-paused repository (pause stops
 /// task-producing commands, never polling) is polled when its in-memory next-due gate has elapsed,
 /// streams in fixed order `issues → pulls → pr_reviews → issue_comments → pr_review_comments →
-/// timeline → deleted_comment_sweep` (the last runs on its own daily last-success gate, decision 77). A failing
+/// timeline → deleted_comment_sweep` (the last runs on its own daily last-success gate). A failing
 /// stream records its own cursor error and the remaining streams still run; a rate-limited one aborts the
 /// repository AND the whole cycle (nothing else attempted, cursors untouched) with an in-memory pause
 /// honoring Retry-After/X-RateLimit-Reset — primary limits — or bounded exponential backoff for 429s
@@ -79,13 +79,13 @@ public sealed class PollerCycle(
                         if (result.Kind == StreamResultKind.Failed)
                         {
                             state.AddError();
-                            // decision 65: 401 = GitHub rejected the PAT (revoked/expired) — a proper,
+                            // 401 = GitHub rejected the PAT (revoked/expired) — a proper,
                             // actionable error with no automatic fallback; other failures stay warnings.
                             if (result.Status == HttpStatusCode.Unauthorized)
                             {
                                 logger.LogError(
                                     "poller sync failed: {repo}/{stream}: {error} — the polling PAT is revoked, expired, or invalid: " +
-                                    "system configuration error; synchronization stays broken until the host-managed PAT file is replaced (no automatic fallback, decisions 50/65)",
+                                    "system configuration error; synchronization stays broken until the host-managed PAT file is replaced (no automatic fallback)",
                                     repository.FullName, stream.StreamName, result.Error);
                             }
                             else
@@ -135,7 +135,7 @@ public sealed class PollerCycle(
         }
     }
 
-    /// <summary>Pause sizing (decision 53): honor Retry-After / X-RateLimit-Reset for primary limits
+    /// <summary>Pause sizing: honor Retry-After / X-RateLimit-Reset for primary limits
     /// (up to 1 h so the cycle stays responsive); bounded exponential backoff (15 s ×2ⁿ, 5-min cap)
     /// for guidance-less 429s (secondary limits). Pure policy — public for tests.</summary>
     public static TimeSpan PauseDelay(GitHubRateLimitedException exception, int consecutiveRateLimited)

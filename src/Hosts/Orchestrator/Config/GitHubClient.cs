@@ -3,13 +3,13 @@ using System.Text.Json;
 
 namespace PiAgent.Orchestrator.Config;
 
-/// <summary>Onboarding metadata for one repository (02 §2).</summary>
+/// <summary>Onboarding metadata for one repository.</summary>
 public sealed record GitHubRepoInfo(long Id, string FullName, string DefaultBranch);
 
 /// <summary>
-/// GitHub REST calls the Config Loader needs at startup (02 §21, decision 66): GET /user for the bot
+/// GitHub REST calls the Config Loader needs at startup: GET /user for the bot
 /// identity check and GET /repos/{owner}/{repo} for repository onboarding metadata. Any non-success is
-/// a ConfigException naming the call — the PAT never appears in exceptions or logs (§14, decision 76).
+/// a ConfigException naming the call — the PAT never appears in exceptions or logs.
 /// Note: startup treats GitHub unavailability as a configuration error — the host fails and compose
 /// `restart: unless-stopped` provides the retry.
 /// </summary>
@@ -49,9 +49,9 @@ public sealed class GitHubClient(HttpClient httpClient, string? pat = null)
         if (!response.IsSuccessStatusCode)
         {
             var notFound = response.StatusCode == System.Net.HttpStatusCode.NotFound ? " (not found)" : "";
-            // decision 65: 401 = GitHub rejected the PAT — revoked/expired/invalid; no fallback PAT exists.
+            // 401 = GitHub rejected the PAT — revoked/expired/invalid; no fallback PAT exists.
             var rejectedPat = response.StatusCode == System.Net.HttpStatusCode.Unauthorized
-                ? " — GitHub rejected the PAT (revoked, expired, or invalid); replace the host-managed PAT file (no automatic fallback, decision 65)"
+                ? " — GitHub rejected the PAT (revoked, expired, or invalid); replace the host-managed PAT file (no automatic fallback)"
                 : "";
             throw new ConfigException($"GET /{path} failed: HTTP {(int)response.StatusCode}{notFound}{rejectedPat}");
         }

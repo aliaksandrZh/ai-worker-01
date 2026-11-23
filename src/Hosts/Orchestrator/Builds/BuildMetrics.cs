@@ -1,6 +1,6 @@
 namespace PiAgent.Orchestrator.Builds;
 
-/// <summary>§14 orchestrator build-flow counters (02 §12b/decision 81 bookkeeping).</summary>
+/// <summary>Orchestrator build-flow counters.</summary>
 public sealed class BuildMetrics
 {
     public int BuildJobsPending;

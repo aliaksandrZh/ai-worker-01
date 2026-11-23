@@ -6,10 +6,10 @@ using PiAgent.Orchestrator.Commands;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The durable-queue retry policy pinned on a Task at creation (02 §10, decision 28): the profile
+/// The durable-queue retry policy pinned on a Task at creation: the profile
 /// version's retry defaults over the system defaults. (`initial_backoff_seconds` is emitted too, so
 /// reading back `Effective` output is idempotent.) The Repository-override level has no representation
-/// in the V1 configuration shape and arrives with ticket 15 if needed (design doc).
+/// in the configuration shape.
 /// </summary>
 public static class RetryPolicies
 {
@@ -73,22 +73,22 @@ public static class RetryPolicies
 /// admitted (Task+Job written) or the command stayed untouched (control commands, non-failed /retry).</summary>
 public sealed record AdmissionOutcome(string Reason, string Detail);
 
-/// <summary>The pinned effective policy a consumer acts on (decision 28: repository override not
-/// representable in the V1 configuration shape — profile level only).</summary>
+/// <summary>The pinned effective policy a consumer acts on (repository override not
+/// representable in the configuration shape — profile level only).</summary>
 public sealed record RetryPolicyValues(int MaxAutomaticRetries, int InitialBackoffSeconds);
 
 /// <summary>
-/// The admission stage (04 §2, 06 §12, task 07): gates an authorized task-producing command, then
+/// The admission stage: gates an authorized task-producing command, then
 /// creates the Workflow get-or-create + Task + (for /code) TaskArtifactInput + OrchestrationJob, and
 /// moves the command to `queued` — inside the caller's (CommentCommandProcessor's) transaction. The
 /// invariant check runs under a `FOR UPDATE` lock on the Workflow row; the partial unique index
-/// `ux_task_one_unfinished_per_workflow` is the backstop (decision 79). Rejections happen before any
-/// Task exists (decisions 35/80); a rejected first command never creates a Workflow.
+/// `ux_task_one_unfinished_per_workflow` is the backstop. Rejections happen before any
+/// Task exists; a rejected first command never creates a Workflow.
 /// </summary>
 public static class CommandAdmission
 {
-    /// <summary>Commands that create Tasks (06 §2 table); /retry, /status, /stop, /help are not
-    /// admission inputs here. Public because /help (task 08) reuses the same command→task-type map.</summary>
+    /// <summary>Commands that create Tasks; /retry, /status, /stop, /help are not
+    /// admission inputs here. Public because /help reuses the same command→task-type map.</summary>
     public static readonly Dictionary<string, string> TaskTypeFor = new()
     {
         [AgentCommandNames.Plan] = OrchestrationTaskTypes.Plan,
@@ -108,18 +108,17 @@ public static class CommandAdmission
 
         if (name == AgentCommandNames.Retry)
         {
-            // /retry flows through ticket 15; until then it is untouched except on a failed Workflow
-            // (decision 71: only /status, /help and root closure remain available).
+            // /retry only touches a failed Workflow (only /status, /help and root closure remain available).
             var retryWorkflow = await db.Workflows.AsNoTracking()
                 .SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
             return retryWorkflow is { Status: WorkflowStatuses.Failed }
                 ? new AdmissionOutcome(AgentCommandRejectionReasons.WorkflowFailed,
-                    "the workflow has failed unrecoverably (decision 71)")
+                    "the workflow has failed unrecoverably")
                 : null;
         }
 
         if (name is null || !TaskTypeFor.ContainsKey(name))
-            return null; // /status, /help, /stop: consumed by tickets 08/14 — untouched here
+            return null; // /status, /help, /stop: consumed elsewhere — untouched here
 
         var now = DateTime.UtcNow;
         if (workItem.State != "open")
@@ -128,7 +127,7 @@ public static class CommandAdmission
 
         var taskType = TaskTypeFor[name];
 
-        // Routing/profile gates (02 §12a, decisions 35/36) — the same resolution /help lists with.
+        // Routing/profile gates — the same resolution /help lists with.
         var (resolved, reason, detail) = await ProfileGate.ResolveAsync(db, repository, taskType, cancellationToken);
         if (resolved is null || reason is not null || detail is not null)
             return new AdmissionOutcome(reason!, detail!);
@@ -142,7 +141,7 @@ public static class CommandAdmission
         Guid? planArtifactId = null;
         if (taskType == OrchestrationTaskTypes.Implement)
         {
-            // decision 80: /code approves the latest successful plan artifact — no implement-without-plan mode
+            // /code approves the latest successful plan artifact — no implement-without-plan mode
             planArtifactId = await LatestPlanArtifactIdAsync(db, workflowId, cancellationToken);
             if (planArtifactId is null)
                 return new AdmissionOutcome(AgentCommandRejectionReasons.PlanNotAvailable,
@@ -156,7 +155,7 @@ public static class CommandAdmission
             {
                 Id = Guid.NewGuid(),
                 WorkItemId = workItem.Id,
-                Status = WorkflowStatuses.WaitingForHuman, // 03 §1: first accepted command → task queued → active below
+                Status = WorkflowStatuses.WaitingForHuman, // first accepted command → task queued → active below
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -164,14 +163,14 @@ public static class CommandAdmission
         }
         else if (workflow.Status == WorkflowStatuses.Failed)
             return new AdmissionOutcome(AgentCommandRejectionReasons.WorkflowFailed,
-                "the workflow has failed unrecoverably (decision 71)");
+                "the workflow has failed unrecoverably");
         else if (workflow.Status == WorkflowStatuses.Closed)
             return new AdmissionOutcome(AgentCommandRejectionReasons.WorkItemClosed,
                 "the workflow is closed (root WorkItem closure)");
         else if (await db.OrchestrationTasks.AnyAsync(
                 t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
             return new AdmissionOutcome(AgentCommandRejectionReasons.UnfinishedTaskExists,
-                "the workflow already holds an unfinished Task (04 §2)");
+                "the workflow already holds an unfinished Task");
         else if (await IsNoNewInputRepeatAsync(db, workflow, taskType, workItem, botLogin, cancellationToken))
             return new AdmissionOutcome(AgentCommandRejectionReasons.NoNewInput,
                 "the previous same command succeeded and nothing new happened since it — comment what to change, then post again");
@@ -226,7 +225,7 @@ public static class CommandAdmission
             UpdatedAt = now,
         });
 
-        // the Task occupies the Workflow: waiting_for_human → active (03 §1)
+        // the Task occupies the Workflow: waiting_for_human → active
         workflow.Status = WorkflowStatuses.Active;
         workflow.CurrentTaskId = task.Id;
         workflow.StartedAt ??= now;
@@ -238,7 +237,7 @@ public static class CommandAdmission
     }
 
     /// <summary>
-    /// The no-new-input gate (owner decision 2026-11-23): the same task-producing command repeated after
+    /// The no-new-input gate: the same task-producing command repeated after
     /// its previous same-type Task succeeded, with no new human signal since that Task's trigger, is a
     /// duplicate — rejected `no_new_input` instead of burning another Run. Human signals: a non-bot
     /// comment (conversation or inline), a non-bot submitted review, a work item title/body edit, or a
@@ -315,8 +314,8 @@ public static class CommandAdmission
         }
     }
 
-    /// <summary>`SELECT … FOR UPDATE` on the Workflow row serializes same-Workflow admissions
-    /// (decision 79); returns the tracked row or null when none exists.</summary>
+    /// <summary>`SELECT … FOR UPDATE` on the Workflow row serializes same-Workflow admissions;
+    /// returns the tracked row or null when none exists.</summary>
     private static async Task<Workflow?> LockWorkflowAsync(AppDbContext db, Guid workItemId, CancellationToken cancellationToken)
     {
         var locked = await db.Workflows
@@ -325,7 +324,7 @@ public static class CommandAdmission
         return locked.Count > 0 ? locked[0] : null;
     }
 
-    /// <summary>The Artifact of the latest successful plan Task (decision 80) — shared by admission
+    /// <summary>The Artifact of the latest successful plan Task — shared by admission
     /// and the /help availability filter; null when no eligible artifact exists.</summary>
     public static async Task<Guid?> LatestPlanArtifactIdAsync(
         AppDbContext db, Guid? workflowId, CancellationToken cancellationToken)

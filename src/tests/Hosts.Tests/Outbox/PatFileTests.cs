@@ -19,7 +19,7 @@ public class PatFileTests
     [Fact]
     public void Unset_ErrorsNamingEnvVar()
     {
-        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PatFile.Read(null, EnvName, "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT (decision 50)"));
+        var exception = Assert.Throws<PiAgent.Platform.Config.ConfigException>(() => PatFile.Read(null, EnvName, "the Outbox Dispatcher publishes orchestration-owned comments with a repository-scoped write PAT"));
         Assert.Contains(EnvName, exception.Message);
     }
 

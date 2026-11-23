@@ -11,9 +11,9 @@ using PiAgent.Platform.Auth;
 namespace PiAgent.BuildWorker.Api;
 
 /// <summary>
-/// The internal build API (04 §6, decision 81). Both endpoints are private-network and service-token
-/// guarded — the Build Worker accepts the dedicated caller credential (`ServiceTokens__Orchestrator`,
-/// decision 65; the same direction/shape as the Runtime API's task-09 contour). The Build Worker has
+/// The internal build API. Both endpoints are private-network and service-token
+/// guarded — the Build Worker accepts the dedicated caller credential (`ServiceTokens__Orchestrator`;
+/// the same direction/shape as the Runtime API contour). The Build Worker has
 /// no database access whatsoever: idempotency and durability come from the local build-job documents.
 /// </summary>
 public static class BuildApi
@@ -124,7 +124,7 @@ public static class BuildApi
         doc.BuildLogReference, doc.ErrorCode, doc.ErrorMessage);
 }
 
-/// <summary>§7 error shape: { code, message, details }.</summary>
+/// <summary>Standard error shape: { code, message, details }.</summary>
 public sealed class BuildApiLog; // logger category for the build endpoints (static types cannot be type args)
 
 public static class BuildApiErrors

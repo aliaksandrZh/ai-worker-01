@@ -10,22 +10,22 @@ using PiAgent.Platform.Http;
 
 namespace PiAgent.RuntimeApi.Provisioning;
 
-/// <summary>Options for the Runtime API's direct container provisioning (decision 82: Komodo dropped;
+/// <summary>Options for the Runtime API's direct container provisioning (Komodo dropped;
 /// the Runtime API owns the Docker socket for its `pi-session-*` containers).</summary>
 public sealed class ContainerProvisionerOptions
 {
-    /// <summary>Execution host recorded on `ContainerInstance.HostId` (decision 35: exactly one configured host in V1).</summary>
+    /// <summary>Execution host recorded on `ContainerInstance.HostId` (exactly one configured host).</summary>
     public string HostId { get; set; } = "Local";
-    /// <summary>Compose network agent containers join to reach the Runtime API callbacks (01 §13).</summary>
+    /// <summary>Compose network agent containers join to reach the Runtime API callbacks.</summary>
     public string AgentNetwork { get; set; } = "pi-agent-net";
-    /// <summary>Runtime API address as reachable from agent containers (bridge callback base, 04 §4).</summary>
+    /// <summary>Runtime API address as reachable from agent containers (bridge callback base).</summary>
     public string CallbackBaseUrl { get; set; } = "http://runtime-api:8080";
 }
 
 /// <summary>Docker failure — the Runtime API surfaces it as a 502 (transient: retried by the dispatcher).</summary>
 public sealed class DockerProvisioningException(string message) : Exception(message);
 
-/// <summary>The container parameters one Run's agent container needs (04 §3: provisioning from Orchestrator-owned rows).</summary>
+/// <summary>The container parameters one Run's agent container needs (provisioning from Orchestrator-owned rows).</summary>
 public sealed record ContainerPlan(
     string Name,
     string Image,
@@ -36,17 +36,17 @@ public sealed record ContainerPlan(
     long? MemoryBytes,
     string Network);
 
-/// <summary>Observed container snapshot (03 §5 observed states are written back from observations);
+/// <summary>Observed container snapshot (observed states are written back from observations);
 /// exit facts come from `inspect`'s State block.</summary>
 public sealed record ContainerSnapshot(string State, long? ExitCode, bool? OomKilled);
 
 /// <summary>
-/// The minimal Docker Engine surface this system needs (01 §2: the Runtime API abstracts the
+/// The minimal Docker Engine surface this system needs (the Runtime API abstracts the
 /// provisioner). One container per Run: create → start → inspect → stop → remove over the unix socket
-/// (decision 82, same raw-HTTP posture as the Build Worker's engine client and the Host Monitor).
+/// (same raw-HTTP posture as the Build Worker's engine client and the Host Monitor).
 /// Failure semantics (the ones Komodo's locks used to provide): 404 = the container is gone (stop/remove
 /// treat it as already-done, inspect reports `removed`); socket/daemon failures throw — desired state is
-/// preserved and the caller retries (decision 22 posture).
+/// preserved and the caller retries.
 /// </summary>
 public interface IContainerProvisioner
 {

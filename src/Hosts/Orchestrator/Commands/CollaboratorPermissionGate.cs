@@ -6,19 +6,19 @@ using PiAgent.Platform.Http;
 
 namespace PiAgent.Orchestrator.Commands;
 
-/// <summary>Authorization verdict shapes for command processing (02 §21, decision 66).</summary>
+/// <summary>Authorization verdict shapes for command processing.</summary>
 public enum PermissionKind
 {
     Allowed,
     /// <summary>Collaborator but below the repository's configured minimum (default write).</summary>
     InsufficientPermission,
-    /// <summary>GitHub 404 — not a collaborator (or unknown); a per-user rejection per decision 66.</summary>
+    /// <summary>GitHub 404 — not a collaborator (or unknown); a per-user rejection.</summary>
     UserNotFound,
     /// <summary>5xx / network / rate-limited: the command stays `received`, check deferred.</summary>
     Transient,
     /// <summary>401 (revoked/expired PAT) or a regular 403: the PAT lacks scope to perform the check —
     /// a system configuration error surfaced in logs/health, never a per-user rejection, with no
-    /// automatic fallback to another PAT (decisions 65/66).</summary>
+    /// automatic fallback to another PAT.</summary>
     SystemConfigError,
 }
 
@@ -31,18 +31,18 @@ public enum AllowlistVerdict
 }
 
 /// <summary>
-/// The authorization gate (02 §21, decision 66): write permission via
+/// The authorization gate: write permission via
 /// `GET /repos/{owner}/{repo}/collaborators/{username}/permission` — `write`+`admin` accepted,
 /// `maintain` treated as `write`, `triage` as `read` — cached per (repository, login) for at most
 /// `CacheTtl` (60 s, absolute; error outcomes are never cached, so a removal is honored at worst
 /// one TTL late). The repositories.yaml allowlist is a pure evaluation over the synced
-/// `Repository.Configuration` jsonb (decision 49: enabled by default and seeded with the owner;
+/// `Repository.Configuration` jsonb (enabled by default and seeded with the owner;
 /// explicitly emptied = filtering off, write baseline remains; malformed configuration fails closed
 /// = denied).
 /// </summary>
 public sealed class CollaboratorPermissionGate(HttpClient httpClient, string pat, TimeSpan? cacheTtlOverride = null, ILogger<CollaboratorPermissionGate>? logger = null)
 {
-    /// <summary>Decision 66: results are cached for at most 60 seconds — not a tunable knob.</summary>
+    /// <summary>Results are cached for at most 60 seconds — not a tunable knob.</summary>
     public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromHours(1);
@@ -94,7 +94,7 @@ public sealed class CollaboratorPermissionGate(HttpClient httpClient, string pat
 
                 case HttpStatusCode.Unauthorized:
                     logger?.LogError(
-                        "GitHub rejected the permission check with HTTP 401 for {owner}/{repo}/user {login} — the PAT is revoked/expired or lacks scope: system configuration error, no fallback (decisions 65/66); check deferred",
+                        "GitHub rejected the permission check with HTTP 401 for {owner}/{repo}/user {login} — the PAT is revoked/expired or lacks scope: system configuration error, no fallback; check deferred",
                         owner, name, login);
                     return new PermissionOutcome(PermissionKind.SystemConfigError);
 
@@ -154,13 +154,13 @@ public sealed class CollaboratorPermissionGate(HttpClient httpClient, string pat
             return new PermissionOutcome(PermissionKind.Transient);
         }
 
-        var minimum = RoleRank(minimumPermission) ?? 3; // default/unknown → write (decision 66)
+        var minimum = RoleRank(minimumPermission) ?? 3; // default/unknown → write
         return observed.Value >= minimum
             ? new PermissionOutcome(PermissionKind.Allowed)
             : new PermissionOutcome(PermissionKind.InsufficientPermission);
     }
 
-    /// <summary>Rank (decision 66): none 0 < read 1 < triage 2 < write 3 < maintain 4 < admin 5.
+    /// <summary>Rank: none 0 < read 1 < triage 2 < write 3 < maintain 4 < admin 5.
     /// Unknown values map to null (caller decides the fallback).</summary>
     private static int? RoleRank(string? role) => role?.ToLowerInvariant() switch
     {
@@ -198,7 +198,7 @@ public sealed class CollaboratorPermissionGate(HttpClient httpClient, string pat
     }
 
     /// <summary>
-    /// Allowlist evaluation over the synced `Repository.Configuration` jsonb (decision 49):
+    /// Allowlist evaluation over the synced `Repository.Configuration` jsonb:
     /// `allowlist.enabled = false` → write baseline (Allowed after the permission check); enabled →
     /// case-insensitive login membership. Malformed JSON denies (fail closed — the configuration
     /// plane syncs a validated shape, so this path means a data bug, not a user mistake).

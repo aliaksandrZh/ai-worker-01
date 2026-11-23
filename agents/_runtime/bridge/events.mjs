@@ -1,18 +1,18 @@
 /**
- * pi RPC → RunEvent mapping (04 §4, decision 58): the realtime source is Pi's stdout JSONL stream.
+ * pi RPC → RunEvent mapping: the realtime source is Pi's stdout JSONL stream.
  * `message_update` text deltas are AGGREGATED before persistence (one RunEvent, not one per token):
  * deltas accumulate and flush as `assistant_output` on the event cadence or at any turn/tool boundary.
  * Heartbeats, thinking deltas, and queue updates are never progress and are not produced here.
  *
- * Ticket 13 (decision 69, fail-closed): a `permission_denied` stream record (the unattended
+ * Fail-closed: a `permission_denied` stream record (the unattended
  * permission policy's denial of a tool/MCP operation) maps to the `permission_blocked` RunEvent and
  * is collected in `deniedToolCallIds` — the manifest validation turns a REQUIRED publication whose
  * tool call was denied into a terminal `required_permission_denied` failure. The denial itself is
  * answered to the agent by the permission layer (never a parked dialog); the Bridge only records and
  * verifies.
  *
- * Two record shapes share this mapper (decision 56: the image owns the agent):
- * - real Pi (pi 04 §4 shapes): `message_update` carries `usage` + the nested `assistantMessageEvent`
+ * Two record shapes share this mapper (the image owns the agent):
+ * - real Pi: `message_update` carries `usage` + the nested `assistantMessageEvent`
  *   (`{type:"text_delta", delta}`); tool/agent events carry their fields at the record top level
  *   (pi docs `json.md`), and `tool_execution_end` carries `isError`.
  * - the reference stub protocol (config/agents/stub/stub-agent/pi-stub.mjs) nests event fields under
@@ -29,7 +29,7 @@ export class EventMapper {
     this.sequence = 0;
     this.pending = []; // [{id, text}] — deltas since the last flush
     this.settled = false;
-    this.deniedToolCallIds = new Set(); // decision 69: tool calls denied by the permission policy
+    this.deniedToolCallIds = new Set(); // tool calls denied by the permission policy
   }
 
   nextEventId(prefix = "evt") {
@@ -59,7 +59,7 @@ export class EventMapper {
         this.push("turn_completed", data);
         break;
       case "message_update": {
-        // aggregated assistant output: non-empty text deltas only (decision 58). Real pi wraps the
+        // aggregated assistant output: non-empty text deltas only. Real pi wraps the
         // streaming event in `assistantMessageEvent` and TYPES every event — only `text_delta` is
         // assistant output (`thinking_delta` is never progress); the stub protocol omits the type.
         const streamEvent = rpc.assistantMessageEvent ?? data;
@@ -80,7 +80,7 @@ export class EventMapper {
         this.push("tool_completed", endPayload(data));
         break;
       case "permission_denied":
-        // decision 69: recorded as `permission_blocked` (never progress, never a timer reset) and
+        // recorded as `permission_blocked` (never progress, never a timer reset) and
         // tracked so the manifest validation can fail the mandatory work as `required_permission_denied`
         this.flushAggregated();
         if (typeof data.toolCallId === "string") this.deniedToolCallIds.add(data.toolCallId);
@@ -135,7 +135,7 @@ function endPayload(data) {
 }
 
 /**
- * Decision-59 correlation helper: a `tool_execution_end` counts toward requiredPublications only when
+ * Correlation helper: a `tool_execution_end` counts toward requiredPublications only when
  * the tool execution actually finished WITHOUT an error (pi carries `isError`; the stub `status`).
  */
 export function isSuccessfulToolEnd(payload) {

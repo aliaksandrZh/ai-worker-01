@@ -10,7 +10,7 @@ namespace PiAgent.OutboxWorker.GitHub;
 /// <summary>
 /// A GitHub write outcome that is not 2xx (Status = the HTTP code) or a network-level failure
 /// (Status = null — "ambiguous": the write may still have landed server-side). Rate-limit and
-/// Retry-After headers are captured for decision-67 classification. Messages carry path, status,
+/// Retry-After headers are captured for delivery classification. Messages carry path, status,
 /// and response detail — with the PAT redacted even from a (hostile) response echo.
 /// </summary>
 public sealed class GitHubDeliveryException(
@@ -29,7 +29,7 @@ public sealed class GitHubDeliveryException(
 }
 
 /// <summary>
-/// GitHub REST calls the Outbox Dispatcher needs (decision 67): create the system-notification
+/// GitHub REST calls the Outbox Dispatcher needs: create the system-notification
 /// comment and read existing comment bodies for the marker check. Header discipline mirrors the
 /// Config Loader's GitHubClientFactory (Bearer PAT, GitHub JSON accept, own user agent).
 /// </summary>

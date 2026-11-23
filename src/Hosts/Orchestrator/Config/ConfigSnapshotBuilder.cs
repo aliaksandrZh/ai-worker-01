@@ -9,7 +9,7 @@ namespace PiAgent.Orchestrator.Config;
 public sealed record ProfileSnapshot(string ProfileName, string SourceDirectory, string SnapshotJson, string ConfigHash);
 
 /// <summary>
-/// Builds the immutable AgentProfileVersion.config_snapshot (02 §12, decision 54):
+/// Builds the immutable AgentProfileVersion.config_snapshot:
 /// normalized profile configuration, per-file sha256 AND file contents (owner ruling — the version stays
 /// rebuildable without the Git repo; source_commit_sha is optional traceability metadata only).
 /// config_hash is sha256 over the canonical one-line snapshot JSON; JSON member order is fixed by DTO

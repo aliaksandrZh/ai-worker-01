@@ -7,10 +7,10 @@ using YamlDotNet.Serialization;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// The §16 operational knobs the Runtime API's reconciliation enforces (ticket 13): `startup_timeout`,
-/// `idle_timeout`, `max_run_duration`, `heartbeat_interval` and the decision-77 orphan windows, read
-/// from `config/system.yaml` (the configuration plane; §16: profile versions may lower but never
-/// exceed these). All values are positive durations; the §16 spec defaults apply when a key is absent.
+/// The operational knobs the Runtime API's reconciliation enforces: `startup_timeout`,
+/// `idle_timeout`, `max_run_duration`, `heartbeat_interval` and the orphan windows, read
+/// from `config/system.yaml` (the configuration plane; profile versions may lower but never
+/// exceed these). All values are positive durations; defaults apply when a key is absent.
 /// </summary>
 public sealed class RuntimeLimits
 {
@@ -26,11 +26,11 @@ public sealed class RuntimeLimits
         const string name = "system.yaml";
         var path = string.IsNullOrEmpty(configRoot) ? null : Path.Combine(configRoot, name);
         if (path is null || !File.Exists(path))
-            return new RuntimeLimits(); // the spec defaults (a missing file is the §16 default document)
+            return new RuntimeLimits(); // defaults (a missing file means the default document)
 
         try
         {
-            // a narrow reader of the §16 duration knobs only — unknown keys are ignored here (the
+            // a narrow reader of the duration knobs only — unknown keys are ignored here (the
             // Orchestrator's strict ConfigParser validates the whole system.yaml document). The knob
             // grammar is the shared SystemYaml duration (integer s/m/h, positive) — the former local
             // lenient copy accepted decimals and negatives the Orchestrator's schema rejects.

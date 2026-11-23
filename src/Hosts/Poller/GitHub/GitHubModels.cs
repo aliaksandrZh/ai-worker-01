@@ -2,9 +2,9 @@ using System.Text.Json.Serialization;
 
 namespace PiAgent.Poller.GitHub;
 
-/// <summary>Mapped GitHub REST resources feeding the detection engine (task 04 streams).
-/// `AuthorLogin`/`CreatedAtGithub` extend the plan's snapshot sketch: the entities store them (02 §3)
-/// and the stream upserts need them — ledger ruling at Task 4.</summary>
+/// <summary>Mapped GitHub REST resources feeding the detection engine (the Poller streams).
+/// `AuthorLogin`/`CreatedAtGithub` extend the snapshot sketch: the entities store them
+/// and the stream upserts need them.</summary>
 public sealed record WorkItemSnapshot(
     string? NodeId, long Number, string Type, string Title, string? Body, string State,
     string? AuthorLogin,
@@ -22,8 +22,8 @@ public sealed record CommentSnapshot(long CommentId, long IssueNumber, string Ki
 public sealed record ReviewSnapshot(long ReviewId, long PrNumber, string State, string? AuthorLogin,
     string? Body, string? CommitSha, DateTime? SubmittedAt);
 
-// ---- JSONB event payloads (02 §7: "describing the change"; decision 78 names). snake_case property
-// names match the repository configuration DTO convention (close_reason per decision 78).
+// ---- JSONB event payloads ("describing the change"). snake_case property
+// names match the repository configuration DTO convention.
 
 public sealed record WorkItemCreatedEventPayload(
     [property: JsonPropertyName("number")] long Number,
@@ -71,10 +71,10 @@ public sealed record ReviewDismissedEventPayload(
     [property: JsonPropertyName("state")] string State,
     [property: JsonPropertyName("author")] string? Author);
 
-// ---- timeline + deleted-comment sweep payloads (task 05, decisions 51/77/78/79) ----
+// ---- timeline + deleted-comment sweep payloads ----
 
 /// <summary>`cross-referenced` timeline event (raw record; feeds `related_to` links). `source_type` is
-/// the referencing item's type — links form only from Issue↔PR pairs (typed columns, task 05 D1).</summary>
+/// the referencing item's type — links form only from Issue↔PR pairs (typed columns).</summary>
 public sealed record TimelineCrossReferencePayload(
     [property: JsonPropertyName("number")] long Number,
     [property: JsonPropertyName("source_number")] long SourceNumber,
@@ -87,19 +87,19 @@ public sealed record TimelineClosedPayload(
     [property: JsonPropertyName("commit_id")] string? CommitId,
     [property: JsonPropertyName("commit_message")] string? CommitMessage);
 
-/// <summary>Raw timeline record for `connected`/`disconnected` (decision 79: synced without V1 link
+/// <summary>Raw timeline record for `connected`/`disconnected` (synced without link
 /// semantics — the type lives in the event_type column, the payload names the owner only).</summary>
 public sealed record TimelineRecordPayload(
     [property: JsonPropertyName("number")] long Number);
 
-/// <summary>`issue_comment_deleted` / `review_comment_deleted` from the daily sweep (decision 77);
+/// <summary>`issue_comment_deleted` / `review_comment_deleted` from the daily sweep;
 /// `author` is the stored author of the tombstoned comment.</summary>
 public sealed record CommentDeletedEventPayload(
     [property: JsonPropertyName("comment_id")] long CommentId,
     [property: JsonPropertyName("issue_number")] long IssueNumber,
     [property: JsonPropertyName("author")] string? Author);
 
-/// <summary>One pull request summary from the ad-hoc `commits/{sha}/pulls` read (decision 51/D2):
+/// <summary>One pull request summary from the ad-hoc `commits/{sha}/pulls` read:
 /// the merged PR that introduced a closing commit.</summary>
 public sealed record IntroducerPullRequestSnapshot(long Number, DateTime? MergedAt);
 

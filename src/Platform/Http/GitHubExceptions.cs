@@ -3,7 +3,7 @@ using System.Net;
 namespace PiAgent.Platform.Http;
 
 /// <summary>A rate-limited GitHub response: 403 with `X-RateLimit-Remaining: 0` (primary) or 429
-/// (secondary). Carries `Retry-After` and `X-RateLimit-Reset` for pause scheduling (decision 53).</summary>
+/// (secondary). Carries `Retry-After` and `X-RateLimit-Reset` for pause scheduling.</summary>
 public sealed class GitHubRateLimitedException(
     HttpStatusCode status,
     int? remaining,

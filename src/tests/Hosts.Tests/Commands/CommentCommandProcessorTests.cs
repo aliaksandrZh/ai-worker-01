@@ -11,11 +11,11 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// The comment-command pipeline over real postgres with a stubbed GitHub (task 06): grammar outcomes
-/// → AgentCommand rows (received/authorized/rejected + persisted reason), decision-45 context
+/// The comment-command pipeline over real postgres with a stubbed GitHub: grammar outcomes
+/// → AgentCommand rows (received/authorized/rejected + persisted reason), context
 /// carve-out, idempotent replay per comment ID, policy checks (pause, permitted commands/types,
 /// target types), authorization (allowlist, permission API, transient deferral, revoked-PAT config
-/// error), cold-start deferral, and Outbox rejection replies wired to ticket 03's dispatcher.
+/// error), cold-start deferral, and Outbox rejection replies wired to the dispatcher.
 /// </summary>
 public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -33,7 +33,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        // task 07: the accepted command continues past authorization into admission → queued (02 §11)
+        // the accepted command continues past authorization into admission → queued
         Assert.Equal(AgentCommandStatuses.Queued, command.Status);
         Assert.Equal(AgentCommandNames.Plan, command.CommandName);
         Assert.Equal("@jsxhuz /plan extra context", command.SourceBodySnapshot);
@@ -48,7 +48,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
         Assert.Equal(1, harness.Metrics.CommandsAuthorizedTotal);
     }
 
-    // ---- decision 45 + bot + review comments ----
+    // ---- context carve-out + bot + review comments ----
 
     [Fact]
     public async Task MentionOnlyComment_NoRow_NoOutbox()
@@ -115,7 +115,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
 
         var reply = await db.OutboxActions.AsNoTracking().SingleAsync();
         Assert.Contains("not a supported command", reply.Payload);
-        // the supported-commands line is DERIVED (owner decision B): the default repo config permits
+        // the supported-commands line is DERIVED: the default repo config permits
         // all eight commands, and the canonical test_cases renders as the /test-cases token
         Assert.Contains("Supported commands: `/plan`, `/code`, `/review`, `/test-cases`, `/status`, `/stop`, `/help`, `/retry`",
             reply.Payload, StringComparison.Ordinal);
@@ -223,7 +223,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
     [Fact]
     public async Task PausedRepository_StatusStillProcessed()
     {
-        // decision 75 + task 08: control commands are unaffected by a repository pause — /status works
+        // control commands are unaffected by a repository pause — /status works
         var (db, harness, comment, _) = await NewCaseAsync(body: "@jsxhuz /status", enabled: false);
         AuthStub200(harness.Handler);
         await RunAsync(db, harness);
@@ -243,7 +243,7 @@ public class CommentCommandProcessorTests(PostgresFixture postgres) : IClassFixt
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Rejected, command.Status);
         Assert.Equal(AgentCommandRejectionReasons.NotPermittedCommand, command.RejectionReason);
-        // owner decision B: the reply derives the permitted list from the repository config
+        // the reply derives the permitted list from the repository config
         var reply = await db.OutboxActions.AsNoTracking().SingleAsync();
         Assert.Contains("(permitted: `/status`)", reply.Payload, StringComparison.Ordinal);
     }

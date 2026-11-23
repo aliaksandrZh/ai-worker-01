@@ -11,7 +11,7 @@ namespace PiAgent.Poller.Streams;
 /// instead of duplicated upsert/detect logic): ONE transaction per page — upsert rows, run snapshot diff
 /// against the stored snapshot, write events, advance the cursor — then commit. A crash mid-page rolls
 /// the whole transaction back: the cursor stays put and the next overlap window re-processes the page
-/// (fingerprint dedupe keeps it idempotent, decision 53).
+/// (fingerprint dedupe keeps it idempotent).
 /// </summary>
 public static class WorkItemPageSync
 {
@@ -127,7 +127,7 @@ public static class WorkItemPageSync
         row.MergedAt = item.MergedAt;
         row.RequestedReviewers = item.RequestedReviewers.Count > 0 ? SerializeList(item.RequestedReviewers) : null;
         if (row.ClosedAtLocal is null && item.State == "closed")
-            row.ClosedAtLocal = now; // first observation of closure; stays after reopen (02 §3)
+            row.ClosedAtLocal = now; // first observation of closure; stays after reopen
         row.LastSyncedAt = now;
     }
 

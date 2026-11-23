@@ -4,7 +4,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Config;
 
 /// <summary>
-/// §16 cross-knob validation for the parsed configuration plane; every violation is a diagnosable
+/// Cross-knob validation for the parsed configuration plane; every violation is a diagnosable
 /// startup error naming file, YAML path and rule. Validation aggregates all violations.
 /// </summary>
 public class ConfigValidatorTests : IDisposable
@@ -206,10 +206,10 @@ rules:
         Assert.Equal(2, violations.Count);
     }
 
-    // ---- profile secret references (decision 54; ticket 11b) ----
+    // ---- profile secret references ----
 
     [Fact]
-    public void ProfileSecret_ReservedName_Fails() // collision with the per-Run callback credential (decision 60)
+    public void ProfileSecret_ReservedName_Fails() // collision with the per-Run callback credential
     {
         var violations = ValidateSample(plannerProfile: ReplaceLine(
             ConfigSamples.PlannerProfile, "secrets", "secrets: ['callback-token']"));

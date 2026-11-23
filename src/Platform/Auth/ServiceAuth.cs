@@ -19,7 +19,7 @@ public sealed class ServiceTokenOptions
 }
 
 /// <summary>
-/// Decision-65 internal contour: service-to-service credential check on internal endpoints.
+/// Internal contour: service-to-service credential check on internal endpoints.
 /// Constant-time comparison; rejection logs never contain the presented token value.
 /// </summary>
 public sealed class ServiceTokenFilter(IOptions<ServiceTokenOptions> options, ILogger<ServiceTokenFilter> logger)

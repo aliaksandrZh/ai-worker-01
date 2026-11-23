@@ -4,9 +4,9 @@ using PiAgent.Platform.Secrets;
 namespace PiAgent.Orchestrator.Config;
 
 /// <summary>
-/// §16 cross-knob validation over the parsed configuration plane (system.yaml knobs, profile limits
-/// ≤ system constraints, per-profile mandatory max_context_tokens presence/positivity per decision 56,
-/// cross-file references between routing.yaml, repositories.yaml and agents/*). Returns ALL violations;
+/// Cross-knob validation over the parsed configuration plane (system.yaml knobs, profile limits
+/// ≤ system constraints, per-profile mandatory max_context_tokens presence/positivity; cross-file
+/// references between routing.yaml, repositories.yaml and agents/*. Returns ALL violations;
 /// the Config Loader turns a non-empty list into a startup configuration error.
 /// </summary>
 public static class ConfigValidator
@@ -28,7 +28,7 @@ public static class ConfigValidator
         Check(system.PollOverlap > TimeSpan.Zero,
             $"{systemFile}: poll_overlap must be positive");
         Check(system.PerPage is >= 1 and <= 100,
-            $"{systemFile}: per_page ({system.PerPage}) must be within the GitHub API maximum of 100 (decision 53)");
+            $"{systemFile}: per_page ({system.PerPage}) must be within the GitHub API maximum of 100");
         Check(system.MaxConcurrentRuns >= 1,
             $"{systemFile}: max_concurrent_runs ({system.MaxConcurrentRuns}) must be ≥ 1");
         Check(system.StartupTimeout > TimeSpan.Zero,
@@ -42,11 +42,11 @@ public static class ConfigValidator
         Check(system.HeartbeatInterval < system.IdleTimeout,
             $"{systemFile}: heartbeat_interval ({Format(system.HeartbeatInterval)}) must be less than idle_timeout ({Format(system.IdleTimeout)})");
         Check(system.MaxLogSize > 0,
-            $"{systemFile}: max_log_size must be positive (hard limit, 01 §16)");
+            $"{systemFile}: max_log_size must be positive (hard limit)");
         Check(system.MaxArtifactSize > 0,
-            $"{systemFile}: max_artifact_size must be positive (hard limit, 01 §16)");
+            $"{systemFile}: max_artifact_size must be positive (hard limit)");
         Check(system.MaxTaskArtifactsSize > 0,
-            $"{systemFile}: max_task_artifacts_size must be positive (hard limit, 01 §16)");
+            $"{systemFile}: max_task_artifacts_size must be positive (hard limit)");
         Check(system.MaxAutomaticRetries >= 0,
             $"{systemFile}: max_automatic_retries ({system.MaxAutomaticRetries}) must be ≥ 0");
         Check(system.OutboxRetryWindow > TimeSpan.Zero,
@@ -65,13 +65,13 @@ public static class ConfigValidator
             var file = $"agents/{profile.Name}/profile.yaml";
 
             Check(profile.MaxContextTokens > 0,
-                $"{file}: max_context_tokens must be positive (mandatory per decision 56)");
+                $"{file}: max_context_tokens must be positive");
 
             void CheckLimit(TimeSpan? profileValue, string knob, TimeSpan systemValue)
             {
                 if (profileValue is { } value)
                     Check(value <= systemValue,
-                        $"{file}: execution_limits.{knob} ({Format(value)}) exceeds the system constraint {knob} ({Format(systemValue)}) — a profile version may lower limits but never exceed them (decision 30)");
+                        $"{file}: execution_limits.{knob} ({Format(value)}) exceeds the system constraint {knob} ({Format(systemValue)}) — a profile version may lower limits but never exceed them");
             }
 
             CheckLimit(profile.StartupTimeout, "startup_timeout", system.StartupTimeout);
@@ -99,7 +99,7 @@ public static class ConfigValidator
             if (profile.BridgeVersion is not null || profile.BridgeHeartbeatInterval is not null || profile.BridgeEventCadence is not null)
             {
                 Check(!string.IsNullOrWhiteSpace(profile.BridgeVersion),
-                    $"{file}: bridge.version is required when bridge configuration is present (decision 54)");
+                    $"{file}: bridge.version is required when bridge configuration is present");
                 Check(profile.BridgeHeartbeatInterval is null || profile.BridgeHeartbeatInterval.Value > TimeSpan.Zero,
                     $"{file}: bridge.heartbeat_interval must be positive");
                 Check(profile.BridgeEventCadence is null || profile.BridgeEventCadence.Value > TimeSpan.Zero,
@@ -107,10 +107,10 @@ public static class ConfigValidator
             }
             if (profile.BridgeBehavior is { } behavior)
                 Check(behavior is "succeed" or "fail" or "needs_human" or "hang"
-                    or "never_start" or "permission_denied", // ticket 13's startup_timeout / decision-69 levers
+                    or "never_start" or "permission_denied", // the startup_timeout / permission_denied levers
                     $"{file}: bridge.behavior '{behavior}' must be succeed|fail|needs_human|hang|never_start|permission_denied (stub scenario lever)");
 
-            // decision 54: secrets are name-only references to host-managed files; the grammar is also
+            // secrets are name-only references to host-managed files; the grammar is also
             // enforced by the Runtime API at plan build (frozen rows) — this is the early check.
             var secretNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var secret in profile.Secrets ?? [])
@@ -143,7 +143,7 @@ public static class ConfigValidator
             var file = "repositories.yaml";
             if (repository.MinimumPermission is { } permission)
                 Check(permission == "write",
-                    $"{file}: repository {repository.Owner}/{repository.Name} minimum_permission '{permission}' is not supported in V1 (write is the baseline, 02 §21)");
+                    $"{file}: repository {repository.Owner}/{repository.Name} minimum_permission '{permission}' is not supported (write is the baseline)");
         }
 
         return violations;

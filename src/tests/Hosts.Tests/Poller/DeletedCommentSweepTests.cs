@@ -11,7 +11,7 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Hosts.Tests.Poller;
 
 /// <summary>
-/// Deleted-comment daily sweep over real postgres with a stubbed GitHub (task 05, decision 77):
+/// Deleted-comment daily sweep over real postgres with a stubbed GitHub:
 /// tombstone only on a confirmed direct-404, 403/network/rate-limit outcomes never tombstone, the
 /// sweep's own run state, non-interference with the six incremental cursors, and the daily due gate.
 /// </summary>
@@ -76,7 +76,7 @@ public class DeletedCommentSweepTests(PostgresFixture postgres) : IClassFixture<
             Assert.Equal("bob", payload.RootElement.GetProperty("author").GetString());
         }
 
-        // the tombstone row survives — exclusion from future Task context is the flag's job (ticket 11)
+        // the tombstone row survives — exclusion from future Task context is the flag's job
         // (1111 appears in the listing but was never stored — the sweep only compares stored ids)
         Assert.Single(await db.GitHubComments.AsNoTracking().ToListAsync());
         Assert.Single(await db.GitHubComments.AsNoTracking().Where(c => c.IsDeleted).ToListAsync());
@@ -129,7 +129,7 @@ public class DeletedCommentSweepTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
-    public async Task PrimaryRateLimit_Propagates_NothingTombstoned() // decision 53 pattern
+    public async Task PrimaryRateLimit_Propagates_NothingTombstoned() // rate-limit pattern
     {
         var (db, repo) = await NewDbAndRepoAsync();
         var issue = PollerTestSupport.SeedWorkItem(db, repo, 12, WorkItemTypes.Issue);
@@ -193,7 +193,7 @@ public class DeletedCommentSweepTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
-    public async Task InlineListing_OnlyOpenPullRequests() // decision 77 + D5
+    public async Task InlineListing_OnlyOpenPullRequests()
     {
         var (db, repo) = await NewDbAndRepoAsync();
         var pr = PollerTestSupport.SeedWorkItem(db, repo, 7, WorkItemTypes.PullRequest);
@@ -251,7 +251,7 @@ public class DeletedCommentSweepTests(PostgresFixture postgres) : IClassFixture<
     }
 
     [Fact]
-    public async Task DailyDueGate_SkipsUntilIntervalElapses() // decision 77 daily cadence (D4)
+    public async Task DailyDueGate_SkipsUntilIntervalElapses() // daily cadence
     {
         var (db, repo) = await NewDbAndRepoAsync();
         var issue = PollerTestSupport.SeedWorkItem(db, repo, 12, WorkItemTypes.Issue);

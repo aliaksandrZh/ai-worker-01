@@ -15,7 +15,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Orchestration;
 
 /// <summary>
-/// Ticket 10, decision 81 orchestration side: durable BuildJob per draft version (buildId persisted
+/// Orchestration side: durable BuildJob per draft version (buildId persisted
 /// BEFORE dispatch), `draft → building` in the same write, async 202 dispatch, status polling to the
 /// validated terminal outcomes (`ready` / `build_failed`), transient backoff keeps `building`, the 404
 /// redispatch path, and restart-reconciler semantics (this same cycle over durable rows).
@@ -307,7 +307,7 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         await worker.RunCycleAsync(TestToken);
         var job = await db.BuildJobs.AsNoTracking().SingleAsync();
 
-        // tag mismatch + missing image id/digest/log reference — decision 81 validation rejects it
+        // tag mismatch + missing image id/digest/log reference — validation rejects it
         stub.Answer = _ => Json(new BuildResponse(job.Id, "stub", 1, BuildStates.Succeeded,
             "agent-somewhere-else:v9", null, null, null, null, null));
         await worker.RunCycleAsync(TestToken);

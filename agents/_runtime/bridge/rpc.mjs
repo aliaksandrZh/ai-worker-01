@@ -1,8 +1,8 @@
 /**
  * pi RPC command/response correlation (pi docs `rpc.md`, `rpc-commands.md`): every command may carry a
  * string `id`; the matching stdout `response` record repeats it. The Bridge needs exactly two rounds:
- * the launch handshake (`get_state` → `data.sessionFile`, the real per-Run session file path recorded
- * per decision 57) and the single task-input delivery (`prompt` → `data.disposition === "started"` —
+ * the launch handshake (`get_state` → `data.sessionFile`, the real per-Run session file path) and the
+ * single task-input delivery (`prompt` → `data.disposition === "started"` —
  * "started" means a run began and will end with `agent_settled`; "queued"/"handled" would not).
  */
 export class RpcCorrelator {
@@ -54,7 +54,7 @@ export class RpcCorrelator {
   }
 }
 
-/** A `success: false` response (04 §4: the prompt was rejected before acceptance). */
+/** A `success: false` response (the prompt was rejected before acceptance). */
 export class RpcCommandError extends Error {
   constructor(message) {
     super(message);

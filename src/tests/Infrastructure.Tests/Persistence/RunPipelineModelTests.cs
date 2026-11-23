@@ -6,8 +6,8 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Run-pipeline metadata per 02 §14a/§16/§18/§23 (task 09): the RunEvent table (unique
-/// (run_id, event_id) idempotency pair, the 04 §4 type vocabulary incl. the progress split),
+/// Run-pipeline metadata: the RunEvent table (unique
+/// (run_id, event_id) idempotency pair, the type vocabulary incl. the progress split),
 /// the per-Run credential (one row per run), the Task-owned Workspace (unique task_id), and the
 /// immutable RunContextSnapshot (unique run_id, the frozen content).
 /// </summary>
@@ -47,7 +47,7 @@ public class RunPipelineModelTests
             RunEventTypes.Failed, RunEventTypes.Cancelled,
         };
         Assert.Equal(expected.OrderBy(t => t), RunEventTypes.All.OrderBy(t => t));
-        // progress never counts heartbeats or liveness (decision 58/68)
+        // progress never counts heartbeats or liveness
         Assert.DoesNotContain(RunEventTypes.Heartbeat, RunEventTypes.Progress);
         Assert.DoesNotContain(RunEventTypes.AgentStarted, RunEventTypes.Progress);
         Assert.Contains(RunEventTypes.ToolProgress, RunEventTypes.Progress);
@@ -83,7 +83,7 @@ public class RunPipelineModelTests
                      nameof(Workspace.DeletedAt) })
             Assert.True(Property(entity, nullable).IsNullable, $"{nullable} must be nullable");
 
-        // 03 §6 status machine vocabulary (Provisioning → Ready → InUse → Ready; CleanupPending → Deleted)
+        // status machine vocabulary (Provisioning → Ready → InUse → Ready; CleanupPending → Deleted)
         var statuses = new[] { WorkspaceStatuses.Provisioning, WorkspaceStatuses.Ready, WorkspaceStatuses.InUse,
             WorkspaceStatuses.Failed, WorkspaceStatuses.CleanupPending, WorkspaceStatuses.Deleted };
         Assert.Equal(6, statuses.Distinct().Count());
@@ -99,7 +99,7 @@ public class RunPipelineModelTests
         var entity = Entity(dbContext, typeof(RunContextSnapshot));
         Assert.Equal("run_context_snapshot", entity.GetTableName());
         Assert.True(entity.GetIndexes().Single(i => i.Properties.Single().Name == nameof(RunContextSnapshot.RunId)).IsUnique);
-        // ticket 11: the frozen input is byte-exact (content_hash/budget apply to the exact bytes) → text, not jsonb
+        // the frozen input is byte-exact (content_hash/budget apply to the exact bytes) → text, not jsonb
         Assert.Equal("text", Property(entity, nameof(RunContextSnapshot.Content)).GetColumnType());
         Assert.Equal("jsonb", Property(entity, nameof(RunContextSnapshot.IncludedSources)).GetColumnType());
         Assert.Equal("jsonb", Property(entity, nameof(RunContextSnapshot.ExcludedSources)).GetColumnType());

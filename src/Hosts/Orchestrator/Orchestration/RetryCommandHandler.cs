@@ -5,16 +5,16 @@ using PiAgent.Orchestrator.Commands;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The `/retry` command path (06 §9a, decisions 27/65/70 — ticket 15): re-runs the last failed Task of
+/// The `/retry` command path: re-runs the last failed Task of
 /// the WorkItem's Workflow WITHOUT creating a new Task — the same pinned `AgentProfileVersion` (and,
 /// for reviews, the same pinned `target_head_sha`), a new OrchestrationJob in the same transaction,
 /// then the normal claim flow (`attempt_number + 1`, fresh AgentSession, reused input artifacts and
 /// Workspace). Preconditions: open WorkItem, Workflow not failed/closed, no unfinished Task, most
 /// recent non-cancelled Task `failed`, pinned profile version enabled and `ready`. Per-task-type
 /// conditions (plan input for implement tasks, pinned review SHA equality, permissions) stay with the
-/// claim-time rechecks — owner decision 2026-11-22: no bespoke retry admission gates per command type.
+/// claim-time rechecks: no bespoke retry admission gates per command type.
 /// Rejections record the reason on the retry command, enqueue exactly one Outbox reply, and leave the
-/// failed Task `Failed` (decision 70). An accepted retry publishes nothing (06 §13 has no row for it);
+/// failed Task `Failed`. An accepted retry publishes nothing;
 /// the task's eventual outcome (result comment / final-failure notification) is the user's feedback.
 /// </summary>
 public static class RetryCommandHandler
@@ -41,7 +41,7 @@ public static class RetryCommandHandler
         {
             await RejectAsync(db, command, workItem, repository,
                 (AgentCommandRejectionReasons.WorkflowFailed,
-                    "the workflow has failed unrecoverably (decision 71)"), metrics, cancellationToken);
+                    "the workflow has failed unrecoverably"), metrics, cancellationToken);
             return;
         }
         if (workflow.Status == WorkflowStatuses.Closed || workItem.State != "open")
@@ -55,14 +55,14 @@ public static class RetryCommandHandler
                 t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status),
                 cancellationToken))
         {
-            // occupancy (06 §12): same-Workflow commands are not queued behind one another
+            // occupancy: same-Workflow commands are not queued behind one another
             await RejectAsync(db, command, workItem, repository,
                 (AgentCommandRejectionReasons.UnfinishedTaskExists,
                     "the workflow already holds a queued or running Task"), metrics, cancellationToken);
             return;
         }
 
-        // the retry target: most recent non-cancelled Task (cancelled ones are skipped, 06 §9a); tracked,
+        // the retry target: most recent non-cancelled Task (cancelled ones are skipped); tracked,
         // so the Failed→Queued transition below rides the caller's transaction
         var last = await db.OrchestrationTasks
             .Where(t => t.WorkflowId == workflow.Id && t.Status != OrchestrationTaskStatuses.Cancelled)
@@ -90,8 +90,8 @@ public static class RetryCommandHandler
             return;
         }
 
-        // accepted (decision 70, one transaction): Task Failed → Queued, fresh job available now; the
-        // workflow re-enters `active` with the retried Task as its open work (03 §1). No notification.
+        // accepted (one transaction): Task Failed → Queued, fresh job available now; the
+        // workflow re-enters `active` with the retried Task as its open work. No notification.
         var now = DateTime.UtcNow;
         last.Status = OrchestrationTaskStatuses.Queued;
         last.CompletedAt = null;
@@ -115,8 +115,8 @@ public static class RetryCommandHandler
         command.ProcessedAt = now;
     }
 
-    /// <summary>Rejection on the /retry path: the failed Task stays `Failed` (decision 70), the command
-    /// records the reason, one Outbox reply (06 §13 "Command rejected"). A stale /retry racing an
+    /// <summary>Rejection on the /retry path: the failed Task stays `Failed`, the command
+    /// records the reason, one Outbox reply ("Command rejected"). A stale /retry racing an
     /// automatic retry's silent requeue of the same Task is the caller's concern only via the benign
     /// double-job edge: the claim worker fails a job whose Task is no longer queued.</summary>
     private static async Task RejectAsync(

@@ -33,7 +33,7 @@ public sealed class FakeDocker : IContainerProvisioner
     public List<string> Stopped { get; } = [];
     public List<string> Removed { get; } = [];
     public bool StartSucceeds { get; set; } = true;
-    /// <summary>False simulates a Docker outage at stop time (ticket 14: the sweeper retries).</summary>
+    /// <summary>False simulates a Docker outage at stop time (the sweeper retries).</summary>
     public bool StopSucceeds { get; set; } = true;
 
     public Task<string?> CreateContainerAsync(ContainerPlan plan, CancellationToken cancellationToken)
@@ -97,7 +97,7 @@ public sealed record RuntimeApi(
 public static class RuntimeTestSupport
 {
     /// <summary>Seeds repo/workItem + task/job (admission bypassed) and mirrors the claim flow: the
-    /// ticket-11 Context Assembler assembles first, the production RunPrepare prepares, and the frozen
+    /// Context Assembler assembles first, the production RunPrepare prepares, and the frozen
     /// snapshot is written via the same freeze helper the dispatcher uses (so /start accepts the run).
     /// `withSnapshot: false` leaves the snapshot missing (negative dispatch-path tests).</summary>
     public static async Task<RunPreparation> SeedPreparedRunAsync(
@@ -124,7 +124,7 @@ public static class RuntimeTestSupport
         var task = await db.OrchestrationTasks.SingleAsync(x => x.Id == seeded.Task.Id); // tracked: the dispatcher mutates it
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == seeded.Task.WorkflowId);
 
-        // ticket-11 claim flow: assemble BEFORE RunPrepare, then prepare, then freeze (dispatcher order)
+        // claim flow: assemble BEFORE RunPrepare, then prepare, then freeze (dispatcher order)
         var assembly = await ContextAssembler.AssembleAsync(db, task, version, workflow, workItem, repo, seeded.Command, default);
         if (assembly.TooLarge)
             throw new InvalidOperationException($"seeded context is too large: {assembly.TooLargeDetail}");
@@ -139,7 +139,7 @@ public static class RuntimeTestSupport
         return preparation;
     }
 
-    /// <summary>Freezes the (ticket-11-scope) snapshot content exactly like the real dispatcher would.</summary>
+    /// <summary>Freezes the snapshot content exactly like the real dispatcher would.</summary>
     public static void SnapshotWithInput(AppDbContext db, RunPreparation preparation, object input)
     {
         var content = JsonSerializer.Serialize(input);

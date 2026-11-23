@@ -1,6 +1,6 @@
 namespace PiAgent.Platform;
 
-/// <summary>Correlation identifiers from spec §14 (01-architecture-and-flows.md). Absent = null.</summary>
+/// <summary>Correlation identifiers. Absent = null.</summary>
 public sealed class CorrelationContext
 {
     public string? CorrelationId { get; set; }

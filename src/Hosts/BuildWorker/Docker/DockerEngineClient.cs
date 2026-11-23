@@ -9,14 +9,13 @@ using PiAgent.Platform.Http;
 
 namespace PiAgent.BuildWorker.Docker;
 
-// ---- Docker Engine HTTP API over the read-only-mounted unix socket (§13: Build Worker dependency) ----
+// ---- Docker Engine HTTP API over the read-only-mounted unix socket (Build Worker dependency) ----
 // The container has no docker CLI; the engine is driven over raw HTTP like the Platform readiness check.
-// Paths are unversioned (same convention as PlatformEndpointExtensions' /_ping probe); verified against
-// the daemon during the ticket walkthrough.
+// Paths are unversioned (same convention as PlatformEndpointExtensions' /_ping probe).
 
 public sealed record EngineImageInfo(string ImageId);
 
-/// <summary>The docker build itself failed: terminal (04 §6 decision: a real build failure ends the contract).</summary>
+/// <summary>The docker build itself failed: terminal (a real build failure ends the contract).</summary>
 public sealed class DockerBuildException(string message) : Exception(message);
 
 /// <summary>Ambiguous execution failure (daemon unreachable / transport / client timeout): retryable,

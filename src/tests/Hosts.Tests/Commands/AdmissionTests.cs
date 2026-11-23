@@ -11,9 +11,9 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// The admission stage (task 07, 04 §2/06 §12/decisions 35, 71, 79, 80): decision table over
+/// The admission stage: decision table over
 /// `CommandAdmission.AdmitAsync` against real postgres (the FOR UPDATE lock + partial unique index
-/// included via SaveChanges), and two end-to-end cases through the task-06 processor harness.
+/// included via SaveChanges), and two end-to-end cases through the processor harness.
 /// </summary>
 public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -103,7 +103,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status);
         Assert.Equal(OrchestrationTaskTypes.Plan, task.Type);
         Assert.Equal(command.Id, task.TriggerCommandId);
-        Assert.NotNull(task.TriggerAtGithub); // no-new-input gate anchor (owner decision 2026-11-23)
+        Assert.NotNull(task.TriggerAtGithub); // no-new-input gate anchor
         Assert.Null(task.TargetHeadSha);
         Assert.Contains("max_automatic_retries", task.RetryPolicy);
         Assert.NotNull(job);
@@ -176,7 +176,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.Equal(6, (await LoadAdmittedAsync(db, workItem, command)).Task!.Sequence);
     }
 
-    // ---- /code preconditions (decision 80) ----
+    // ---- /code preconditions ----
 
     [Fact]
     public async Task CodeWithoutPlan_RejectedNoWorkflowCreated()
@@ -273,7 +273,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.NotEqual(olderArtifactId, input.ArtifactId); // the sequence-2 plan artifact is linked
     }
 
-    // ---- profile gates (decision 35 split) ----
+    // ---- profile gates ----
 
     [Fact]
     public async Task MissingRoutingRule_RejectedAgentProfileNotConfigured()
@@ -341,7 +341,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.Equal(AgentCommandRejectionReasons.AgentProfileNotConfigured, outcome!.Reason);
     }
 
-    // ---- workflow lifecycle gates (decision 71 + root closure) ----
+    // ---- workflow lifecycle gates (failure + root closure) ----
 
     [Fact]
     public async Task FailedWorkflow_RejectsTaskProducingCommands()
@@ -404,7 +404,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.Equal(AgentCommandRejectionReasons.WorkItemClosed, outcome!.Reason);
     }
 
-    // ---- no-new-input gate (owner decision 2026-11-23) ----
+    // ---- no-new-input gate ----
 
     /// <summary>Admits a /plan and completes it; the trigger comment sat at UtcNow-5min (CommandTestSupport),
     /// so every "signal" below is timestamped after the gate's anchor.</summary>

@@ -11,7 +11,7 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// The decision-77 orphan reconciliation (ticket 13): the Host Monitor reports the top-level workflow
+/// The orphan reconciliation: the Host Monitor reports the top-level workflow
 /// directories under the managed root plus which bind mounts the observed containers use; this
 /// reconciler resolves them against PostgreSQL. A directory becomes a CANDIDATE when its Workflow row
 /// is gone (or the storage is already marked deleted) — candidates persist ≥ `orphan_grace_period`,
@@ -22,7 +22,7 @@ namespace PiAgent.RuntimeApi.Runs;
 /// restarts through the `orphan_candidate` table.
 /// The Runtime API performs the rename/delete through the SAME writable managed-root mount that
 /// provisions trees (`Storage__ManagedRoot`); the Orchestrator/Poller never touch host paths (the
-/// decision-62 boundary stays intact — every path fact enters through Host-Monitor telemetry).
+/// boundary stays intact — every path fact enters through Host-Monitor telemetry).
 /// </summary>
 public sealed class OrphanReconciler(
     IServiceScopeFactory scopeFactory,
@@ -53,7 +53,7 @@ public sealed class OrphanReconciler(
         if (storage?.Directories is null)
             return;
 
-        // The tree-level deletion guard (decision 77): bind prefixes observed by the Host Monitor.
+        // The tree-level deletion guard: bind prefixes observed by the Host Monitor.
         var boundPrefixes = (storage.Directories.Length == 0 ? [] : await ContainerBindsAsync(db, observation, cancellationToken));
 
         var now = DateTime.UtcNow;
@@ -88,7 +88,7 @@ public sealed class OrphanReconciler(
             }
             if (stillBound)
             {
-                logger.LogWarning("orphan {path} is still bound by a container — deletion/quarantine deferred (decision 77)", candidate.Path);
+                logger.LogWarning("orphan {path} is still bound by a container — deletion/quarantine deferred", candidate.Path);
                 candidate.UpdatedAt = now;
                 continue;
             }
@@ -141,7 +141,7 @@ public sealed class OrphanReconciler(
             if (!Guid.TryParse(directory.Name, out var workflowId))
             {
                 logger.LogWarning("unrecognized directory under the managed root: {name}", directory.Name);
-                continue; // not a decision-52 workflow tree shape; operator-visible log only
+                continue; // not a workflow tree shape; operator-visible log only
             }
             if (existingSet.Contains(workflowId))
                 continue; // live workflow — the tree is legitimately present

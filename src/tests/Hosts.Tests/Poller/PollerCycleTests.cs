@@ -17,9 +17,9 @@ using PiAgent.Platform.Http;
 namespace PiAgent.Hosts.Tests.Poller;
 
 /// <summary>
-/// PollerCycle orchestration over real postgres with a stubbed GitHub (task 04 plan task-8): stream
+/// PollerCycle orchestration over real postgres with a stubbed GitHub: stream
 /// ordering, per-repository polling gate, rate-limit pause without cursor advancement and resume,
-/// stream failure locality, decision-75 pause (still polling), and PAT-free logging.
+/// stream failure locality, pause (still polling), and PAT-free logging.
 /// </summary>
 public class PollerCycleTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -188,7 +188,7 @@ public class PollerCycleTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
-    public async Task RevokedPat401_SyncFailsWithProperError_NoFallback() // decisions 50/65 (ticket 11b)
+    public async Task RevokedPat401_SyncFailsWithProperError_NoFallback()
     {
         var (db, repo) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
@@ -255,7 +255,7 @@ public class PollerCycleTests(PostgresFixture postgres) : IClassFixture<Postgres
     }
 
     [Fact]
-    public async Task PausedRepository_StillPolls() // decision 75
+    public async Task PausedRepository_StillPolls()
     {
         var (db, repo) = await NewDbAndRepoAsync(enabled: false);
         var handler = new PollerTestSupport.StubHandler();

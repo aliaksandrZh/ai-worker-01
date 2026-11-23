@@ -6,7 +6,7 @@ using PiAgent.Orchestrator.Commands;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// The `/stop` control path (06 §8, decisions 29/38/61 — handled immediately, outside the queue).
+/// The `/stop` control path (handled immediately, outside the queue).
 /// Finds the WorkItem's Workflow and its unfinished Tasks:
 /// <list type="bullet">
 /// <item>queued/claimed Tasks are cancelled NOW with their Jobs — Task `cancelled` (reason
@@ -20,9 +20,9 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// reconciliation" (the Runtime API's stop-confirm sweeper is the reconciliation leg). The Workflow
 /// stays `active` until that confirmation; nothing is pre-emptively torn down.</item>
 /// </list>
-/// Exactly one Outbox notification covers active+queued cancellations (decision 29; one comment may
+/// Exactly one Outbox notification covers active+queued cancellations (one comment may
 /// cover both), keyed by the `/stop` command row id so replays stay single. No unfinished work → the
-/// "nothing to stop" reply (06 §8.8): no row changes at all, Workflow and storage untouched. Storage
+/// "nothing to stop" reply: no row changes at all, Workflow and storage untouched. Storage
 /// is never deleted; other Workflows and the WorkItem are never closed.
 /// </summary>
 public static class StopCommandHandler
@@ -48,7 +48,7 @@ public static class StopCommandHandler
 
         if (unfinishedIds.Count == 0)
         {
-            // 06 §8.8: nothing to stop — one reply, nothing else written (no Workflow, no storage change);
+            // nothing to stop — one reply, nothing else written (no Workflow, no storage change);
             // the /stop command id is the notification's idempotency key.
             await new OutboxActionStore(db).EnqueueAsync(
                 new OutboxEnqueueRequest(repository.Id, workItem.Id, null, workItem.Number,
@@ -106,7 +106,7 @@ public static class StopCommandHandler
         }
 
         // Workflow status: `waiting_for_human` only when nothing active was signalled — with an active
-        // stop the terminal-Run consumer flips it at runtime confirmation (06 §8.5 "after cancellation").
+        // stop the terminal-Run consumer flips it at runtime confirmation ("after cancellation").
         // The open-work pointer clears regardless of the current status (a queued-only stop in an
         // already-waiting Workflow loses its CurrentTaskPointer too).
         if (workflow is not null && active.Count == 0)
@@ -160,7 +160,7 @@ public static class StopCommandHandler
     }
 }
 
-/// <summary>The `/stop` Outbox texts (06 §8.6/§8.8, decision 29): one comment covers active+queued.</summary>
+/// <summary>The `/stop` Outbox texts: one comment covers active+queued.</summary>
 public static class StopReplies
 {
     public static string NothingToStop(WorkItem workItem) =>

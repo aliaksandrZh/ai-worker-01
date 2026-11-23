@@ -27,7 +27,7 @@ public static class DataServiceCollectionExtensions
     }
 }
 
-/// <summary>§13 health check: PostgreSQL reachable. Errors surface as readiness failures, never thrown.</summary>
+/// <summary>Health check: PostgreSQL reachable. Errors surface as readiness failures, never thrown.</summary>
 public sealed class DbReadinessCheck(NpgsqlDataSource dataSource) : IReadinessCheck
 {
     public string Name => "postgres";

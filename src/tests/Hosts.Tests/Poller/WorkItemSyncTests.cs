@@ -166,7 +166,7 @@ public class WorkItemSyncTests(PostgresFixture postgres) : IClassFixture<Postgre
         Assert.Equal(2, events.Count(e => e.EventType == GitHubEventTypes.WorkItemCreated));
         var closed = events.Single(e => e.EventType == GitHubEventTypes.WorkItemClosed);
         using var payload = System.Text.Json.JsonDocument.Parse(closed.Payload);
-        Assert.Equal("merged", payload.RootElement.GetProperty("close_reason").GetString()); // decision 40
+        Assert.Equal("merged", payload.RootElement.GetProperty("close_reason").GetString());
         var requested = events.Single(e => e.EventType == GitHubEventTypes.ReviewRequested);
         Assert.Equal(GitHubEventSources.SnapshotDiff, requested.Source);
     }

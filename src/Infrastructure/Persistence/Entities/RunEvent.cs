@@ -1,8 +1,8 @@
 namespace PiAgent.Infrastructure.Persistence;
 
 /// <summary>
-/// RunEvent types (02 §18); names normalized per 04 §4 mapping, decisions 58/68, one row per delivered
-/// callback. Persisted by the Runtime API before any acknowledgement (04 §4); unique `(run_id, event_id)`
+/// RunEvent types; names normalized per the telemetry mapping, one row per delivered
+/// callback. Persisted by the Runtime API before any acknowledgement; unique `(run_id, event_id)`
 /// is the idempotency key.
 /// </summary>
 public static class RunEventTypes
@@ -22,21 +22,21 @@ public static class RunEventTypes
     public const string Failed = "failed";
     public const string Cancelled = "cancelled";
 
-    /// <summary>The route accepts only this set (04 §4 persistence contract).</summary>
+    /// <summary>The route accepts only this set (persistence contract).</summary>
     public static readonly string[] All =
     [
         AgentStarted, TurnStarted, TurnCompleted, AssistantOutput, ToolStarted, ToolProgress,
         ToolCompleted, AgentSettled, Heartbeat, PermissionBlocked, ArtifactProduced, Completed, Failed, Cancelled,
     ];
 
-    /// <summary>Progress types (02 §18): assistant text deltas (aggregated), tool start/update/end,
+    /// <summary>Progress types: assistant text deltas (aggregated), tool start/update/end,
     /// turn completion, artifact creation — heartbeat, thinking deltas, and liveness never count.</summary>
     public static readonly string[] Progress =
         [TurnCompleted, AssistantOutput, ToolStarted, ToolProgress, ToolCompleted, ArtifactProduced];
 }
 
 /// <summary>
-/// One delivered callback (02 §18). `event_id` is the sender's idempotency key; terminal callbacks carry
+/// One delivered callback. `event_id` is the sender's idempotency key; terminal callbacks carry
 /// the full body in `payload` (the frozen facts the Orchestrator's terminal consumer reads — e.g. the
 /// `outcome` of a `completed`).
 /// </summary>
@@ -44,7 +44,7 @@ public class RunEvent
 {
     public Guid Id { get; set; }
     public Guid RunId { get; set; }
-    /// <summary>Runtime-generated idempotency key (02 §18); API-generated `artifact_produced` entries use the `artifact:<id>` namespace.</summary>
+    /// <summary>Runtime-generated idempotency key; API-generated `artifact_produced` entries use the `artifact:<id>` namespace.</summary>
     public string EventId { get; set; } = null!;
     public string Type { get; set; } = null!;
     public string? Payload { get; set; }

@@ -15,7 +15,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// Ticket 17: the Orchestrator root-closure cycle over real closure event rows — Workflow closed,
+/// The Orchestrator root-closure cycle over real closure event rows — Workflow closed,
 /// unfinished Tasks/Jobs cancelled with `work_item_closed`, active Runs cancelled, Runtime API
 /// cleanup invoked, reopen idempotent, related roots untouched.
 /// </summary>
@@ -122,7 +122,7 @@ public class RootClosureCycleTests(PostgresFixture postgres) : IClassFixture<Pos
         Assert.Equal("completed", updatedWorkItem.CleanupStatus);
         // cleanup + one stop per active run, service-token guarded
         Assert.Contains(runtimeStub.Requests, r => r.RequestUri!.AbsolutePath.EndsWith("/cleanup"));
-        // decision 29: cleanup is silent — no GitHub notification is enqueued
+        // cleanup is silent — no GitHub notification is enqueued
         Assert.Equal(0, await db.OutboxActions.CountAsync());
     }
 
@@ -157,7 +157,7 @@ public class RootClosureCycleTests(PostgresFixture postgres) : IClassFixture<Pos
         var prRow = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == pr.Id);
         Assert.Equal(WorkflowStatuses.Closed, workflow.Status);
         Assert.Equal("completed", prRow.CleanupStatus);
-        Assert.NotNull(prRow.MergedAt); // merged_at is history (decision 40) — never deleted
+        Assert.NotNull(prRow.MergedAt); // merged_at is history — never deleted
         Assert.Equal(DateTimeKind.Utc, prRow.MergedAt.Value.Kind == DateTimeKind.Utc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
     }
 

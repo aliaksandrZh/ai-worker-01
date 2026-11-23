@@ -14,7 +14,7 @@ namespace PiAgent.Hosts.Tests.Config;
 /// <summary>
 /// ConfigLoaderHostedService end-to-end over real postgres: parse → validate → identity check →
 /// repo lookups → one-transaction sync → cold-start gate. GitHub is stubbed at the HTTP level.
-/// Includes the pure ConfigurationState / config-sync readiness semantics (01 §13).
+/// Includes the pure ConfigurationState / config-sync readiness semantics.
 /// </summary>
 public class ConfigLoaderHostedServiceTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -186,7 +186,7 @@ public class ConfigLoaderHostedServiceTests(PostgresFixture postgres) : IClassFi
         Assert.False(state.Synchronized);
     }
 
-    // --- cold-start gate primitives (01 §13) ---
+    // --- cold-start gate primitives ---
 
     [Fact]
     public async Task ConfigurationState_GatesReadiness()

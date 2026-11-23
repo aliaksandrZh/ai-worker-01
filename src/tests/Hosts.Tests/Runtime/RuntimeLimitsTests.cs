@@ -4,7 +4,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// The Runtime API's §16 knob reading (ticket 13): spec defaults when system.yaml is absent, and —
+/// The Runtime API's knob reading: defaults when system.yaml is absent, and —
 /// since the knob grammar unified on Platform's SystemYaml — the same strict integer/positive
 /// duration grammar the Orchestrator's schema validation enforces (the former local lenient copy
 /// accepted decimals and negatives the Orchestrator rejects).
@@ -21,7 +21,7 @@ public class RuntimeLimitsTests
     [Fact]
     public void MissingFile_SpecDefaults()
     {
-        // the Runtime API starts without a config dir: the §16 default document applies
+        // the Runtime API starts without a config dir: the default document applies
         var limits = RuntimeLimits.Load(null);
         Assert.Equal(TimeSpan.FromMinutes(10), limits.StartupTimeout);
         Assert.Equal(TimeSpan.FromMinutes(60), limits.IdleTimeout);

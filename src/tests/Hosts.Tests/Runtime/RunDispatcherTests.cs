@@ -17,16 +17,16 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Runtime;
 
 /// <summary>
-/// Ticket 09: the real IRunDispatcher — freezing the (ticket-11-scope) RunContextSnapshot and handing
-/// the run to the Runtime API over the RuntimeApiClient (decision 65 service credential in the header,
-/// 04 §3 payload shape). Outcome mapping: 2xx → HandedOff (job completed, Task starting), 4xx →
+/// The real IRunDispatcher — freezing the RunContextSnapshot and handing
+/// the run to the Runtime API over the RuntimeApiClient (service credential in the header,
+/// payload shape). Outcome mapping: 2xx → HandedOff (job completed, Task starting), 4xx →
 /// Permanent (claim-time cancel), 429/5xx/network → Transient (claim released), 409-with-terminal-run →
 /// HandedOff (idempotent, restart recovery).
 public sealed class DirectHttpStub(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
 {
     public List<HttpRequestMessage> Requests { get; } = [];
     public List<string> Bodies { get; } = [];
-    /// <summary>Mutable default responder (ticket 14 stop tests flip success/failure between cycles).</summary>
+    /// <summary>Mutable default responder (stop tests flip success/failure between cycles).</summary>
     public Func<HttpRequestMessage, HttpResponseMessage>? Fallback { get; set; }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -104,7 +104,7 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
             source => source.GetProperty("kind").GetString() == ContextAssembler.SourceKinds.CommandComment);
     }
 
-    /// <summary>Ticket 14: /stop cancelled the claimed Task while this claim was mid-flight — the
+    /// <summary>/stop cancelled the claimed Task while this claim was mid-flight — the
     /// fresh-state guard removes the just-prepared pending Run rows and never touches the Runtime API.</summary>
     [Fact]
     public async Task Dispatch_SupersededWhenTheTaskWasCancelledMidClaim()

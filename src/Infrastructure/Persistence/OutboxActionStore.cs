@@ -4,11 +4,11 @@ using Npgsql;
 
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>One orchestration-owned comment the Outbox should publish to a GitHub work item (02 §20).</summary>
+/// <summary>One orchestration-owned comment the Outbox should publish to a GitHub work item.</summary>
 public sealed record OutboxEnqueueRequest(Guid RepositoryId, Guid WorkItemId, Guid? TaskId, long IssueNumber, string Text, Guid? IdempotencyKey);
 
 /// <summary>
-/// Transactional operations over outbox_action (02 §20, decision 67). Claim is atomic via
+/// Transactional operations over outbox_action. Claim is atomic via
 /// SELECT … FOR UPDATE SKIP LOCKED inside one transaction — a leaked row (crashed dispatcher)
 /// becomes claimable again when its lease expires; all post-claim transitions are owner-guarded
 /// so a stale dispatcher can never touch a row another dispatcher now owns.

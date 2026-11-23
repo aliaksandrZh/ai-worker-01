@@ -8,13 +8,13 @@ using System.Text.Json.Serialization;
 namespace PiAgent.BuildWorker.Builds;
 
 /// <summary>
-/// The durable local build-job state (02 §12b, decision 81): one JSON document per `buildId` under
+/// The durable local build-job state: one JSON document per `buildId` under
 /// `<StateRoot>/jobs/`, build logs under `<StateRoot>/logs/` and the pinned materialized build context
 /// under `<StateRoot>/context/<buildId>/`. Writes are single-file atomic (temp + rename) so a crash
 /// loses at most the last transition, and the startup rescan reconciles from Docker state. Results are
 /// therefore retrievable after worker restarts, and redispatched builds reuse the same buildId
 /// (the runner rebuilds idempotently from the pinned snapshot — same input, same tag).
-/// The Build Worker has no database: this directory is the whole operational state (§4 data ownership).
+/// The Build Worker has no database: this directory is the whole operational state.
 /// </summary>
 public sealed class BuildDurableStore
 {

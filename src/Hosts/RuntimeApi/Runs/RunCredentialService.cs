@@ -8,7 +8,7 @@ using PiAgent.Infrastructure.Persistence;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// Per-Run callback credentials (decision 60, 04 §4): 256-bit random token, delivered to the Bridge only
+/// Per-Run callback credentials: 256-bit random token, delivered to the Bridge only
 /// as a read-only secret file, stored exclusively as a SHA-256 hash, scoped to its single runId, revocable
 /// after terminal delivery. Never an environment variable, never shown to Pi, never logged.
 /// </summary>
@@ -70,9 +70,9 @@ public static class RunCredentialService
 }
 
 /// <summary>
-/// Runtime-callback bearer auth (decision 60): the presented token must be the unrevoked per-Run credential
-/// for the runId in the route. 401 missing/unknown, 403 valid-but-other-run scope or revoked (04 §4:
-/// callbacks rejected for other runIds).
+/// Runtime-callback bearer auth: the presented token must be the unrevoked per-Run credential
+/// for the runId in the route. 401 missing/unknown, 403 valid-but-other-run scope or revoked
+/// (callbacks rejected for other runIds).
 /// </summary>
 public sealed class RunCallbackTokenFilter : IEndpointFilter
 {

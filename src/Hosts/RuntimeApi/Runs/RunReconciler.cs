@@ -9,8 +9,8 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.RuntimeApi.Runs;
 
 /// <summary>
-/// §14 Runtime-owned gauges: `runsActive` counts Runs in pending/starting/running/stopping, refreshed by the
-/// reconciler cycle; other baseline counters stay with their tickets (timeouts → ticket 13).
+/// Runtime-owned gauges: `runsActive` counts Runs in pending/starting/running/stopping, refreshed by the
+/// reconciler cycle; other baseline counters stay with their owning components (timeouts → the TimeoutSweeper).
 /// </summary>
 public sealed class RunPipelineMetrics(WorkerLoopState state, RunReconcilerCycle reconciler) : WorkerMetricsBase(state)
 {
@@ -21,14 +21,14 @@ public sealed class RunPipelineMetrics(WorkerLoopState state, RunReconcilerCycle
 }
 
 /// <summary>
-/// The Runtime restart reconciler (01 §12): recovers desired/observed runtime state from PostgreSQL by
-/// re-observing each non-terminal Run's container over the Docker socket (decision 82). Beyond refreshing
-/// the observed machine (ticket 09), ticket 13 adds the death reconciliation: a Run still `starting`/`running`
+/// The Runtime restart reconciler: recovers desired/observed runtime state from PostgreSQL by
+/// re-observing each non-terminal Run's container over the Docker socket. Beyond refreshing
+/// the observed state, the death reconciliation: a Run still `starting`/`running`
 /// whose container is observed `stopped`/`failed`/`removed` — or which Docker no longer knows (inspect 404
 /// = `removed`) — died without emitting a terminal callback; it is finalized `failed` with
-/// `runtime_failure` ("reconciled: …") so the notification path fires (01 §12: never silent
-/// recovery). Runs in `stopping` belong to the stop-confirm sweeper (ticket 14). A Docker outage
-/// (decision 22) makes the observation throw — desired state is preserved and the cycle retries;
+/// `runtime_failure` ("reconciled: …") so the notification path fires (never silent
+/// recovery). Runs in `stopping` belong to the stop-confirm sweeper. A Docker outage
+/// makes the observation throw — desired state is preserved and the cycle retries;
 /// </summary>
 public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogger<RunReconcilerCycle> logger) : IWorkerCycle
 {
@@ -81,7 +81,7 @@ public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogge
         if (changed > 0)
             await db.SaveChangesAsync(cancellationToken);
 
-        // Death reconciliation (01 §12): a container observed dead while its Run never became terminal.
+        // Death reconciliation: a container observed dead while its Run never became terminal.
         var dead = containers
             .Where(c => runsById.TryGetValue(c.RunId!.Value, out var run)
                 && run.Status is RunStatuses.Starting or RunStatuses.Running
@@ -105,7 +105,7 @@ public sealed class RunReconcilerCycle(IServiceScopeFactory scopeFactory, ILogge
         }
     }
 
-    /// <summary>Docker inspect Status → ContainerObservedStates (03 §5); unmapped states leave the row alone.</summary>
+    /// <summary>Docker inspect Status → ContainerObservedStates; unmapped states leave the row alone.</summary>
     internal static string? MapState(string? dockerState) => dockerState switch
     {
         "running" => ContainerObservedStates.Running,

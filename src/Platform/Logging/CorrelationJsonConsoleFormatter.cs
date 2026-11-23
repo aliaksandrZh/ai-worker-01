@@ -15,7 +15,7 @@ public sealed class PiJsonConsoleFormatterOptions : ConsoleFormatterOptions
 }
 
 /// <summary>
-/// Structured JSON log format from spec §14: exactly the fields timestamp, level, service,
+/// Structured JSON log format: exactly the fields timestamp, level, service,
 /// message, correlationId, repositoryId, workflowId, taskId, runId, eventId — absent identifiers
 /// are null, never omitted. Secrets never enter logs: only allow-listed state keys (source, action)
 /// are emitted from the log state; all other state/scopes are dropped.

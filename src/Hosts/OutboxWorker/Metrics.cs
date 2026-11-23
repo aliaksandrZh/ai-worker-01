@@ -5,7 +5,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.OutboxWorker;
 
-/// <summary>§14 baseline metrics: pending/failed/dead_letter counts from the dispatcher's OutboxState (task 03).</summary>
+/// <summary>Baseline metrics: pending/failed/dead_letter counts from the dispatcher's OutboxState.</summary>
 public sealed class OutboxMetrics(WorkerLoopState state, OutboxState outboxState) : WorkerMetricsBase(state)
 {
     protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()

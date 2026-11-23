@@ -11,13 +11,13 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// Control-command replies (task 08, 06 §7/§9, decisions 29/71/75/79): /status renders the draft
+/// Control-command replies: /status renders the status
 /// format from current rows including `Run attempt: #N` and the queue line; a WorkItem without a
 /// Workflow is answered "No agent workflow started."; /help hides commands the pipeline would reject
-/// right now (target type, pause, routing/profile gate incl. not-ready versions per owner ruling,
+/// right now (target type, pause, routing/profile gate incl. not-ready versions,
 /// Workflow state: unfinished Task, failed Workflow, no last-failed Task for /retry). Every triggering
 /// comment gets exactly one Outbox reply; Workflow/Task/Run rows are not touched; /stop and /retry
-/// stay untouched for tickets 14/15.
+/// stay untouched here.
 /// </summary>
 public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -34,7 +34,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal(AgentCommandStatuses.Processed, command.Status);
         Assert.Null(command.RejectionReason);
         Assert.Contains("No agent workflow started.", (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload, StringComparison.Ordinal);
-        // 06 §7: /status creates no Workflow, Task, Run, Session or Container
+        // /status creates no Workflow, Task, Run, Session or Container
         Assert.Empty(await db.Workflows.AsNoTracking().ToListAsync());
         Assert.Empty(await db.OrchestrationTasks.AsNoTracking().ToListAsync());
         Assert.Empty(await db.Runs.AsNoTracking().ToListAsync());
@@ -70,7 +70,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Processed, command.Status);
         var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
-        // draft format pieces (06 §7): workflow/task line with Run attempt: #N (decision 79), heartbeat, queue
+        // format pieces: workflow/task line with Run attempt: #N, heartbeat, queue
         Assert.Contains("Workflow Status", payload, StringComparison.Ordinal);
         Assert.Contains($"WorkItem: Issue #{workItem.Number}", payload, StringComparison.Ordinal);
         Assert.Contains("Workflow: active", payload, StringComparison.Ordinal);
@@ -102,8 +102,8 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
             .SetProperty(r => r.LastProgressAt, DateTime.UtcNow.AddSeconds(-40)));
         await db.OrchestrationTasks.ExecuteUpdateAsync(u => u
             .SetProperty(t => t.Status, OrchestrationTaskStatuses.Running));
-        // the RunEvent stream: the latest NON-heartbeat event is the phase (owner ruling, ticket 12:
-        // mirror the event type, no extra enum); a newer heartbeat must not shift it (decision 58)
+        // the RunEvent stream: the latest NON-heartbeat event is the phase (mirror the event type,
+        // no extra enum); a newer heartbeat must not shift it
         db.RunEvents.Add(new RunEvent
         {
             Id = Guid.NewGuid(), RunId = prepared.Run!.Id, EventId = "evt-1", Type = RunEventTypes.AgentStarted,
@@ -272,7 +272,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
     }
 
     [Fact]
-    public async Task Help_OmitsNotReadyVersion_PerRuling()
+    public async Task Help_OmitsNotReadyVersion()
     {
         var (db, harness, comment, _) = await NewCaseAsync("@jsxhuz /help");
         AuthStub200(harness.Handler);
@@ -315,7 +315,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         await RunAsync(db, harness);
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
-        Assert.Equal(AgentCommandStatuses.Processed, command.Status); // control commands unaffected (decision 75)
+        Assert.Equal(AgentCommandStatuses.Processed, command.Status); // control commands unaffected by the pause
         var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
         Assert.DoesNotContain("/plan", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("/retry", payload, StringComparison.Ordinal);
@@ -383,7 +383,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
         Assert.Contains("Available commands for this pull request:", payload, StringComparison.Ordinal);
         Assert.Contains("`/review`", payload, StringComparison.Ordinal);
-        // Issue-only commands invalid for a PR target (06 §2)
+        // Issue-only commands invalid for a PR target
         Assert.DoesNotContain("`/plan`", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("/code", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("/test-cases", payload, StringComparison.Ordinal);
@@ -427,7 +427,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         var workflow = new Workflow
         {
             Id = Guid.NewGuid(), WorkItemId = workItem.Id,
-            Status = WorkflowStatuses.Failed, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow, // decision 71
+            Status = WorkflowStatuses.Failed, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         db.Workflows.Add(workflow);
         db.OrchestrationTasks.Add(new OrchestrationTask
@@ -448,12 +448,12 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.DoesNotContain("/retry", payload, StringComparison.Ordinal);
     }
 
-    // ---- untouched /stop (tickets 14/15) + reply dedupe ----
+    // ---- untouched /stop + reply dedupe ----
 
     [Fact]
     public async Task StopCommand_IsHandledAsAControlCommand_NothingToStopWithoutWorkflow()
     {
-        // ticket 14: /stop became a state-changing control command (StopCommandHandler); on this
+        // /stop is a state-changing control command (StopCommandHandler); on this
         // workflow-less surface it answers "nothing to stop" and still creates no rows
         var (db, harness, comment, _) = await NewCaseAsync("@jsxhuz /stop");
         AuthStub200(harness.Handler);
@@ -506,7 +506,7 @@ public class ControlCommandTests(PostgresFixture postgres) : IClassFixture<Postg
             db, pullRequest: pullRequest, configuration: configuration, enabled: enabled, body: body);
         await CommandTestSupport.SeedCommandEventAsync(db, comment, workItem);
         db.ChangeTracker.Clear();
-        // ticket 14: the harness registers a default Runtime API stub so the /stop control path can run;
+        // the harness registers a default Runtime API stub so the /stop control path can run;
         // /status and /help never touch it
         var harness = CommandTestSupport.NewProcessor(postgres.ConnectionString,
             runtimeStub: new PiAgent.Hosts.Tests.Runtime.DirectHttpStub(_ =>

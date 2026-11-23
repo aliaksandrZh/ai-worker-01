@@ -5,17 +5,17 @@ using PiAgent.Orchestrator.Orchestration;
 namespace PiAgent.Orchestrator.Commands;
 
 /// <summary>
-/// The command-acceptance stage shared by both ingestion paths (task 06 poller comments and task 08's
+/// The command-acceptance stage shared by both ingestion paths (poller comments and
 /// `POST /internal/commands` test hook): the already-edited check (real comments only), grammar parse,
 /// and policy checks from the synced repository configuration (pause, permitted commands/types, command-
 /// target types). A comment produces at most one AgentCommand ever (unique GitHub comment ID = idempotency
-/// key, 02 §11); rejections persist their reason and enqueue exactly one Outbox reply (ticket 03 delivers).
-/// Only the task-producing subset and /retry are rejected while the repository is paused (decision 75) —
+/// key); rejections persist their reason and enqueue exactly one Outbox reply.
+/// Only the task-producing subset and /retry are rejected while the repository is paused —
 /// control commands pass and are handled by ControlCommandHandler after authorization.
 /// </summary>
 public static class CommandIngestion
 {
-    /// <summary>Valid WorkItem types per command (06 §2 table); public because /help filters on it.</summary>
+    /// <summary>Valid WorkItem types per command; public because /help filters on it.</summary>
     public static readonly Dictionary<string, string[]> ValidTargetTypes = new()
     {
         [AgentCommandNames.Plan] = [WorkItemTypes.Issue],
@@ -65,7 +65,7 @@ public static class CommandIngestion
                     CommandRejection.CommandInQuoteOrCodeBlock => (AgentCommandRejectionReasons.CommandInQuoteOrCodeBlock, rejected.Detail),
                     _ => (AgentCommandRejectionReasons.MalformedCommand, rejected.Detail),
                 };
-                // owner decision B: the supported-commands line in the reply is derived from the
+                // the supported-commands line in the reply is derived from the
                 // repository's permitted set (unknown commands), not hand-maintained
                 var permittedForReply = reason == AgentCommandRejectionReasons.UnknownCommand
                     ? config.PermittedCommands
@@ -79,7 +79,7 @@ public static class CommandIngestion
 
                 if (!repository.IsEnabled && AgentCommandNames.TaskProducingOrExecution.Contains(name))
                     return await PersistRejectedAsync(db, metrics, commentId, authorLogin, body, workItem, repository,
-                        AgentCommandRejectionReasons.RepositoryPaused, name, name, cancellationToken); // decision 75
+                        AgentCommandRejectionReasons.RepositoryPaused, name, name, cancellationToken);
 
                 if (!config.PermittedCommands.Contains(name))
                     return await PersistRejectedAsync(db, metrics, commentId, authorLogin, body, workItem, repository,

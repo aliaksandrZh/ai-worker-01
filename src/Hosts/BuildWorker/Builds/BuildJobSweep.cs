@@ -8,7 +8,7 @@ using PiAgent.Platform.Workers;
 namespace PiAgent.BuildWorker.Builds;
 
 /// <summary>
-/// §13 worker-cycle safety net (runs on the Platform worker loop, 5 s tick): re-enqueues `queued`
+/// Worker-cycle safety net (runs on the Platform worker loop, 5 s tick): re-enqueues `queued`
 /// documents that have no wake-up pending — this closes the POST-crash window (document persisted,
 /// process died before the runner picked it up; restart rescan covers it, the sweep covers a runner
 /// that lost a message without a restart). `building` documents are the runner's alone; a stranded

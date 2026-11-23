@@ -5,7 +5,7 @@ namespace PiAgent.Orchestrator.Config;
 
 public sealed class ConfigLoaderOptions
 {
-    /// <summary>Configuration-plane root (01 §2); compose mounts it read-only at /etc/pi-agent/config.</summary>
+    /// <summary>Configuration-plane root; compose mounts it read-only at /etc/pi-agent/config.</summary>
     public string ConfigRoot { get; set; } = "config";
 
     /// <summary>Host-managed PAT file (owner ruling) used for GET /user and GET /repos lookups; env PI_AGENT_GITHUB_PAT_FILE.</summary>

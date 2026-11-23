@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 namespace PiAgent.BuildWorker.Builds;
 
 /// <summary>
-/// Single-consumer build executor (04 §6 contract, worker side). Startup resume (the restart reconciler):
+/// Single-consumer build executor (worker side). Startup resume (the restart reconciler):
 /// unfinished documents are finalized when their pinned image tag already exists (a daemon build that
 /// completed while the worker was down) or re-enqueued for an idempotent rebuild from the pinned
 /// snapshot — the same `buildId`, no duplicate orchestration. Terminal results are durable documents:
@@ -203,7 +203,7 @@ public sealed class BuildJobRunner(
     {
         doc.State = BuildStates.Succeeded;
         doc.ImageId = image.ImageId;
-        doc.ImageDigest = image.ImageId; // local image store: the image ID is the digest reference in V1
+        doc.ImageDigest = image.ImageId; // local image store: the image ID is the digest reference
         doc.CompletedAtUtc = DateTime.UtcNow;
         doc.ErrorCode = null;
         doc.ErrorMessage = null;
@@ -220,7 +220,7 @@ public sealed class BuildJobRunner(
     }
 }
 
-/// <summary>§14 runtime counters shared between the runner and the metrics endpoint.</summary>
+/// <summary>Runtime counters shared between the runner and the metrics endpoint.</summary>
 public sealed class RunnerCounters
 {
     public long SucceededTotal;

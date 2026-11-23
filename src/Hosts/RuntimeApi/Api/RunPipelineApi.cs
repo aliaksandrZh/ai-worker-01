@@ -11,12 +11,12 @@ using PiAgent.Platform.Auth;
 namespace PiAgent.RuntimeApi.Api;
 
 /// <summary>
-/// Error handling + endpoint mapping for the Runtime Run Pipeline (04 §3–§4): the single
+/// Error handling + endpoint mapping for the Runtime Run Pipeline: the single
 /// service-token-guarded `POST /internal/runtime/runs/{runId}/start`, the per-Run bearer callbacks
 /// (heartbeat/events/completed/failed/cancelled — every delivery persisted as a RunEvent before
 /// acknowledgement), `GET /internal/runtime/runs/{runId}/input` (bridge pull channel), the per-Run
-/// `GET …/stop-request` (the ticket-14 Bridge control channel), and the service-token `POST …/stop`
-/// + `GET …/status`. Errors use the standard 04 §7 shape `{code, message, details}`.
+/// `GET …/stop-request` (the Bridge control channel), and the service-token `POST …/stop`
+/// + `GET …/status`. Errors use the standard shape `{code, message, details}`.
 /// </summary>
 public static class RunPipelineApi
 {
@@ -55,9 +55,9 @@ public static class RunPipelineApi
         Results.Json(new { code, message, details = details ?? new { } }, statusCode: statusCode);
 
     /// <summary>
-    /// `POST /internal/runtime/runs/{runId}/stop` (04 §3, ticket 14 — decision 61): records the
+    /// `POST /internal/runtime/runs/{runId}/stop`: records the
     /// Orchestrator→Runtime API control signal (run.stop_requested_at/stop_reason, the reconciliation
-    /// timeline facts) and moves the Run to `stopping` (decision 75: awaiting confirmed stop; the
+    /// timeline facts) and moves the Run to `stopping` (awaiting confirmed stop; the
     /// capacity slot stays held until the terminal callback confirms). It does NOT stop the container:
     /// the Bridge performs the graceful sequence (poll `/stop-request` → clear_queue → abort → settled
     /// → stdin → SIGTERM/SIGKILL → verified process tree) and posts the terminal `cancelled` callback,
@@ -144,7 +144,7 @@ public static class RunPipelineApi
     }
 
     /// <summary>`GET /internal/runtime/runs/{runId}/stop-request` (per-Run bearer): the Bridge's
-    /// pull channel for the stop signal (04 §4 graceful stop; the signal state lives in PostgreSQL).</summary>
+    /// pull channel for the stop signal (graceful stop; the signal state lives in PostgreSQL).</summary>
     public static class StopRequestHandler
     {
         public static async Task<IResult> HandleAsync(Guid runId, AppDbContext db, CancellationToken cancellationToken)

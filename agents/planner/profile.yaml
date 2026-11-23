@@ -1,4 +1,4 @@
-description: Analyze requirements and repository; identify gaps; publish plan/gaps/questions via GitHub MCP (the mandatory issue-comment publication, decision 42)
+description: Analyze requirements and repository; identify gaps; publish plan/gaps/questions via GitHub MCP (the mandatory issue-comment publication)
 enabled: true
 runtime_type: pi
 max_context_tokens: 200000
@@ -13,10 +13,10 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording, ticket 13
+  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording
   heartbeat_interval: 15s
   event_cadence: 5s
-# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image (decision 56); this field
+# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
 # stays the control-plane summary that pins it on the version row.
 system_prompt: |
   You are the planner agent. Analyze the issue and the repository context, identify gaps and open

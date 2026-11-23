@@ -11,7 +11,7 @@ using Xunit;
 /// Live-postgres constraint behavior behind the admission/claim paths (task 07): the partial unique
 /// index `ux_task_one_unfinished_per_workflow` as the invariant backstop, attempt/session-uniqueness,
 /// and the RunPreparation serialization hook (a Workflow's next Run never starts while a previous Run
-/// of the same Workflow is non-terminal — decision 60).
+/// of the same Workflow is non-terminal).
 /// </summary>
 public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
@@ -111,7 +111,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
         db.AgentSessions.Add(new AgentSession
         {
             Id = Guid.NewGuid(),
-            RunId = seeded.Run!.Id, // duplicate: one-shot 1:1 session per Run (decision 57)
+            RunId = seeded.Run!.Id, // duplicate: one-shot 1:1 session per Run
             TaskId = seeded.Task.Id,
             AgentProfileVersionId = version.Id,
         });
@@ -162,7 +162,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
         var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
         var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
         var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: true);
-        // decision 60: the previous Run of this Workflow is still non-terminal
+        // the previous Run of this Workflow is still non-terminal
         seeded.Run!.Status = RunStatuses.Running;
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
@@ -187,7 +187,7 @@ public class OrchestrationConstraintTests(PostgresFixture postgres) : IClassFixt
         Assert.Equal(ContainerDesiredStates.Running, prepared.Container.DesiredState);
     }
 
-    /// <summary>Task 16 (decision 60, Workflow-scoped serialization across restarts): after /stop the
+    /// <summary>(Workflow-scoped serialization across restarts): after /stop the
     /// cancelled Task's Run stays `stopping` until the Bridge's terminal `cancelled` callback is
     /// persisted — the next command's Task (any type) must not prepare a Run before that, even though
     /// the Workflow no longer holds an unfinished Task; the gate reads PostgreSQL state, so it holds

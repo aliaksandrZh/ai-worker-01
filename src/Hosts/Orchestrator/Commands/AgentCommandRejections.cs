@@ -4,8 +4,8 @@ namespace PiAgent.Orchestrator.Commands;
 
 /// <summary>
 /// The persisted `AgentCommand.rejection_reason` vocabulary plus the one-line GitHub reply text for
-/// each (06 §1 rule 10, §13 "Command rejected … → Yes (concise reason)"). Every rejection persists its
-/// reason in `agent_command` and enqueues exactly one reply through the Outbox (ticket 03).
+/// each ("Command rejected … → Yes (concise reason)"). Every rejection persists its
+/// reason in `agent_command` and enqueues exactly one reply through the Outbox.
 /// </summary>
 public static class AgentCommandRejectionReasons
 {
@@ -22,28 +22,28 @@ public static class AgentCommandRejectionReasons
     public const string UserNotCollaborator = "user_not_collaborator";
     public const string InsufficientPermission = "insufficient_permission";
 
-    // task 07 admission/admission-time reasons (04 §2, 06 §12, decisions 35/71/80)
+    // admission/admission-time reasons
     public const string UnfinishedTaskExists = "unfinished_task_exists";
     public const string WorkflowFailed = "workflow_failed";
     public const string WorkItemClosed = "work_item_closed";
     public const string AgentProfileNotConfigured = "agent_profile_not_configured";
     public const string AgentImageNotReady = "agent_image_not_ready";
     public const string PlanNotAvailable = "plan_not_available";
-    /// <summary>Ticket 15 (06 §9a, 04 §7): /retry rejected — the most recent non-cancelled task is not a failed one.</summary>
+    /// <summary>/retry rejected — the most recent non-cancelled task is not a failed one.</summary>
     public const string TaskNotRetryable = "task_not_retryable";
-    /// <summary>Ticket 15 (06 §9a, 04 §7): /retry rejected — the pinned profile version is disabled or not `ready`.</summary>
+    /// <summary>/retry rejected — the pinned profile version is disabled or not `ready`.</summary>
     public const string AgentProfileNotReady = "agent_profile_not_ready";
-    /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued (decision 31, 04 §7).</summary>
+    /// <summary>Claim-time reason only: the PR Head SHA drifted while the review was queued.</summary>
     public const string ReviewHeadChanged = "review_head_changed_before_execution";
-    /// <summary>Claim-time reason (ticket 19, decision 31, 06 §11): the bot's review request was withdrawn before
+    /// <summary>Claim-time reason: the bot's review request was withdrawn before
     /// the automatic initial review Task started. An executing review is never interrupted.</summary>
     public const string ReviewRequestRemovedBeforeExecution = "review_request_removed_before_execution";
-    /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx, ticket 09).</summary>
+    /// <summary>Claim-time reason only: the Runtime API rejected the run dispatch (4xx).</summary>
     public const string RuntimeDispatchFailed = "runtime_dispatch_failed";
-    /// <summary>Not a rejection: the reason code recorded on Tasks/commands cancelled by `/stop`
-    /// (06 §8, ticket 14) and passed to the Runtime API as the stop-signal reason (decision 61).</summary>
+    /// <summary>Not a rejection: the reason code recorded on Tasks/commands cancelled by `/stop`,
+    /// passed to the Runtime API as the stop-signal reason.</summary>
     public const string StopRequested = "stop_requested";
-    /// <summary>Admission gate (owner decision 2026-11-23): the same task-producing command repeated
+    /// <summary>Admission gate: the same task-producing command repeated
     /// with no new human signal since its previous same-type Task succeeded.</summary>
     public const string NoNewInput = "no_new_input";
 }
@@ -52,7 +52,7 @@ public static class AgentCommandRejectionReplies
 {
     /// <summary>Concise reply for the Outbox comment; `detail` carries parse diagnostics (raw token).
     /// `permittedCommands` (when known) scopes the supported-commands line to what the rejecting
-    /// repository allows — owner decision B: the line is always derived, never hand-maintained.</summary>
+    /// repository allows — the line is always derived, never hand-maintained.</summary>
     public static string Text(string reason, string detail, IReadOnlyList<string>? permittedCommands = null) => reason switch
     {
         AgentCommandRejectionReasons.UnknownCommand =>
@@ -107,7 +107,7 @@ public static class AgentCommandRejectionReplies
     };
 
     /// <summary>"Supported commands: `/plan`, …" — the repository's permitted commands when supplied,
-    /// otherwise the full V1 table (`AgentCommandNames.All`); a config permitting no known command
+    /// otherwise the full table (`AgentCommandNames.All`); a config permitting no known command
     /// falls back to the full table rather than an empty list. Canonical `test_cases` renders as its
     /// `/test-cases` token by the shared `_`→`-` rule.</summary>
     private static string SupportedCommandsLine(IReadOnlyList<string>? permittedCommands)

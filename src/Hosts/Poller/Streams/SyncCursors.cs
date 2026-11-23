@@ -6,9 +6,9 @@ using PiAgent.Platform.Http;
 
 namespace PiAgent.Poller.Streams;
 
-/// <summary>SyncCursor row access for the streams (02 §8). Rows are normally created during repository
-/// onboarding (ConfigSyncService, task 02); GetOrCreate makes a missing row non-fatal. Cursor values are
-/// advanced only by the streams' per-page transactions ("durable save before advance", decision 53).</summary>
+/// <summary>SyncCursor row access for the streams. Rows are normally created during repository
+/// onboarding (ConfigSyncService); GetOrCreate makes a missing row non-fatal. Cursor values are
+/// advanced only by the streams' per-page transactions ("durable save before advance").</summary>
 public static class SyncCursors
 {
     private const int MaxErrorLength = 512;
@@ -43,7 +43,7 @@ public static class SyncCursors
         cursor.UpdatedAt = cursor.LastSuccessAt!.Value;
     }
 
-    /// <summary>A failed attempt never advances the cursor — last_attempt/last_error only (decision 53).</summary>
+    /// <summary>A failed attempt never advances the cursor — last_attempt/last_error only.</summary>
     public static void RecordFailure(SyncCursor cursor, string error)
     {
         cursor.LastAttemptAt = DateTime.UtcNow;
@@ -78,7 +78,7 @@ public static class SyncCursors
         RecordFailure(cursor, exception.Message);
         await TrySaveFailure(db, cancellationToken);
         // HTTP status travels to the cycle so a revoked/expired PAT (401) can surface as the proper
-        // decision-65 system configuration error instead of a generic stream-failure warning.
+        // system configuration error instead of a generic stream-failure warning.
         var status = exception is GitHubReadException read ? read.Status : null;
         return new StreamResult(StreamResultKind.Failed, exception.Message, status);
     }

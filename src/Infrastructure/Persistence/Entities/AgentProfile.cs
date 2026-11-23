@@ -1,6 +1,6 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Versioned agent profile container (02 §12).</summary>
+/// <summary>Versioned agent profile container.</summary>
 public class AgentProfile
 {
     public Guid Id { get; set; }

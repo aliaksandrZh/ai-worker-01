@@ -5,9 +5,9 @@ using System.Text.Json;
 
 namespace PiAgent.Orchestrator.Builds;
 
-/// <summary>Decision-65 contour for Orchestrator→Build Worker calls: the Orchestrator presents its own
+/// <summary>Contour for Orchestrator→Build Worker calls: the Orchestrator presents its own
 /// service credential, which the Build Worker's endpoints accept as `ServiceTokens__Orchestrator`
-/// (the same direction/shape as task 09's RuntimeApi calls).</summary>
+/// (the same direction/shape as the RuntimeApi calls).</summary>
 public sealed class BuildWorkerOptions
 {
     public string BaseUrl { get; set; } = "http://build-worker:8080";
@@ -20,7 +20,7 @@ public sealed class BuildWorkerOptions
     public int BatchLimit { get; set; } = 10;
 }
 
-/// <summary>HTTP client for the Build Worker internal build API (04 §6). POST is expected to answer
+/// <summary>HTTP client for the Build Worker internal build API. POST is expected to answer
 /// `202` quickly; the outcome is always polled on a later tick — never held open.</summary>
 public sealed class BuildWorkerApiClient(HttpClient http, IOptions<BuildWorkerOptions> options)
 {

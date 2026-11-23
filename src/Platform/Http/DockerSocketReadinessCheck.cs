@@ -8,11 +8,11 @@ namespace PiAgent.Platform.Http;
 
 public sealed class DockerOptions
 {
-    /// <summary>Host Docker Engine unix socket (§13: Host Monitor + Build Worker dependency).</summary>
+    /// <summary>Host Docker Engine unix socket (Host Monitor + Build Worker dependency).</summary>
     public string SocketPath { get; set; } = "/var/run/docker.sock";
 }
 
-/// <summary>§13 health check: Docker Engine reachable over its unix socket (GET /_ping).</summary>
+/// <summary>Health check: Docker Engine reachable over its unix socket (GET /_ping).</summary>
 public sealed class DockerSocketReadinessCheck(IOptions<DockerOptions> options) : IReadinessCheck
 {
     public string Name => "docker";

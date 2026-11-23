@@ -10,10 +10,10 @@ using PiAgent.Platform.Auth;
 namespace PiAgent.RuntimeApi.Api;
 
 // The telemetry payload records (MonitorTelemetryRequest & co.) are the shared Platform.Contracts
-// copy — the Host Monitor serializes exactly these types; any field addition happens once. (01 §2/04 §4, decision 62).
+// copy — the Host Monitor serializes exactly these types; any field addition happens once.
 
 /// <summary>
-/// `POST /internal/runtime/monitor/telemetry` (04 §4, decision 62/65, ticket 13): the Execution Host
+/// `POST /internal/runtime/monitor/telemetry`: the Execution Host
 /// Monitor posts what the control plane cannot observe itself — container state, process trees/CPU,
 /// bind mounts and managed-storage usage — under its own service credential. The Runtime API persists
 /// the LATEST observation as a single-row upsert (PostgreSQL); the timeout sweeper reads per-run

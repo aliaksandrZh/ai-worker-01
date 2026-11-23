@@ -11,13 +11,13 @@ using PiAgent.Platform.Auth;
 namespace PiAgent.Orchestrator.Api;
 
 /// <summary>
-/// The Orchestration API read surface (04 §2) plus the internal command test hook, served by the
-/// Orchestrator (it owns WorkItem/Workflow/Task state). DTOs stay deliberately close to the 04 §2
-/// examples (camelCase, Guid ids — the exact transports were left open there). Every route requires
-/// the decision-65 service token (`X-Service-Token`); the standard error shape is 04 §7
+/// The Orchestration API read surface plus the internal command test hook, served by the
+/// Orchestrator (it owns WorkItem/Workflow/Task state). DTOs stay deliberately close to the
+/// examples (camelCase, Guid ids). Every route requires
+/// the service token (`X-Service-Token`); the standard error shape is
 /// (`{ code, message, details }`). `POST /internal/commands` ingests a synthetic comment through the
 /// identical pipeline as poller-delivered comments (CommandIngestion → admission → control replies):
-/// the GitHub collaborator-permission check is skipped (owner ruling — the endpoint is service-token
+/// the GitHub collaborator-permission check is skipped (the endpoint is service-token
 /// protected and exists to test without GitHub), while the repository-policy checks, the config-
 /// derived allowlist, admission gates and outbox replies apply unchanged. Idempotent by commentId.
 /// </summary>
@@ -195,7 +195,7 @@ public static class OrchestrationApi
             return Error(StatusCodes.Status400BadRequest, "validation", "text is required");
         if (!configurationState.Synchronized || configurationState.BotLogin is not { } botLogin)
             return Error(StatusCodes.Status503ServiceUnavailable, "not_ready",
-                "configuration is not synchronized (cold-start gate)"); // 01 §13
+                "configuration is not synchronized (cold-start gate)");
 
         var workItem = await db.WorkItems.AsNoTracking()
             .SingleOrDefaultAsync(w => w.Id == request.WorkItemId, cancellationToken);
@@ -232,7 +232,7 @@ public static class OrchestrationApi
 
         if (command.Status == AgentCommandStatuses.Received)
         {
-            // the hook skips the GitHub collaborator-permission lookup (owner ruling); the config-derived
+            // the hook skips the GitHub collaborator-permission lookup; the config-derived
             // allowlist still applies because it is a repository decision, not a GitHub lookup.
             if (CollaboratorPermissionGate.EvaluateAllowlist(repository.Configuration, request.Author)
                 == AllowlistVerdict.Denied)
@@ -267,8 +267,8 @@ public static class OrchestrationApi
             }
             else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
             {
-                // ticket 14: /stop is a state-changing control command (StopCommandHandler), ticket 15:
-                // /retry too (RetryCommandHandler); the runtime-signal client is a decision-65 dependency
+                // /stop is a state-changing control command (StopCommandHandler), and
+                // /retry too (RetryCommandHandler); the runtime-signal client is a dependency
                 // of the same transactional path.
                 await ControlCommandHandler.HandleAsync(db, command, workItem, repository, runtimeApi, metrics, cancellationToken);
             }

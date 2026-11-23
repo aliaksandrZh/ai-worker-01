@@ -6,9 +6,9 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// Collaborator permission gate per decision 66 (02 §21): role_name/permission mapping, 404 →
+/// Collaborator permission gate: role_name/permission mapping, 404 →
 /// UserNotFound, 401/non-rate-limit 403 → SystemConfigError, rate-limits/5xx/network → Transient,
-/// ≤60 s cache; plus the repositories.yaml allowlist evaluation (decision 49).
+/// ≤60 s cache; plus the repositories.yaml allowlist evaluation.
 /// </summary>
 public class CollaboratorPermissionGateTests
 {
@@ -31,7 +31,7 @@ public class CollaboratorPermissionGateTests
         EnqueueJson(handler, json);
     }
 
-    // ---- decision 66 role mapping ----
+    // ---- role mapping ----
 
     [Theory]
     [InlineData("admin")]
@@ -102,7 +102,7 @@ public class CollaboratorPermissionGateTests
         Assert.Equal(PermissionKind.InsufficientPermission, outcome.Kind);
     }
 
-    // ---- error classification (02 §21/decision 66) ----
+    // ---- error classification ----
 
     [Fact]
     public async Task NotFound404_UserNotFound()
@@ -181,7 +181,7 @@ public class CollaboratorPermissionGateTests
             throw new HttpRequestException("connection refused");
     }
 
-    // ---- cache (decision 66: ≤60 s, absolute) ----
+    // ---- cache (≤60 s, absolute) ----
 
     [Fact]
     public async Task CacheWithinTtl_SecondCheckSkipsHttp()
@@ -221,7 +221,7 @@ public class CollaboratorPermissionGateTests
         Assert.Equal(2, handler.Requests.Count);
     }
 
-    // ---- allowlist (decision 49, Repository.Configuration jsonb) ----
+    // ---- allowlist (Repository.Configuration jsonb) ----
 
     private const string ConfigJson = """{"allowlist": {"enabled": true, "logins": ["alice"]}, "permitted_commands": ["plan", "status"], "permitted_work_item_types": ["issue"], "authorization": {"minimum_permission": "write"}}""";
 

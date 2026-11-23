@@ -16,7 +16,7 @@ public enum TimeoutVerdict
     None,
     /// <summary>`startup_timeout`: the preparation never became ready (no agent_started).</summary>
     StartupTimeout,
-    /// <summary>`max_run_duration`: the wall-clock limit is up (03 §3: Run → `timed_out`).</summary>
+    /// <summary>`max_run_duration`: the wall-clock limit is up (Run → `timed_out`).</summary>
     RunDuration,
     /// <summary>Silence long enough to be an idle CANDIDATE — reconciliation, never an immediate stop.</summary>
     IdleCandidate,
@@ -32,7 +32,7 @@ public enum TimeoutVerdict
 /// <summary>
 /// Pure limit arithmetic shared by <see cref="TimeoutSweeper"/> (unit-testable): which reconciliation
 /// verdict applies to a Run's current facts. `now`/`startedAt`/`lastProgressAt`/`lastHeartbeatAt` are
-/// UTC instants; null progress falls back to the start instant. Decision 68/03 §9:
+/// UTC instants; null progress falls back to the start instant.
 /// `permission_blocked`, thinking deltas and queue updates are never progress and reset no timer (they
 /// are not in RunEventTypes.Progress, so the callback route never advances `last_progress_at` for them).
 /// </summary>
@@ -65,7 +65,7 @@ public static class TimeoutEvaluator
         if (now - progress < idleTimeout)
             return TimeoutVerdict.None;
 
-        // The idle definition (decision 23/68): NO observable activity at all while the container is
+        // The idle definition: NO observable activity at all while the container is
         // alive — heartbeat continues (the Bridge is alive) but nothing else happened. A lost heartbeat
         // means the liveness signal itself is gone: the container-death reconciler owns that case
         // through the observed container state, not this verdict.
@@ -84,7 +84,7 @@ public static class TimeoutEvaluator
 }
 
 /// <summary>
-/// The ticket-13 execution-limit reconciler (01 §12, decisions 30/68, 03 §9). One cycle:
+/// The execution-limit reconciler. One cycle:
 /// <list type="bullet">
 /// <item>`startup_timeout` — a Run still `starting` past the effective limit (its container/agent never
 /// became ready) is stopped and failed with `startup_timeout`.</item>
@@ -95,11 +95,11 @@ public static class TimeoutEvaluator
 /// <item>`max_run_duration` — the wall-clock limit ends the Run `timed_out` independently of heartbeat
 /// or progress; no automatic retry exists for it (`/retry` is the only recovery).</item>
 /// </list>
-/// Task 16: `startup_timeout`/`idle_timeout` verdicts are suppressed while the Run's Bridge callback
-/// spool still holds undelivered entries (decision 60's spool redelivery may be in flight — e.g. right
+/// `startup_timeout`/`idle_timeout` verdicts are suppressed while the Run's Bridge callback
+/// spool still holds undelivered entries (spool redelivery may be in flight — e.g. right
 /// after a Runtime API restart mid-run); the facts they would adjudicate on may still be in the spool.
 /// Every reconciled terminal goes through <see cref="RunReconcileService"/> (Docker stop confirmed →
-/// identical terminal facts), so a Docker outage simply retries the cycle (decision 22). The Run
+/// identical terminal facts), so a Docker outage simply retries the cycle. The Run
 /// `starting → running` transition itself is event-driven (`agent_started`, Callbacks.cs); business
 /// Task/Workflow transitions stay with the Orchestrator's terminal consumer.
 /// </summary>
@@ -158,12 +158,12 @@ public sealed class TimeoutSweeper(
             var verdict = TimeoutEvaluator.Evaluate(
                 run.Status, run.StartedAt, run.LastProgressAt, run.LastHeartbeatAt, now, startup, idle, duration, activity);
 
-            // task 16 (decision 22 posture: investigate before stopping): `startup_timeout` and
+            // posture: investigate before stopping: `startup_timeout` and
             // `idle_timeout` failures adjudicate the ABSENCE of lifecycle facts — while the Run's Bridge
             // spool still holds undelivered entries (an outage / Runtime restart recovering via spool
-            // redelivery, decision 60), those facts may simply be in flight; skipping the tick lets the
+            // redelivery), those facts may simply be in flight; skipping the tick lets the
             // redelivery resolve the Run before any kill. `max_run_duration` stays unguarded: the wall
-            // clock is independent of delivery (decision 68).
+            // clock is independent of delivery.
             if (verdict is TimeoutVerdict.StartupTimeout or TimeoutVerdict.IdleConfirmed)
             {
                 var workflowId = versions.GetValueOrDefault(run.TaskId).Workflow;
@@ -223,7 +223,7 @@ public sealed class TimeoutSweeper(
 
     /// <summary>Extracts (observation age, per-run activity) from the persisted latest observation.
     /// `activityByRun[runId] == true` means the monitor saw an active child process tree, notable CPU,
-    /// or a session file touched after the idle window opened (the busy-run protection, decision 68).</summary>
+    /// or a session file touched after the idle window opened (the busy-run protection).</summary>
     public static (TimeSpan? Age, Dictionary<Guid, bool> ActivityByRun) ParseObservation(
         MonitorObservation? observation, DateTime now)
     {

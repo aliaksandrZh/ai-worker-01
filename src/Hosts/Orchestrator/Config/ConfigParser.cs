@@ -4,9 +4,9 @@ using YamlDotNet.Serialization;
 namespace PiAgent.Orchestrator.Config;
 
 /// <summary>
-/// Reads the configuration plane from `config/` (01 §2): system.yaml, repositories.yaml, routing.yaml,
+/// Reads the configuration plane from `config/`: system.yaml, repositories.yaml, routing.yaml,
 /// agents/&lt;name&gt;/profile.yaml. Strict schema — unknown keys, missing mandatory keys, YAML syntax
-/// errors and illegal values all fail with ConfigException naming the file (ticket 02 checklist).
+/// errors and illegal values all fail with ConfigException naming the file.
 /// Validation of numeric constraints lives in ConfigValidator; this type only parses.
 /// </summary>
 public static class ConfigParser
@@ -93,7 +93,7 @@ public static class ConfigParser
 
         var github = dto.GitHub;
         if (string.IsNullOrWhiteSpace(github?.BotLogin))
-            throw new ConfigException($"{name}: github.bot_login is required (the bot account mentioned in commands, 06 §1)");
+            throw new ConfigException($"{name}: github.bot_login is required (the bot account mentioned in commands)");
 
         return new SystemConfig
         {
@@ -181,7 +181,7 @@ public static class ConfigParser
                 throw new ConfigException($"{name}: repository entry is missing `name`");
             var fullName = $"{item.Owner}/{item.Name}".ToLowerInvariant();
             if (!seen.Add(fullName))
-                throw new ConfigException($"{name}: duplicate repository full_name '{fullName}' (02 §2 requires unique normalized full_name)");
+                throw new ConfigException($"{name}: duplicate repository full_name '{fullName}' (normalized full_name must be unique)");
 
             entries.Add(new RepositoryEntry
             {
@@ -306,11 +306,11 @@ public static class ConfigParser
 
             var dto = Load<ProfileDto>(profileYamlPath, relativeName);
             if (dto.MaxContextTokens is null || dto.MaxContextTokens <= 0)
-                throw new ConfigException($"{relativeName}: max_context_tokens is required and must be positive (decision 56)");
+                throw new ConfigException($"{relativeName}: max_context_tokens is required and must be positive");
 
             var runtimeType = dto.RuntimeType ?? "pi";
             if (runtimeType != "pi")
-                throw new ConfigException($"{relativeName}: runtime_type '{runtimeType}' is not supported (V1 runs `pi`)");
+                throw new ConfigException($"{relativeName}: runtime_type '{runtimeType}' is not supported (only `pi` is supported)");
 
             profiles.Add(new ProfileConfig
             {

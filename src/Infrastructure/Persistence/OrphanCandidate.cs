@@ -1,6 +1,6 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Orphan-candidate lifecycle (decision 77, ticket 13): candidate → quarantined → deleted.</summary>
+/// <summary>Orphan-candidate lifecycle: candidate → quarantined → deleted.</summary>
 public static class OrphanCandidateStatuses
 {
     public const string Candidate = "candidate";
@@ -9,7 +9,7 @@ public static class OrphanCandidateStatuses
 }
 
 /// <summary>
-/// One orphaned workflow storage tree under the managed root (decision 77): a directory whose
+/// One orphaned workflow storage tree under the managed root: a directory whose
 /// Workflow no longer exists in PostgreSQL (or whose storage is already marked deleted), observed by
 /// the Host Monitor and resolved against the DB by the Runtime API. Candidates persist ≥ the grace
 /// period, are quarantined (physically renamed) for the quarantine period, and only then are

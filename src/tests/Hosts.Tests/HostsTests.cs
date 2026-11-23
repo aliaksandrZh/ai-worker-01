@@ -68,7 +68,7 @@ public class RuntimeApiEndpointsTests : IClassFixture<WebApplicationFactory<Dock
     }
 }
 
-/// <summary>Each worker's /metrics key set per Global Constraints (§14) — null placeholders until later tasks.</summary>
+/// <summary>Each worker's /metrics key set per the baseline — null placeholders until later tasks.</summary>
 public class WorkerMetricKeyTests
 {
     private static WorkerLoopState State() => new();
@@ -87,7 +87,7 @@ public class WorkerMetricKeyTests
         Assert.True(collect.ContainsKey("jobsClaimedTotal"));
         Assert.True(collect.ContainsKey("leaseExpirationsTotal"));
         Assert.True(collect.ContainsKey("claimCancellationsTotal"));
-        // task 10 (decision 81): build-flow gauges
+        // build-flow gauges
         Assert.Equal(0, collect["buildJobsPending"]);
         Assert.Equal(0, collect["buildJobsPolling"]);
         Assert.True(collect.ContainsKey("oldestPendingBuildAgeSeconds"));
@@ -127,7 +127,7 @@ public class WorkerMetricKeyTests
             .Collect().ToDictionary(p => p.Key, p => p.Value);
         Assert.True(collect.ContainsKey("storageFreeBytes"));
         Assert.True(collect.ContainsKey("storageManagedUsageBytes"));
-        // ticket 13: the monitor's last-cycle observation counts + the orphan gauge the Runtime API owns
+        // the monitor's last-cycle observation counts + the orphan gauge the Runtime API owns
         Assert.True(collect.ContainsKey("containersObserved"));
         Assert.True(collect.ContainsKey("busyContainers"));
         Assert.True(collect.ContainsKey("workflowDirectories"));

@@ -28,17 +28,17 @@ public sealed record SyncResult(
 
 /// <summary>
 /// Persists the parsed configuration plane in ONE transaction (02 checklist: no partial DB rows) —
-/// repositories + decision-53 sync cursors, agent profiles + `draft` versions pinned via config_hash
-/// (decision 81: unchanged hash ⇒ no new version, never a build dispatch), and the seeded routing rules
-/// (02 §12a). YAML is the desired state: rows absent from YAML get paused (`is_enabled=false`),
+/// repositories + sync cursors, agent profiles + `draft` versions pinned via config_hash
+/// (unchanged hash ⇒ no new version, never a build dispatch), and the seeded routing rules.
+/// YAML is the desired state: rows absent from YAML get paused (`is_enabled=false`),
 /// routing rules absent from YAML are deleted (configuration, not orchestration history). The Config
-/// Loader never builds or dispatches images — only tickets 07/10 transition version states.
+/// Loader never builds or dispatches images — only the queue worker and build flow transition version states.
 /// </summary>
 public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService>? logger = null)
 {
-    /// <summary>Decision 36 phase-1 command set; repositories.yaml may narrow it via permitted_commands.</summary>
-    private static readonly string[] AllV1Commands = ["plan", "code", "review", "test-cases", "status", "stop", "help", "retry"];
-    private static readonly string[] AllV1WorkItemTypes = ["issue", "pull_request"];
+    /// <summary>Phase-1 command set; repositories.yaml may narrow it via permitted_commands.</summary>
+    private static readonly string[] AllCommands = ["plan", "code", "review", "test-cases", "status", "stop", "help", "retry"];
+    private static readonly string[] AllWorkItemTypes = ["issue", "pull_request"];
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     public async Task<SyncResult> SyncAsync(ConfigSynchronization sync, CancellationToken cancellationToken = default)
@@ -142,7 +142,7 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
             }
         }
 
-        // rows absent from YAML are paused, never deleted (decision 75 pause semantics)
+        // rows absent from YAML are paused, never deleted (pause semantics)
         var disabled = 0;
         foreach (var repository in existing.Where(r => !desiredNames.Contains(r.FullName) && r.IsEnabled))
         {
@@ -156,9 +156,9 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
 
     private static string BuildConfiguration(Repository? existing, RepositoryEntry entry)
     {
-        // decision 49/§21: absent allowlist = enabled, seeded with the owner when the repo is new;
+        // absent allowlist = enabled, seeded with the owner when the repo is new;
         // an explicitly emptied allowlist ([] in YAML) disables list filtering, keeping the write baseline.
-        // absent → enabled; explicit [] → filtering disabled; explicit list → enabled with that list (decision 49)
+        // absent → enabled; explicit [] → filtering disabled; explicit list → enabled with that list
         var enableAllowlist = entry.AllowedLogins is null || entry.AllowedLogins.Count > 0;
         var logins = entry.AllowedLogins switch
         {
@@ -171,8 +171,8 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
         return JsonSerializer.Serialize(new RepositoryConfigurationDto
         {
             Allowlist = new AllowlistConfigurationDto { Enabled = enableAllowlist, Logins = logins },
-            PermittedCommands = entry.PermittedCommands ?? [.. AllV1Commands],
-            PermittedWorkItemTypes = entry.PermittedWorkItemTypes ?? [.. AllV1WorkItemTypes],
+            PermittedCommands = entry.PermittedCommands ?? [.. AllCommands],
+            PermittedWorkItemTypes = entry.PermittedWorkItemTypes ?? [.. AllWorkItemTypes],
             Authorization = new AuthorizationConfigurationDto { MinimumPermission = entry.MinimumPermission ?? "write" },
         }, JsonOptions);
     }
@@ -258,7 +258,7 @@ public sealed class ConfigSyncService(AppDbContext db, ILogger<ConfigSyncService
                 upserted++;
             }
 
-            // decision 81: a new version only when the latest version's config_hash differs
+            // a new version only when the latest version's config_hash differs
             if (latestByProfileId.TryGetValue(profileRow.Id, out var current) && current.ConfigHash == snapshot.ConfigHash)
             {
                 latest[profile.Name] = current;

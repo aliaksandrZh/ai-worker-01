@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Stub agent CLI (ticket 09): the pi-RPC-shaped fake headless agent (04 §4 protocol shape, decision 33).
- * Reads JSON objects on stdin (one per line), answers one `prompt` with the 04 §4 event set on stdout,
+ * Stub agent CLI: the pi-RPC-shaped fake headless agent (protocol shape).
+ * Reads JSON objects on stdin (one per line), answers one `prompt` with the event set on stdout,
  * writes a session `.jsonl` (history) plus `result.json` + the manifest's artifact files into the
  * workspace, then exits. Behavior (env STUB_BEHAVIOR): succeed (default) | fail | needs_human | hang
- * | never_start (ticket 13: accepts the prompt, then never emits anything — startup_timeout) |
- * permission_denied (ticket 13: the run's mandatory publication tool call is denied by the
- * unattended permission policy — decision 69's fail-closed path).
+ * | never_start (accepts the prompt, then never emits anything — startup_timeout) |
+ * permission_denied (the run's mandatory publication tool call is denied by the
+ * unattended permission policy — the fail-closed path).
  *
  * The scenario lever exists only to make the failure/needs-human/hang paths testable; in the real
- * profiles (ticket 12) these paths come from real agent work and MCP failures.
+ * profiles these paths come from real agent work and MCP failures.
  */
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -44,7 +44,7 @@ function respond(id, command, data) {
 }
 
 function settleWithManifest(outcome = "completed") {
-  // agent-local git so the Bridge can genuinely derive branch/commitSha via Git (decision 59)
+  // agent-local git so the Bridge can genuinely derive branch/commitSha via Git
   if (!existsSync(join(workspace, ".git"))) {
     execFileSync("git", ["init", "-b", "agent/pipe-stub"], { cwd: workspace, stdio: "ignore" });
   }
@@ -71,7 +71,7 @@ function settleWithManifest(outcome = "completed") {
 function answerPrompt() {
   runInFlight = true;
   if (behavior === "never_start") {
-    // ticket 13's startup_timeout lever: the process stays alive (heartbeats continue) but never
+    // the startup_timeout lever: the process stays alive (heartbeats continue) but never
     // emits ANYTHING — not even agent_start — so the Run never became ready
     return;
   }
@@ -88,7 +88,7 @@ function answerPrompt() {
   }
   emit({ id: "e2", type: "turn_start" });
   if (behavior === "permission_denied") {
-    // ticket 13's decision-69 lever: the mandatory publication tool call is denied by the
+    // the permission_denied lever: the mandatory publication tool call is denied by the
     // permission policy — the agent answers the denial itself (no dialog), the Bridge records the
     // `permission_blocked` RunEvent and verifies the required publication in the manifest
     const deniedToolCallId = "call-1";
@@ -103,8 +103,8 @@ function answerPrompt() {
     return;
   }
   if (behavior === "hang") {
-    // agent_started, then never settles again while the process stays alive (ticket 13's timeouts;
-    // ticket 14's stop lever — an `abort` RPC settles the run with aborted=true and exits)
+    // agent_started, then never settles again while the process stays alive (the timeouts;
+    // the stop lever — an `abort` RPC settles the run with aborted=true and exits)
     return;
   }
   emit({ id: "e3", type: "message_update", data: { delta: "Analyzing the received prompt (stub)." } });
@@ -114,7 +114,7 @@ function answerPrompt() {
   emit({ id: "e7", type: "turn_end" });
   settleWithManifest(behavior === "needs_human" ? "needs_human_input" : "completed");
   emit({ id: "e8", type: "agent_settled", data: { sessionId } });
-  // one-shot sessions (decision 57): after settling the agent is done with this run — exit regardless
+  // one-shot sessions: after settling the agent is done with this run — exit regardless
   // of stdin state (the Bridge closes stdin after settle either way)
   setTimeout(() => process.exit(0), 200);
 }
@@ -143,7 +143,7 @@ process.stdin.on("data", (chunk) => {
         answerPrompt();
         break;
       case "get_state":
-        // rpc-commands.md: `sessionFile` is the actual on-disk path (decision 57 discovery)
+        // `sessionFile` is the actual on-disk path (discovery)
         respond(rpc.id, "get_state", {
           sessionId,
           sessionFile: sessionFile,
@@ -151,7 +151,7 @@ process.stdin.on("data", (chunk) => {
         });
         break;
       default:
-        // ticket 14: pi-shaped RPCs the Bridge's stop sequence sends. `abort` settles an in-flight run
+        // pi-shaped RPCs the Bridge's stop sequence sends. `abort` settles an in-flight run
         // with aborted=true and exits (the aborted run never writes a manifest); stdin EOF then ends
         // the process like a normal settle.
         respond(rpc.id, rpc.type);

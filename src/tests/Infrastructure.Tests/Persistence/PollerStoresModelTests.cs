@@ -6,8 +6,8 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Task 04 poller stores: WorkItem / GitHubComment / GitHubReview / GitHubEvent per 02 §3–§8/§23 —
-/// spec-mandated unique constraints and indexes, jsonb sync-metadata columns, external-ID linkage
+/// Poller stores: WorkItem / GitHubComment / GitHubReview / GitHubEvent —
+/// unique constraints and indexes, jsonb sync-metadata columns, external-ID linkage
 /// without a DB FK (github_review_id on comments), tombstone columns, defaults.
 /// </summary>
 public class PollerStoresModelTests
@@ -25,7 +25,7 @@ public class PollerStoresModelTests
     private static IProperty Property(IEntityType entity, string name) =>
         entity.FindProperty(name) ?? throw new InvalidOperationException($"{name} missing on {entity.DisplayName()}");
 
-    // ---- WorkItem (02 §3) ----
+    // ---- WorkItem ----
 
     [Fact]
     public void WorkItem_TableName_AndColumns()
@@ -71,7 +71,7 @@ public class PollerStoresModelTests
         Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
     }
 
-    // ---- GitHubComment (02 §5) ----
+    // ---- GitHubComment ----
 
     [Fact]
     public void GitHubComment_TableName_AndColumns()
@@ -112,11 +112,11 @@ public class PollerStoresModelTests
         var workItemFk = entity.GetForeignKeys()
             .Single(fk => fk.PrincipalEntityType.ClrType == typeof(WorkItem));
         Assert.Equal(DeleteBehavior.Cascade, workItemFk.DeleteBehavior);
-        // github_review_id is an external ID only: no FK to github_review (02 §5)
+        // github_review_id is an external ID only: no FK to github_review
         Assert.DoesNotContain(entity.GetForeignKeys(), fk => fk.PrincipalEntityType.ClrType == typeof(GitHubReview));
     }
 
-    // ---- GitHubReview (02 §6) ----
+    // ---- GitHubReview ----
 
     [Fact]
     public void GitHubReview_TableName_UniqueExternalId_FkCascade()
@@ -133,7 +133,7 @@ public class PollerStoresModelTests
         Assert.True(Property(entity, nameof(GitHubReview.SubmittedAtGithub)).IsNullable);
     }
 
-    // ---- GitHubEvent (02 §7) ----
+    // ---- GitHubEvent ----
 
     [Fact]
     public void GitHubEvent_TableName_AndColumns()
@@ -160,7 +160,7 @@ public class PollerStoresModelTests
     {
         using var dbContext = NewDbContext();
         var entity = Entity(dbContext, typeof(GitHubEvent));
-        // (source, dedupe_key) unique "where applicable" (02 §23) — PostgreSQL NULLs are distinct,
+        // (source, dedupe_key) unique "where applicable" — PostgreSQL NULLs are distinct,
         // so a plain unique index admits unkeyed events without a partial filter.
         Assert.Contains(entity.GetIndexes(), i => i.IsUnique
             && i.Properties.Select(p => p.Name).SequenceEqual([nameof(GitHubEvent.Source), nameof(GitHubEvent.DedupeKey)]));
@@ -182,7 +182,7 @@ public class PollerStoresModelTests
         Assert.Equal(DeleteBehavior.Cascade, repositoryFk.DeleteBehavior);
     }
 
-    // ---- WorkItemLink (02 §4, task 05 — typed role columns per D1) ----
+    // ---- WorkItemLink (typed role columns) ----
 
     [Fact]
     public void WorkItemLink_TableName_Columns_UniqueIndex()
@@ -197,7 +197,7 @@ public class PollerStoresModelTests
                      nameof(WorkItemLink.Source), nameof(WorkItemLink.CreatedAt) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");
 
-        // unique (issue, pr, relation) — 02 §4/§23 source/target uniqueness in typed-role shape
+        // unique (issue, pr, relation) — source/target uniqueness in typed-role shape
         Assert.Contains(entity.GetIndexes(), i => i.IsUnique
             && i.Properties.Select(p => p.Name).SequenceEqual(
                 [nameof(WorkItemLink.IssueWorkItemId), nameof(WorkItemLink.PrWorkItemId), nameof(WorkItemLink.RelationType)]));
@@ -212,20 +212,20 @@ public class PollerStoresModelTests
     }
 
     [Fact]
-    public void WorkItemLink_V1Enums()
+    public void WorkItemLink_Enums()
     {
         Assert.Equal("closes", WorkItemLinkRelations.Closes);
         Assert.Equal("related_to", WorkItemLinkRelations.RelatedTo);
         Assert.Equal("github_closing_reference", WorkItemLinkSources.GithubClosingReference);
         Assert.Equal("github_cross_reference", WorkItemLinkSources.GithubCrossReference);
-        // raw GitHub timeline names (task 05, decision 79) — ticket 07 dispatches by (source, event_type)
+        // raw GitHub timeline names — dispatch is by (source, event_type)
         Assert.Equal("cross-referenced", GitHubTimelineEvents.CrossReferenced);
         Assert.Equal("closed", GitHubTimelineEvents.Closed);
         Assert.Equal("connected", GitHubTimelineEvents.Connected);
         Assert.Equal("disconnected", GitHubTimelineEvents.Disconnected);
     }
 
-    // ---- Decision-78 taxonomy constants (02 §7) ----
+    // ---- Event-type taxonomy constants ----
 
     [Fact]
     public void EventTypes_MatchNormalizedNaming()

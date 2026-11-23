@@ -14,7 +14,7 @@ RUN P=$( [ "$SERVICE" = "Migrator" ] && echo "Migrator/PiAgent.Migrator.csproj" 
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 ARG SERVICE
-# curl is used by compose healthchecks (/healthz per §13).
+# curl is used by compose healthchecks (/healthz).
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .

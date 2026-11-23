@@ -9,7 +9,7 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// Orchestration-core metadata per 02 §9/§10/§10a/§13/§14/§15/§19/§23 (task 07): one long-lived
+/// Orchestration-core metadata: one long-lived
 /// Workflow per WorkItem, the one-unfinished-Task-per-Workflow partial unique index, 1:1 Run↔AgentSession
 /// (run_id unique), attempt uniqueness, Queue FIFO index, ContainerInstance desired/observed state
 /// columns, and the TaskArtifactInput join (unique task/artifact pair).
@@ -35,7 +35,7 @@ public class OrchestratorCoreModelTests
     private static IForeignKey Fk(IEntityType entity, Type principal) =>
         entity.GetForeignKeys().Single(fk => fk.PrincipalEntityType.ClrType == principal);
 
-    // ---- Workflow (02 §9) ----
+    // ---- Workflow ----
 
     [Fact]
     public void Workflow_TableName_AndRequiredColumns()
@@ -59,11 +59,11 @@ public class OrchestratorCoreModelTests
     {
         using var dbContext = NewDbContext();
         var entity = Entity(dbContext, typeof(Workflow));
-        Assert.True(Index(entity, nameof(Workflow.WorkItemId)).IsUnique); // one long-lived workflow per WorkItem (02 §9)
+        Assert.True(Index(entity, nameof(Workflow.WorkItemId)).IsUnique); // one long-lived workflow per WorkItem
         Assert.False(Index(entity, nameof(Workflow.Status), nameof(Workflow.UpdatedAt)).IsUnique);
     }
 
-    // ---- OrchestrationTask (02 §10) ----
+    // ---- OrchestrationTask ----
 
     [Fact]
     public void OrchestrationTask_TableName_AndColumns()
@@ -142,7 +142,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal(DeleteBehavior.Restrict, Fk(entity, typeof(AgentCommand)).DeleteBehavior);
     }
 
-    // ---- Run (02 §14) ----
+    // ---- Run ----
 
     [Fact]
     public void Run_TableName_AndUniqueTaskAttempt()
@@ -152,7 +152,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal("run", entity.GetTableName());
 
         var properties = entity.GetProperties().ToDictionary(p => p.Name);
-        Assert.Equal(18, properties.Count); // ticket 14: +stop_requested_at, +stop_reason
+        Assert.Equal(18, properties.Count); // +stop_requested_at, +stop_reason
         foreach (var required in new[] { nameof(Run.Id), nameof(Run.TaskId),
                      nameof(Run.AttemptNumber), nameof(Run.Status) })
             Assert.False(properties[required].IsNullable, $"{required} must be required");
@@ -170,11 +170,11 @@ public class OrchestratorCoreModelTests
     [Fact]
     public void RunStatuses_IncludeStoppingAndTimedOut()
     {
-        Assert.Equal("stopping", RunStatuses.Stopping); // decision 75 cap / awaiting confirmed stop (ticket 14)
+        Assert.Equal("stopping", RunStatuses.Stopping); // awaiting confirmed stop
         Assert.Equal("timed_out", RunStatuses.TimedOut);
     }
 
-    // ---- AgentSession (02 §13, decision 57) ----
+    // ---- AgentSession ----
 
     [Fact]
     public void AgentSession_RunIdUnique_AndFks()
@@ -193,7 +193,7 @@ public class OrchestratorCoreModelTests
             Property(entity, nameof(AgentSession.StorageStatus)).GetDefaultValue());
     }
 
-    // ---- OrchestrationJob (02 §19) ----
+    // ---- OrchestrationJob ----
 
     [Fact]
     public void OrchestrationJob_QueueIndex()
@@ -207,7 +207,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal(DeleteBehavior.Cascade, Fk(entity, typeof(OrchestrationTask)).DeleteBehavior);
     }
 
-    // ---- ContainerInstance (02 §15) ----
+    // ---- ContainerInstance ----
 
     [Fact]
     public void ContainerInstance_StatesAndFks()
@@ -232,7 +232,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal(DeleteBehavior.Cascade, Fk(entity, typeof(Run)).DeleteBehavior);
     }
 
-    // ---- TaskArtifactInput (02 §10a) ----
+    // ---- TaskArtifactInput ----
 
     [Fact]
     public void TaskArtifactInput_UniqueTaskArtifact()
@@ -246,7 +246,7 @@ public class OrchestratorCoreModelTests
         Assert.Equal(DeleteBehavior.Restrict, Fk(entity, typeof(Artifact)).DeleteBehavior);
     }
 
-    // ---- Artifact (02 §17) ----
+    // ---- Artifact ----
 
     [Fact]
     public void Artifact_TableName_AndFks()
@@ -268,7 +268,7 @@ public class OrchestratorCoreModelTests
     }
 
     [Fact]
-    public void ArtifactFormats_AreTheThreeSupportedV1Formats()
+    public void ArtifactFormats_AreTheThreeSupportedFormats()
     {
         Assert.Equal("markdown", ArtifactFormats.Markdown);
         Assert.Equal("json", ArtifactFormats.Json);

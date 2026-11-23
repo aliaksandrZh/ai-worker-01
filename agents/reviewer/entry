@@ -1,11 +1,11 @@
 #!/bin/sh
-# Reviewer agent entry (ticket 19). Its OWN clone path — it shares no code with the planner or coder.
+# Reviewer agent entry. Its OWN clone path — it shares no code with the planner or coder.
 # Provisions a fresh read-only review checkout at the PINNED revisions, then execs the Runtime Bridge.
 #   GIT_CLONE_REPO       owner/name of the base repository (not secret, from the Runtime API)
 #   REVIEW_HEAD_SHA      pinned PR Head SHA (Task.target_head_sha)
 #   REVIEW_BASE_SHA      pinned PR Base SHA (Task.target_base_sha) — the diff is formed locally: base..head
 #   REVIEW_PR_NUMBER     the pull request number (fork heads are fetched from the base repository's PR ref)
-# The token lives ONLY in the host-managed file at /run/secrets/<name> (decision 54), never in env/git config.
+# The token lives ONLY in the host-managed file at /run/secrets/<name>, never in env/git config.
 # Fork code is untrusted: nothing from the checkout is executed here (no install/build/test hooks).
 set -eu
 
@@ -15,13 +15,13 @@ if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
 fi
 
 fail_source() {
-  # review_source_unavailable (decision 74): the pinned head cannot be resolved/fetched
+  # review_source_unavailable: the pinned head cannot be resolved/fetched
   echo "agent-entry: review_source_unavailable: $1" >&2
   exit 75
 }
 
 if [ -n "${GIT_CLONE_REPO:-}" ]; then
-  # Fresh workspace only: a reviewer never reuses a coder workspace (decision 16).
+  # Fresh workspace only: a reviewer never reuses a coder workspace.
   if [ -n "$(ls -A /workspace 2>/dev/null)" ]; then
     echo "agent-entry: /workspace not empty — refusing to reuse a workspace for a review" >&2
     exit 70
@@ -54,14 +54,14 @@ if [ -n "${GIT_CLONE_REPO:-}" ]; then
     || fail_source "pinned base ${REVIEW_BASE_SHA} is not present after fetch"
   git -C /workspace -c advice.detachedHead=false checkout --quiet --detach "${REVIEW_HEAD_SHA}"
 
-  # The diff is formed locally from the two pinned revisions — never via the GitHub files endpoint (decision 64).
+  # The diff is formed locally from the two pinned revisions — never via the GitHub files endpoint.
   # Formed BEFORE the tree is made read-only, so the artifact can be written.
   mkdir -p /workspace/.review
   git -C /workspace diff --no-color "${REVIEW_BASE_SHA}...${REVIEW_HEAD_SHA}" > /workspace/.review/diff.patch 2>/dev/null \
     || fail_source "cannot form diff ${REVIEW_BASE_SHA}...${REVIEW_HEAD_SHA}"
 
-  # Read-only where possible (decision 16): the review never edits the CHECKOUT. The workspace root and
-  # artifacts/ stay writable — the result manifest and the review artifact are written there (decision 42).
+  # Read-only where possible: the review never edits the CHECKOUT. The workspace root and
+  # artifacts/ stay writable — the result manifest and the review artifact are written there.
   find /workspace -mindepth 1 -maxdepth 1 ! -name '.*' -exec chmod -R a-w {} + 2>/dev/null || true
   chmod a-w /workspace/.git 2>/dev/null || true
   echo "agent-entry: checked out ${REVIEW_HEAD_SHA} (base ${REVIEW_BASE_SHA}) for ${GIT_CLONE_REPO}"

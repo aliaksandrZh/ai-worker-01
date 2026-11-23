@@ -6,16 +6,16 @@ using PiAgent.Orchestrator.Context;
 namespace PiAgent.Orchestrator.Orchestration;
 
 /// <summary>
-/// Run preparation at claim (decision 44, 03 §3/§4): creates the `pending` Run (next attempt number),
-/// the one-shot `provisioning` AgentSession (1:1, run_id unique — decision 57) and the
+/// Run preparation at claim: creates the `pending` Run (next attempt number),
+/// the one-shot `provisioning` AgentSession (1:1, run_id unique) and the
 /// `desired=running`/`observed=unknown` ContainerInstance — all inside the caller's change set. On the
-/// Task's first attempt it also creates the Workspace row (`provisioning`, 02 §16: reused by retries,
+/// Task's first attempt it also creates the Workspace row (`provisioning`: reused by retries,
 /// never assigned across Tasks).
-/// Workflow-scoped serialization (decision 60): refuses to prepare when the Workflow still has a
+/// Workflow-scoped serialization: refuses to prepare when the Workflow still has a
 /// non-terminal Run (`pending|starting|running|stopping`) — the next Run of a Workflow, of any Task
 /// type, never starts before the previous Run's terminal callback fixed its state. Returns null when
 /// the hook refuses; the claim is then released, a Run is never created for a busy Workflow.
-/// The caller assembles the Run's context FIRST (ticket 11: assembly precedes Run creation so that
+/// The caller assembles the Run's context FIRST (assembly precedes Run creation so that
 /// `context_too_large` never leaves Run rows behind) and passes it in; the dispatcher freezes it as the
 /// immutable RunContextSnapshot.
 /// </summary>
@@ -72,7 +72,7 @@ public static class RunPrepare
         db.AgentSessions.Add(session);
         db.ContainerInstances.Add(container);
 
-        // Workspace belongs to one Task (02 §16): created on the Task's first Run, reused by retries —
+        // Workspace belongs to one Task: created on the Task's first Run, reused by retries —
         // the Runtime API provisions the physical directory at /start and writes storage_reference back.
         var workspace = await db.Workspaces.SingleOrDefaultAsync(w => w.TaskId == task.Id, cancellationToken);
         if (workspace is null)

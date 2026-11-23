@@ -6,12 +6,12 @@ using Microsoft.Extensions.Options;
 namespace PiAgent.Orchestrator.Config;
 
 /// <summary>
-/// The Config Loader — a startup component of the Orchestrator (01 §2, decisions 55/66): validates the
+/// The Config Loader — a startup component of the Orchestrator: validates the
 /// YAML configuration plane, checks `github.bot_login` against the PAT identity (`GET /user`), looks up
 /// configured repositories (`GET /repos/{owner}/{repo}`), and persists Repository rows + sync cursors,
 /// AgentProfile/AgentProfileVersion rows (state `draft`) and the seeded routing rules in one transaction.
 /// Schema-invalid YAML fails before any DB work; every failure is a diagnosable startup configuration
-/// error. The loader never builds or dispatches image builds (decision 81).
+/// error. The loader never builds or dispatches image builds.
 /// </summary>
 public sealed class ConfigLoaderHostedService(
     IServiceScopeFactory scopeFactory,
@@ -46,7 +46,7 @@ public sealed class ConfigLoaderHostedService(
             var identity = await client.GetAuthenticatedLoginAsync(cancellationToken);
             if (!string.Equals(identity, parsed.System.BotLogin, StringComparison.Ordinal))
                 throw new ConfigException(
-                    $"configuration error: github.bot_login '{parsed.System.BotLogin}' does not match the PAT identity '{identity}' (GET /user, decision 66)");
+                    $"configuration error: github.bot_login '{parsed.System.BotLogin}' does not match the PAT identity '{identity}' (GET /user)");
 
             var repositoryInfos = new Dictionary<string, GitHubRepoInfo>();
             foreach (var entry in parsed.Repositories)
@@ -83,7 +83,7 @@ public sealed class ConfigLoaderHostedService(
         catch (Exception exception)
         {
             state.MarkFailed(exception.Message);
-            logger.LogError(exception, "configuration synchronization failed — startup aborted (01 §13 cold-start gate stays closed)");
+            logger.LogError(exception, "configuration synchronization failed — startup aborted (cold-start gate stays closed)");
             _processExit(1);
             throw;
         }
@@ -91,13 +91,13 @@ public sealed class ConfigLoaderHostedService(
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // The single read-only GitHub PAT (decision 65) read once per host start: the Config Loader
+    // The single read-only GitHub PAT read once per host start: the Config Loader
     // validates the bot identity with it at startup and the comment-authorization gate performs the
     // collaborator permission checks with it (task 06). Rotation = host restart with a replaced
     // secret file; failure is a diagnosable startup configuration error, token content never
-    // appears in messages (§14). Reading is the shared Platform discipline (formerly a local
+    // appears in messages. Reading is the shared Platform discipline (formerly a local
     // SyncPat copy with identical message shapes).
     private static string ReadPat(string? patFile) =>
         PiAgent.Platform.Secrets.PatFile.Read(patFile, "PI_AGENT_GITHUB_PAT_FILE",
-            "the Config Loader must verify the bot identity against GET /user (decision 66)");
+            "the Config Loader must verify the bot identity against GET /user");
 }

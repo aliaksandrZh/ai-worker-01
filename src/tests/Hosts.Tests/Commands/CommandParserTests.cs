@@ -4,7 +4,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// The command grammar (06 §1 + design doc owner decisions): mention + slash command on the first
+/// The command grammar: mention + slash command on the first
 /// non-empty line, exact case-sensitive bot login, quote/fenced/indented/inline-code directives
 /// ignored-or-flaged, exactly one directive per comment, trailing text is user context.
 /// </summary>
@@ -115,7 +115,7 @@ public class CommandParserTests
     [Fact]
     public void FencedDirectiveWithMention_Rejected()
     {
-        // the login typed inside the fence still addresses the bot (owner decision Q1)
+        // the login typed inside the fence still addresses the bot
         var rejection = ParseRejected("```\n@jsxhuz /plan\n```");
         Assert.Equal(CommandRejection.CommandInQuoteOrCodeBlock, rejection.Reason);
     }

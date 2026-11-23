@@ -6,7 +6,7 @@ using Xunit;
 namespace PiAgent.Infrastructure.Tests.Persistence;
 
 /// <summary>
-/// agent_command metadata per 02 §11/§23 (task 06): unique GitHub comment ID (the command idempotency
+/// agent_command metadata: unique GitHub comment ID (the command idempotency
 /// key), (status, created_at) query index, jsonb arguments, Restrict FK on work_item, canonical
 /// name/status literals.
 /// </summary>

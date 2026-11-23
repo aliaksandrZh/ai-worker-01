@@ -7,7 +7,7 @@ using PiAgent.Platform.Workers;
 
 namespace PiAgent.RuntimeApi;
 
-/// <summary>Refreshes the §14 "database size" metric every worker tick.</summary>
+/// <summary>Refreshes the "database size" metric every worker tick.</summary>
 public sealed class DbSizeCycle(NpgsqlDataSource dataSource, ILogger<DbSizeCycle> logger) : IWorkerCycle
 {
     public long? DbSizeBytes { get; private set; }
@@ -28,7 +28,7 @@ public sealed class DbSizeCycle(NpgsqlDataSource dataSource, ILogger<DbSizeCycle
     }
 }
 
-/// <summary>§14 baseline metrics owned by the Runtime API.</summary>
+/// <summary>Baseline metrics owned by the Runtime API.</summary>
 public sealed class RuntimeApiMetrics(WorkerLoopState state, DbSizeCycle dbSizeCycle, RunPipelineMetrics runMetrics)
     : WorkerMetricsBase(state)
 {

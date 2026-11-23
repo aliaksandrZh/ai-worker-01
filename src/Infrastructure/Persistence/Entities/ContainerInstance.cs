@@ -1,7 +1,7 @@
 namespace PiAgent.Infrastructure.Persistence;
 
-/// <summary>Orchestrator-managed desired state (03 §5): `running` at preparation, `stopped` on Task
-/// completion//`/stop`, `removed` at root closure (ticket 17).</summary>
+/// <summary>Orchestrator-managed desired state: `running` at preparation, `stopped` on Task
+/// completion//`/stop`, `removed` at root closure.</summary>
 public static class ContainerDesiredStates
 {
     public const string Running = "running";
@@ -9,8 +9,8 @@ public static class ContainerDesiredStates
     public const string Removed = "removed";
 }
 
-/// <summary>Observed states written back exclusively from Runtime API/Host-Monitor observations
-/// (03 §5; tickets 09/13) — the Orchestrator never flips these without an observation.</summary>
+/// <summary>Observed states written back exclusively from Runtime API/Host-Monitor observations —
+/// the Orchestrator never flips these without an observation.</summary>
 public static class ContainerObservedStates
 {
     public const string Unknown = "unknown";
@@ -23,7 +23,7 @@ public static class ContainerObservedStates
 }
 
 /// <summary>
-/// Tracks the desired vs observed machine of one Run's container (02 §15, 03 §5). Created
+/// Tracks the desired vs observed machine of one Run's container. Created
 /// `desired=running`/`observed=unknown` by the Orchestrator at Run preparation; observed state is only
 /// written back by the Runtime API/Host Monitor. The container is replaceable and stopped after Task
 /// completion; the stopped deployment may be recreated for a retry from the same persistent storage.
@@ -31,14 +31,14 @@ public static class ContainerObservedStates
 public class ContainerInstance
 {
     public Guid Id { get; set; }
-    /// <summary>The Run's session owns the container (02 §15/ER); session deletion cascades.</summary>
+    /// <summary>The Run's session owns the container; session deletion cascades.</summary>
     public Guid AgentSessionId { get; set; }
     /// <summary>The Run attempt this container executed; recreated per retry attempt.</summary>
     public Guid? RunId { get; set; }
-    /// <summary>Runtime metadata written back after provisioning (ticket 09; decision 82: the Docker container id).</summary>
+    /// <summary>Runtime metadata written back after provisioning (the Docker container id).</summary>
     public string? DockerContainerId { get; set; }
     public string? ContainerName { get; set; }
-    /// <summary>V1: exactly one configured execution host (decision 35); records where the container was created.</summary>
+    /// <summary>Exactly one configured execution host; records where the container was created.</summary>
     public string? HostId { get; set; }
     /// <summary>Pinned profile version's built image tag.</summary>
     public string? ContainerImage { get; set; }

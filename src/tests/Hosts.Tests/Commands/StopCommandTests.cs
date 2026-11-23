@@ -13,7 +13,7 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Commands;
 
 /// <summary>
-/// The /stop control path (ticket 14, 06 §8, decisions 29/38/61), driven through the comment-command
+/// The /stop control path, driven through the comment-command
 /// processor exactly as GitHub comments arrive: "nothing to stop" without any unfinished work (no row
 /// touched); a queued/claimed Task cancelled immediately with its Job, trigger command and
 /// never-dispatched pending Run rows; a running Run signalled over the Runtime API (POST …/stop with
@@ -32,7 +32,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
 
     private static HttpResponseMessage RuntimeUnavailable() => new(HttpStatusCode.ServiceUnavailable);
 
-    // ---- mid-claim race guards (ticket 14) ----
+    // ---- mid-claim race guards ----
 
     /// <summary>/stop cancelled a claimed Task while its claim worker was mid-flight; the claim-time
     /// cancellation must be a no-op then — in particular it must NEVER enqueue its own notice.</summary>
@@ -102,7 +102,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal(AgentCommandStatuses.Processed, command.Status);
         var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
         Assert.Contains("nothing to stop", payload, StringComparison.Ordinal);
-        // 06 §8.8: nothing is closed or deleted; a Workflow is not even created
+        // nothing is closed or deleted; a Workflow is not even created
         Assert.Empty(await db.Workflows.AsNoTracking().ToListAsync());
         Assert.Empty(await db.OrchestrationTasks.AsNoTracking().ToListAsync());
         Assert.Empty(runtime.Requests);
@@ -167,7 +167,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         var workflow = await db.Workflows.AsNoTracking().SingleAsync();
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
         Assert.Null(workflow.CurrentTaskId);
-        // exactly one Outbox notification covering the cancellation (decision 29); never the runtime API
+        // exactly one Outbox notification covering the cancellation; never the runtime API
         var notice = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
         Assert.Contains("/stop: cancellation processed.", notice, StringComparison.Ordinal);
         Assert.Contains("Queued tasks cancelled with their jobs: 1", notice, StringComparison.Ordinal);
@@ -183,7 +183,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         AuthStub200(harness.Handler);
                 var (_, version, _) = await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
         var prepared = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version);
-        // simulated claim: job processing + task claimed (decision 38: /stop cuts through the claim)
+        // simulated claim: job processing + task claimed (/stop cuts through the claim)
         await db.OrchestrationJobs.ExecuteUpdateAsync(u => u
             .SetProperty(j => j.Status, OrchestrationJobStatuses.Processing));
         await db.OrchestrationTasks.ExecuteUpdateAsync(u => u
@@ -222,10 +222,10 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         // the Runtime API received exactly one stop signal on the service route with the reason code
         var stopRequest = runtime.Requests.Single();
         Assert.EndsWith($"/internal/runtime/runs/{prepared.Run!.Id}/stop", stopRequest.RequestUri!.PathAndQuery);
-        Assert.Equal("tok-orch", stopRequest.Headers.GetValues("X-Service-Token").Single()); // decision-65 credential
+        Assert.Equal("tok-orch", stopRequest.Headers.GetValues("X-Service-Token").Single()); // service credential
         Assert.Contains("stop_requested", runtime.Bodies.Single(), StringComparison.Ordinal);
         // nothing is pre-emptively torn down: the terminal consumer cancels Task/Workflow AFTER
-        // runtime confirmation (06 §8: "after runtime confirmation or reconciliation")
+        // runtime confirmation ("after runtime confirmation or reconciliation")
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id);
         Assert.Equal(OrchestrationTaskStatuses.Running, task.Status);
         var run = await db.Runs.AsNoTracking().SingleAsync(r => r.Id == prepared.Run.Id);
