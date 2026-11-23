@@ -13,7 +13,7 @@ namespace PiAgent.RuntimeApi.Api;
 /// The four callback routes: every delivery is persisted as a RunEvent (unique `(run_id, event_id)`)
 /// <em>before</em> acknowledgement; duplicates are idempotent no-ops. Terminal routes set the Run's terminal
 /// state, record the log trio facts + a `log_reference` Artifact, revoke the per-Run credential, stop the
-/// container, and release the workspace; `completed` also creates the validated manifest's Artifact rows
+/// container, and release the workspace; `completed` also creates the Bridge-collected artifacts' Artifact rows
 /// (+ an `artifact_produced` event per artifact). Validation failures persist nothing (the Bridge answers
 /// them by posting the terminal `failed` callback with the diagnostics — no silent truncation).
 /// </summary>
@@ -24,7 +24,7 @@ public static class CallbackHandler
     internal static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web);
 
     private const long MaxArtifactBytes = 256 * 1024; // max_artifact_size, hard limit
-    private static readonly string[] ManifestArtifactTypes =
+    private static readonly string[] AllowedArtifactTypes =
         [ArtifactTypes.Plan, ArtifactTypes.TestCases, ArtifactTypes.ReviewReport, ArtifactTypes.ImplementationSummary];
 
     public static async Task<IResult> HeartbeatAsync(Guid runId, HeartbeatRequest request, AppDbContext db, CancellationToken cancellationToken)
@@ -239,8 +239,10 @@ public static class CallbackHandler
         return Results.Json(new { persisted = true });
     }
 
-    /// <summary>completed: validate the manifest, create Artifact rows + `artifact_produced` events.
-    /// Called inside the outer transaction; returns an error result to reject without persistence.</summary>
+    /// <summary>completed: validate the Bridge-collected result, create Artifact rows + `artifact_produced`
+    /// events. Called inside the outer transaction; returns an error result to reject without persistence.
+    /// The publication verification lives in the Bridge's toolcheck (the observed event stream) — the API
+    /// never re-judges publications, only the artifacts it is about to persist.</summary>
     private static async Task<IResult?> ValidateAndApplyCompletedAsync(
         Run run, CompletedRequest request, AppDbContext db, RuntimeStorageService storage, CancellationToken cancellationToken)
     {
@@ -259,37 +261,37 @@ public static class CallbackHandler
         var workspaceHostPath = storage.WorkspacePath(workflow.Id, task.Id);
 
         var artifacts = new List<Artifact>();
-        foreach (var manifestArtifact in request.Result.Artifacts)
+        foreach (var artifactEntry in request.Result.Artifacts)
         {
-            if (manifestArtifact.Type is null || manifestArtifact.Format is null || manifestArtifact.Path is null)
+            if (artifactEntry.Type is null || artifactEntry.Format is null || artifactEntry.Path is null)
                 return RunPipelineApi.Error(400, "validation", "result.artifacts[] entries need type/format/path");
-            if (!ManifestArtifactTypes.Contains(manifestArtifact.Type)) // log_reference is Runtime-API generated
-                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact type '{manifestArtifact.Type}' is not a valid manifest artifact type");
+            if (!AllowedArtifactTypes.Contains(artifactEntry.Type)) // log_reference is Runtime-API generated
+                return RunPipelineApi.Error(400, "validation", $"artifact type '{artifactEntry.Type}' is not a valid artifact type");
 
             // in-place validation: inside the workspace, present, ≤256 KiB — no silent truncation
-            var absolute = Path.GetFullPath(Path.Combine(workspaceHostPath, manifestArtifact.Path));
+            var absolute = Path.GetFullPath(Path.Combine(workspaceHostPath, artifactEntry.Path));
             if (Path.GetRelativePath(workspaceHostPath, absolute).StartsWith("..", StringComparison.Ordinal))
-                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact path '{manifestArtifact.Path}' escapes the workspace");
+                return RunPipelineApi.Error(400, "validation", $"artifact path '{artifactEntry.Path}' escapes the workspace");
             if (!File.Exists(absolute))
-                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact file '{manifestArtifact.Path}' does not exist in the workspace");
+                return RunPipelineApi.Error(400, "validation", $"artifact file '{artifactEntry.Path}' does not exist in the workspace");
             var bytes = File.ReadAllBytes(absolute);
             if (bytes.Length > MaxArtifactBytes)
                 return RunPipelineApi.Error(422, "artifact_too_large",
-                    $"artifact '{manifestArtifact.Path}' is {bytes.Length} bytes; the limit is {MaxArtifactBytes}");
-            if (ArtifactFormats.Markdown != manifestArtifact.Format && ArtifactFormats.Json != manifestArtifact.Format && ArtifactFormats.Text != manifestArtifact.Format)
-                return RunPipelineApi.Error(422, "manifest_invalid", $"artifact format '{manifestArtifact.Format}' is not supported");
+                    $"artifact '{artifactEntry.Path}' is {bytes.Length} bytes; the limit is {MaxArtifactBytes}");
+            if (ArtifactFormats.Markdown != artifactEntry.Format && ArtifactFormats.Json != artifactEntry.Format && ArtifactFormats.Text != artifactEntry.Format)
+                return RunPipelineApi.Error(400, "validation", $"artifact format '{artifactEntry.Format}' is not supported");
 
             artifacts.Add(new Artifact
             {
                 Id = Guid.NewGuid(),
                 TaskId = task.Id,
                 WorkflowId = workflow.Id,
-                Type = manifestArtifact.Type,
-                Format = manifestArtifact.Format,
+                Type = artifactEntry.Type,
+                Format = artifactEntry.Format,
                 Content = Encoding.UTF8.GetString(bytes),
                 Metadata = JsonSerializer.Serialize(new
                 {
-                    path = manifestArtifact.Path,
+                    path = artifactEntry.Path,
                     runId = run.Id,
                     bytes = bytes.Length,
                     branch = request.Result.Branch,

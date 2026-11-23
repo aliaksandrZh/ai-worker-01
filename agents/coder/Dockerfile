@@ -60,14 +60,15 @@ COPY git-credential-pat-file /usr/local/bin/git-credential-pat-file
 
 ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
 # Agent launch: real pi in RPC mode; the Bridge appends --session-dir/--session-id per Run.
-# PI_REQUIRED_PUBLICATION_KINDS pins the publication mandate in the image: the run cannot finish
-# `completed` without BOTH confirmed (error-free) publications — the pull request and the issue
-# summary comment.
-# PI_REQUIRED_PUBLICATION_KINDS / the token-file path pointer are non-secret configuration paths
-# only — the token VALUE stays in the host-managed secret file.
+# PI_REQUIRED_PUBLICATION_KINDS pins the publication mandate in the image: the Bridge's toolcheck
+# verifies BOTH against the observed tool executions (nudging a missing one) — the pull request and
+# the issue summary comment. PI_PUBLICATION_NUDGES caps those follow-up prompts.
+# PI_REQUIRED_PUBLICATION_KINDS / PI_PUBLICATION_NUDGES / the token-file path pointer are
+# non-secret configuration only — the token VALUE stays in the host-managed secret file.
 ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=issue_comment,pull_request \
+    PI_PUBLICATION_NUDGES=2 \
     GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
 
 RUN chmod +x /usr/local/bin/agent-entry /usr/local/bin/github-mcp-server /usr/local/bin/git-credential-pat-file \

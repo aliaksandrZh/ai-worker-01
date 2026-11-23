@@ -220,9 +220,9 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         await db.Runs.Where(r => r.Id == run.Id).ExecuteUpdateAsync(set =>
         {
             set.SetProperty(r => r.Status, RunStatuses.Failed);
-            set.SetProperty(r => r.ErrorCode, "manifest_invalid");
+            set.SetProperty(r => r.ErrorCode, "publication_missing");
         });
-        // realistic detail: manifest_invalid comes from the completion validation — the agent ran
+        // realistic detail: publication_missing comes from the Bridge's publication toolcheck — the agent ran
         db.RunEvents.Add(new RunEvent
         {
             Id = Guid.NewGuid(), RunId = run.Id, EventId = "evt-started",
@@ -238,7 +238,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
         Assert.Contains("Task failed: /plan", text, StringComparison.Ordinal);
-        Assert.Contains("manifest_invalid", text, StringComparison.Ordinal);
+        Assert.Contains("publication_missing", text, StringComparison.Ordinal);
         Assert.Contains("| Stage: Execution", text, StringComparison.Ordinal); // post-execution
         Assert.Contains("The Workflow is waiting for human input", text, StringComparison.Ordinal);
         Assert.Contains("(or use /retry)", text, StringComparison.Ordinal);

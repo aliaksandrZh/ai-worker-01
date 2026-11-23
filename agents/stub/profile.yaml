@@ -18,11 +18,11 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/runtime-bridge/bridge.json); 1.2.0 = permission_blocked recording + required_permission_denied verification
+  version: "1.3.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.3.0 = publication toolcheck (no result manifest)
   heartbeat_interval: 15s
   event_cadence: 5s
-  behavior: succeed   # stub-only scenario lever: succeed | fail | needs_human | hang | never_start | permission_denied
+  behavior: succeed   # stub-only scenario lever: succeed | fail | hang | never_start | permission_denied
 system_prompt: |
-  Stub agent: emits the mapped pi event set, writes the result manifest, and settles.
+  Stub agent: emits the mapped pi event set, writes the artifacts/ convention files, and settles.
 secrets: []
 capabilities: []

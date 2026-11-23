@@ -2,8 +2,9 @@
 /**
  * Stub agent CLI: the pi-RPC-shaped fake headless agent (protocol shape).
  * Reads JSON objects on stdin (one per line), answers one `prompt` with the event set on stdout,
- * writes a session `.jsonl` (history) plus `result.json` + the manifest's artifact files into the
- * workspace, then exits. Behavior (env STUB_BEHAVIOR): succeed (default) | fail | needs_human | hang
+ * writes a session `.jsonl` (history) plus the artifact files into the workspace (the artifacts/
+ * directory convention the Bridge collects), then exits. Behavior (env STUB_BEHAVIOR):
+ * succeed (default) | fail | hang
  * | never_start (accepts the prompt, then never emits anything — startup_timeout) |
  * permission_denied (the run's mandatory publication tool call is denied by the
  * unattended permission policy — the fail-closed path).
@@ -43,8 +44,9 @@ function respond(id, command, data) {
   process.stdout.write(JSON.stringify(record) + "\n");
 }
 
-function settleWithManifest(outcome = "completed") {
-  // agent-local git so the Bridge can genuinely derive branch/commitSha via Git
+function settleWork() {
+  // agent-local git so the Bridge can genuinely derive branch/commitSha via Git; the artifacts/
+  // directory is the convention the Bridge collects after the publication toolcheck
   if (!existsSync(join(workspace, ".git"))) {
     execFileSync("git", ["init", "-b", "agent/pipe-stub"], { cwd: workspace, stdio: "ignore" });
   }
@@ -55,17 +57,6 @@ function settleWithManifest(outcome = "completed") {
   execFileSync("git", ["add", "."], { cwd: workspace, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Stub Agent", "-c", "user.email=stub@invalid",
     "commit", "-m", "stub agent work"], { cwd: workspace, stdio: "ignore" });
-  writeFileSync(join(workspace, "result.json"), JSON.stringify({
-    schemaVersion: 1,
-    summary: "Stub pipeline result: the agent completed the run.",
-    ...(outcome === "needs_human_input" ? { outcome } : {}),
-    artifacts: [
-      { type: "implementation_summary", format: "markdown", path: "artifacts/summary.md" },
-    ],
-    requiredPublications: [
-      { toolCallId: "call-1", kind: "issue_comment", externalId: "stub-pub-1" },
-    ],
-  }, null, 2) + "\n");
 }
 
 function answerPrompt() {
@@ -90,14 +81,14 @@ function answerPrompt() {
   if (behavior === "permission_denied") {
     // the permission_denied lever: the mandatory publication tool call is denied by the
     // permission policy — the agent answers the denial itself (no dialog), the Bridge records the
-    // `permission_blocked` RunEvent and verifies the required publication in the manifest
+    // `permission_blocked` RunEvent and the publication toolcheck fails the mandated kind
     const deniedToolCallId = "call-1";
     emit({ id: "e3", type: "message_update", data: { delta: "Trying to publish (stub)." } });
     emit({ id: "e4", type: "tool_execution_start", data: { toolCallId: deniedToolCallId, toolName: "stub_publish" } });
     emit({ id: "e5", type: "permission_denied", data: { toolCallId: deniedToolCallId, toolName: "stub_publish", reason: "not on the profile's permission allow-list" } });
     emit({ id: "e6", type: "tool_execution_end", data: { toolCallId: deniedToolCallId, status: "denied" } });
     emit({ id: "e7", type: "turn_end" });
-    settleWithManifest("completed");
+    settleWork();
     emit({ id: "e8", type: "agent_settled", data: { sessionId } });
     setTimeout(() => process.exit(0), 200);
     return;
@@ -112,7 +103,7 @@ function answerPrompt() {
   emit({ id: "e5", type: "tool_execution_update", data: { toolCallId, step: "writing artifacts" } });
   emit({ id: "e6", type: "tool_execution_end", data: { toolCallId, status: "completed" } });
   emit({ id: "e7", type: "turn_end" });
-  settleWithManifest(behavior === "needs_human" ? "needs_human_input" : "completed");
+  settleWork();
   emit({ id: "e8", type: "agent_settled", data: { sessionId } });
   // one-shot sessions: after settling the agent is done with this run — exit regardless
   // of stdin state (the Bridge closes stdin after settle either way)
@@ -152,7 +143,7 @@ process.stdin.on("data", (chunk) => {
         break;
       default:
         // pi-shaped RPCs the Bridge's stop sequence sends. `abort` settles an in-flight run
-        // with aborted=true and exits (the aborted run never writes a manifest); stdin EOF then ends
+        // with aborted=true and exits (the aborted run writes no artifacts); stdin EOF then ends
         // the process like a normal settle.
         respond(rpc.id, rpc.type);
         if (rpc.type === "abort" && runInFlight) {

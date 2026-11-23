@@ -17,7 +17,7 @@ import { openSpool } from "./spool.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
-import { loadManifest, validateManifest, terminalFromManifest, gitFacts, renderPrompt } from "./manifest.mjs";
+import { checkPublications, nudgePrompt, collectArtifacts, completedTerminal, gitFacts, renderPrompt } from "./toolcheck.mjs";
 
 // The stub CLI lives in the stub profile (only agent that bakes it); cross-reference kept explicit.
 const AGENT = fileURLToPath(new URL("../../stub/stub-agent/pi-stub.mjs", import.meta.url));
@@ -164,166 +164,75 @@ test("promptDisposition: only 'started' begins a run", () => {
   assert.equal(promptDisposition({}), undefined);
 });
 
-// ---- manifest validation + terminal shape ----
+// ---- publication toolcheck + terminal shape ----
 
-test("validateManifest accepts a valid in-workspace manifest", () => {
+test("checkPublications confirms mandated kinds from observed tool names", () => {
+  assert.equal(checkPublications(["issue_comment"], new Set(["add_issue_comment"])).ok, true);
+  const missing = checkPublications(["issue_comment", "pull_request"], new Set(["add_issue_comment"]));
+  assert.deepEqual(missing, { ok: false, missing: ["pull_request"], denied: [] });
+  // a kind with no mapped tool can never be confirmed — it fails diagnosably, not silently
+  const unknown = checkPublications(["mystery"], new Set(["add_issue_comment"]));
+  assert.deepEqual(unknown, { ok: false, missing: ["mystery"], denied: [] });
+});
+
+test("checkPublications: a mandated kind denied by the permission policy fails required_permission_denied", () => {
+  const denied = checkPublications(["issue_comment"], new Set(), new Set(["add_issue_comment"]));
+  assert.deepEqual(denied, { ok: false, missing: [], denied: ["issue_comment"] });
+  // a denial of a tool no mandate needs does not affect the run
+  assert.equal(checkPublications([], new Set(), new Set(["add_issue_comment"])).ok, true);
+});
+
+test("nudgePrompt names the missing kinds and the no-duplicate rule", () => {
+  const message = nudgePrompt(["issue_comment", "pull_request"]);
+  assert.match(message, /issue_comment, pull_request/);
+  assert.match(message, /never duplicate/);
+});
+
+test("collectArtifacts maps the artifacts/ directory by convention (no agent-side JSON)", () => {
   const workspace = tempDir("ws-");
   mkdirSync(join(workspace, "artifacts"), { recursive: true });
-  writeFileSync(join(workspace, "artifacts", "summary.md"), "x".repeat(100));
-  const manifest = {
-    schemaVersion: 1,
-    summary: "done",
-    artifacts: [{ type: "implementation_summary", format: "markdown", path: "artifacts/summary.md" }],
-    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "p1" }],
-  };
-  assert.equal(validateManifest(manifest, workspace, new Set(["call-1"])), null);
+  writeFileSync(join(workspace, "artifacts", "plan.md"), "THE PLAN");
+  writeFileSync(join(workspace, "artifacts", "summary.json"), "{}");
+  writeFileSync(join(workspace, "artifacts", "notes.txt"), "n");
+  const { artifacts, error } = collectArtifacts(workspace);
+  assert.equal(error, null);
+  assert.deepEqual(artifacts, [
+    { type: "custom", format: "text", path: "artifacts/notes.txt" },
+    { type: "plan", format: "markdown", path: "artifacts/plan.md" },
+    { type: "custom", format: "json", path: "artifacts/summary.json" },
+  ]);
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("validateManifest rejects oversize artifacts without truncation", () => {
+test("collectArtifacts: no directory → no artifacts; oversize file fails without truncation", () => {
+  const empty = tempDir("ws-empty-");
+  assert.deepEqual(collectArtifacts(empty), { artifacts: [], error: null });
+  rmSync(empty, { recursive: true, force: true });
+
   const workspace = tempDir("ws-");
   mkdirSync(join(workspace, "artifacts"), { recursive: true });
   writeFileSync(join(workspace, "artifacts", "big.md"), "x".repeat(256 * 1024 + 1));
-  const manifest = {
-    schemaVersion: 1, summary: "done",
-    artifacts: [{ type: "implementation_summary", format: "markdown", path: "artifacts/big.md" }],
-  };
-  const reason = validateManifest(manifest, workspace, new Set());
-  assert.match(reason, /artifact_too_large/);
+  const { error } = collectArtifacts(workspace);
+  assert.equal(error.code, "artifact_too_large");
   assert.ok(statSync(join(workspace, "artifacts", "big.md")).size > 256 * 1024); // file intact
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("validateManifest rejects paths escaping the workspace", () => {
-  const workspace = tempDir("ws-");
-  const outside = join(tempDir("out-"), "secret.md");
-  writeFileSync(outside, "secret");
-  const manifest = {
-    schemaVersion: 1, summary: "done",
-    artifacts: [{ type: "implementation_summary", format: "markdown", path: outside }],
-  };
-  assert.match(validateManifest(manifest, workspace, new Set()) ?? "", /escapes the workspace/);
-  rmSync(workspace, { recursive: true, force: true });
-  rmSync(outside, { force: true });
-});
-
-test("validateManifest enforces publication correlation", () => {
-  const workspace = tempDir("ws-");
-  const manifest = {
-    schemaVersion: 1, summary: "done", artifacts: [],
-    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "p1" }],
-  };
-  assert.match(validateManifest(manifest, workspace, new Set()) ?? "", /github_publication_failed/);
-  assert.equal(validateManifest(manifest, workspace, new Set(["call-1"])), null);
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("validateManifest enforces the mandated publication kinds", () => {
-  const workspace = tempDir("ws-");
-  // a manifest that lists no publication at all still fails when the kind is mandated — an agent
-  // that never attempted its mandatory publication cannot "succeed" unverified
-  const noPublication = { schemaVersion: 1, summary: "done", artifacts: [] };
-  assert.match(
-    validateManifest(noPublication, workspace, new Set(["call-1"]), ["issue_comment"]) ?? "",
-    /github_publication_failed: required publication kind 'issue_comment' has no confirmed successful tool execution/);
-  // a listed but unconfirmed publication also fails the mandate (error ends never correlate)
-  const unconfirmed = { schemaVersion: 1, summary: "done", artifacts: [],
-    requiredPublications: [{ toolCallId: "call-err", kind: "issue_comment", externalId: "p1" }] };
-  assert.match(validateManifest(unconfirmed, workspace, new Set(), ["issue_comment"]) ?? "", /github_publication_failed/);
-  // confirmed mandate passes
-  const confirmed = { schemaVersion: 1, summary: "done", artifacts: [],
-    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "42" }] };
-  assert.equal(validateManifest(confirmed, workspace, new Set(["call-1"]), ["issue_comment"]), null);
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("terminalFromManifest carries the Bridge-discovered session file path", () => {
-  process.env.PI_WORKSPACE = tempDir("ws-nogit-");
-  const terminal = terminalFromManifest({ schemaVersion: 1, summary: "s", artifacts: [] }, "run-9",
-    "/session/2026-11-21T15-31-18-187Z_run-9.jsonl");
-  assert.equal(terminal.body.sessionFilePath, "/session/2026-11-21T15-31-18-187Z_run-9.jsonl");
-  delete process.env.PI_WORKSPACE;
-});
-
-test("terminalFromManifest carries outcome + git facts", () => {
+test("completedTerminal carries summary, artifacts, session path and git facts", () => {
   const workspace = tempDir("ws-");
   execFileSync("git", ["init", "-q", "-b", "agent/pipe-stub", workspace]);
   execFileSync("git", ["-C", workspace, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-q", "-m", "k"]);
-  process.env.PI_WORKSPACE = workspace;
-  const terminal = terminalFromManifest({
-    schemaVersion: 1, summary: "s", outcome: "needs_human_input", artifacts: [],
-  }, "run-1");
+  const terminal = completedTerminal("run-1", "/session/run-1.jsonl", "s",
+    [{ type: "plan", format: "markdown", path: "artifacts/plan.md" }], gitFacts(workspace));
   assert.equal(terminal.route, "completed");
-  assert.equal(terminal.body.outcome, "needs_human_input");
   assert.equal(terminal.id, "evt-run-1-terminal");
   assert.equal(terminal.body.eventId, "evt-run-1-terminal");
+  assert.equal(terminal.body.sessionFilePath, "/session/run-1.jsonl");
+  assert.equal(terminal.body.result.summary, "s");
+  assert.deepEqual(terminal.body.result.artifacts, [{ type: "plan", format: "markdown", path: "artifacts/plan.md" }]);
   assert.equal(terminal.body.result.branch, "agent/pipe-stub");
   assert.match(terminal.body.result.commitSha, /^[0-9a-f]{40}$/);
-  delete process.env.PI_WORKSPACE;
   rmSync(workspace, { recursive: true, force: true });
-});
-
-test("gitFacts return nulls when there is no repository", () => {
-  const workspace = tempDir("ws-plain");
-  const facts = gitFacts(workspace);
-  assert.equal(facts.branch, null);
-  assert.equal(facts.commitSha, null);
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("renderPrompt renders the context package sections", () => {
-  const prompt = renderPrompt({
-    schemaVersion: 2,
-    profile: { name: "planner", version: 4 },
-    task: { type: "plan", targetHeadSha: null, targetBaseSha: null },
-    repository: { fullName: "o/r", defaultBranch: "main" },
-    workItem: { repository: "o/r", number: 15, type: "issue", title: "T", body: "Issue body.", state: "open", author: "alice", labels: ["bug"] },
-    instructions: "You are the planner agent.",
-    command: "plan",
-    commandComment: { author: "bob", githubCommentId: 42, createdAt: "2026-11-21T10:00:00Z", text: "@bot /plan with trailing user context" },
-    conversation: [
-      { githubCommentId: 43, kind: "issue_comment", author: "bob", createdAt: "2026-11-21T11:00:00Z", body: "one line answer" },
-      { githubCommentId: 44, kind: "issue_comment", author: "carol", createdAt: "2026-11-21T12:00:00Z", body: "multi\nline\nbody" },
-    ],
-    artifacts: [{ id: "a1", taskSequence: 1, type: "plan", purpose: "approved_plan", format: "markdown", createdAt: "", content: "THE PLAN" },
-      { id: "a2", taskSequence: 2, type: "log_reference", format: "text", createdAt: "", content: null, reference: "/var/lib/pi-agent/workflows/x/runs/y/logs" }],
-  });
-
-  assert.match(prompt, /^# Task/);
-  assert.match(prompt, /## Instructions\nYou are the planner agent\./);
-  assert.match(prompt, /## User command/);
-  assert.match(prompt, /```text\n@bot \/plan with trailing user context\n```/);
-  assert.match(prompt, /## Input artifacts/);
-  assert.match(prompt, /Artifact plan — purpose: approved_plan/);
-  assert.match(prompt, /THE PLAN/);
-  assert.match(prompt, /Artifact log_reference.*\[reference: \/var\/lib\/pi-agent\/workflows\/x\/runs\/y\/logs\]/);
-  assert.match(prompt, /## Conversation \(chronological\)/);
-  assert.match(prompt, /bob at 2026-11-21T11:00:00Z \(comment 43\): one line answer/);
-  assert.match(prompt, /carol at .*: multi line body/); // multi-line bodies collapse to one line
-  assert.doesNotMatch(prompt, /artifactReferences/); // superseded by artifacts
-});
-
-test("renderPrompt renders reviewer context sections and skips absent ones", () => {
-  const prompt = renderPrompt({
-    task: { type: "review", targetHeadSha: "head-sha", targetBaseSha: "base-sha" },
-    repository: { fullName: "o/r", defaultBranch: "main" },
-    workItem: { repository: "o/r", number: 7, type: "pull_request", title: "PR", body: "", state: "open", author: "alice", labels: [] },
-    instructions: "review", command: "review",
-    reviews: [{ githubReviewId: 9, author: "dave", state: "changes_requested", body: "Please fix X", submittedAt: "2026-11-21T09:00:00Z", commitSha: null }],
-    threads: [{ githubCommentId: 50, resolved: null, state: "changes_requested", path: "src/a.ts", line: 12,
-      comments: [{ githubCommentId: 50, author: "dave", createdAt: "", body: "This looks wrong" }] }],
-  });
-  assert.match(prompt, /Target head SHA: head-sha/);
-  assert.match(prompt, /Target base SHA: base-sha/);
-  assert.match(prompt, /Task type: review/);
-  assert.match(prompt, /## Submitted reviews \(newest first\)/);
-  assert.match(prompt, /dave at 2026-11-21T09:00:00Z — state: changes_requested/);
-  assert.match(prompt, /Thread 50 \(at src\/a\.ts:12\).*review state: changes_requested/);
-  assert.match(prompt, /resolution unknown/);
-  assert.match(prompt, /dave at .*: This looks wrong/);
-  // sections that were not assembled never render
-  assert.doesNotMatch(prompt, /Conversation/);
-  assert.doesNotMatch(prompt, /git facts/);
 });
 
 // ---- spool: durable append, coalescing, redelivery ----
@@ -420,10 +329,8 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
   assert.equal(accepted.command, "prompt");
   assert.equal(accepted.success, true);
   assert.deepEqual(accepted.data, { disposition: "started" });
-  assert.ok(existsSync(join(workspace, "result.json")));
-  const manifest = JSON.parse(readFileSync(join(workspace, "result.json"), "utf8"));
-  assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.outcome, undefined);
+  assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest — ever
+  assert.ok(existsSync(join(workspace, "artifacts", "summary.md"))); // the artifacts/ convention
   assert.ok(existsSync(join(sessionDir, "run-1.jsonl"))); // session history on the pinned path
   rmSync(workspace, { recursive: true, force: true });
   rmSync(sessionDir, { recursive: true, force: true });
@@ -461,20 +368,7 @@ test("stub agent crash behavior: fail reports an error line and exits non-zero",
     .find((e) => e?.type === "error");
   assert.equal(errorLine.data.code, "planner_stub_error");
   assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest on the failure path
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("stub agent needs_human behavior writes the outcome flag", async () => {
-  const workspace = tempDir("ws-human-");
-  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
-    "--session-id", "r"], {
-    env: { ...process.env, STUB_BEHAVIOR: "needs_human", PI_WORKSPACE: workspace },
-    input: '{"type":"prompt","message":"q"}\n',
-    encoding: "utf8",
-  });
-  assert.equal(child.status, 0);
-  const manifest = JSON.parse(readFileSync(join(workspace, "result.json"), "utf8"));
-  assert.equal(manifest.outcome, "needs_human_input");
+  assert.equal(existsSync(join(workspace, "artifacts")), false); // no artifacts either
   rmSync(workspace, { recursive: true, force: true });
 });
 
@@ -671,20 +565,6 @@ test("EventMapper maps permission_denied to permission_blocked and collects the 
   assert.deepEqual([...mapper.deniedToolCallIds], ["call-1"]);
 });
 
-test("validateManifest: a required publication denied by the permission policy fails required_permission_denied", () => {
-  const workspace = tempDir("ws-denied-");
-  const manifest = {
-    schemaVersion: 1, summary: "done", artifacts: [],
-    requiredPublications: [{ toolCallId: "call-1", kind: "issue_comment", externalId: "p1" }],
-  };
-  const reason = validateManifest(manifest, workspace, new Set(), [], new Set(["call-1"]));
-  assert.match(reason ?? "", /required_permission_denied/);
-  // a non-mandated publication that was merely attempted still fails as github_publication_failed
-  const transportReason = validateManifest(manifest, workspace, new Set(), [], new Set());
-  assert.match(transportReason ?? "", /github_publication_failed/);
-  rmSync(workspace, { recursive: true, force: true });
-});
-
 test("stub agent permission_denied behavior denies the publication tool call", () => {
   const workspace = tempDir("ws-perm-");
   const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
@@ -698,8 +578,7 @@ test("stub agent permission_denied behavior denies the publication tool call", (
   assert.ok(events.some((e) => e.type === "permission_denied" && e.data.toolCallId === "call-1"));
   const deniedEnd = events.find((e) => e.type === "tool_execution_end" && e.data.toolCallId === "call-1");
   assert.equal(deniedEnd.data.status, "denied"); // never observed as a completed tool call
-  const manifest = JSON.parse(readFileSync(join(workspace, "result.json"), "utf8"));
-  assert.ok(manifest.requiredPublications.some((p) => p.toolCallId === "call-1" && p.kind === "issue_comment"));
+  assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest — ever
   rmSync(workspace, { recursive: true, force: true });
 });
 

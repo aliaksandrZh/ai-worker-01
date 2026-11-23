@@ -6,11 +6,11 @@
  * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
  * callback to the durable per-Run spool BEFORE sending, retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
- * validates the run's `result.json` manifest after `agent_settled` (in place, deriving
- * branch/commitSha via Git, correlating requiredPublications with error-free completed tool
- * executions) and delivers the terminal `completed` (or `failed`) callback — the
- * delivery cycle ends only on the Runtime API's persistence acknowledgement. It also captures Pi
- * stdout/stderr plus its own diagnostics into the per-Run log trio.
+ * runs the publication toolcheck after every `agent_settled` (each mandated publication kind must
+ * have an OBSERVED error-free completed tool execution; a missing mandate is nudged back to the
+ * agent at most PI_PUBLICATION_NUDGES times) and delivers the terminal `completed` (or `failed`)
+ * callback — the delivery cycle ends only on the Runtime API's persistence acknowledgement. It also
+ * captures Pi stdout/stderr plus its own diagnostics into the per-Run log trio.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
-import { loadManifest, renderPrompt, terminalFromManifest, validateManifest } from "./manifest.mjs";
+import { renderPrompt, gitFacts, checkPublications, nudgePrompt, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -36,10 +36,17 @@ const sessionDir = env.PI_SESSION_DIR || "/session";
 const agentBin = env.PI_AGENT_BIN || "node";
 const defaultStubAgent = fileURLToPath(new URL("../stub-agent/pi-stub.mjs", import.meta.url));
 const agentArgs = (env.PI_AGENT_ARGS || defaultStubAgent).split(" ").filter(Boolean);
-// mandated publication kinds that MUST be confirmed before `completed`
-// (comma-separated; empty = no mandate — every listed publication is still correlated, the stub).
+// mandated publication kinds that MUST be observed as successful tool executions before `completed`
+// (comma-separated; empty = no mandate — the stub). The verification is the Bridge's publication
+// toolcheck against the event stream; the agent never self-reports (there is no result manifest).
 const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
   .split(",").map((kind) => kind.trim()).filter(Boolean);
+// how many times a settle with unconfirmed mandated publications is nudged back to the agent
+// (a follow-up prompt in the same session) before the run fails with `publication_missing`
+const publicationNudges = (() => {
+  const parsed = Number(env.PI_PUBLICATION_NUDGES);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 2;
+})();
 const heartbeatSeconds = clampSeconds(env.PI_HEARTBEAT_SECONDS, 15);
 const eventCadenceSeconds = clampSeconds(env.PI_EVENT_CADENCE_SECONDS, 5);
 const maxLogBytes = Number(env.PI_MAX_LOG_MB || 50) * 1024 * 1024;
@@ -144,7 +151,7 @@ async function deliverNext() {
       return true;
     }
     if (!result.retryable) {
-      // A validation-class (4xx) rejection of the completed callback (e.g. 422 manifest): the API
+      // A validation-class (4xx) rejection of the completed callback (e.g. 422 artifact_too_large): the API
       // persisted nothing from it — report the failure path instead, carrying the API's code.
       if (entry.route === "completed") {
         spool.remove(entry);
@@ -212,8 +219,14 @@ async function pullInput() {
 
 // ---- run state shared across the launch/lifecycle/terminal stages ----
 const observedCompletedToolCalls = new Set(); // error-free completed tool ids
+const completedToolNames = new Set(); // tool names with an error-free completed end (the toolcheck)
+const toolNameByCallId = new Map(); // tool_started fallback: ends whose payload omits the name
+let lastAssistantText = null; // the last aggregated assistant_output — the run's result summary
 let sessionFilePath = null; // the actual session path, discovered via `get_state`
 let settled = false;
+let resolveSettle = null; // resolves the settle wait (the toolcheck loop awaits it per turn)
+let agentExited = false;
+let agentExitCode = null;
 
 /** Terminal failure path: spool the `failed` callback, stop the agent, wait for the ack, exit. */
 function spoolFailure(code, message) {
@@ -231,8 +244,15 @@ async function main() {
   const prompt = renderPrompt(input);
 
   const mapper = new EventMapper((entry) => {
-    if (entry.body.type === "tool_completed" && isSuccessfulToolEnd(entry.body.payload))
-      observedCompletedToolCalls.add(entry.body.payload.toolCallId);
+    const { type, payload } = entry.body;
+    if (type === "tool_started" && typeof payload.toolCallId === "string")
+      toolNameByCallId.set(payload.toolCallId, payload.toolName);
+    if (type === "tool_completed" && isSuccessfulToolEnd(payload)) {
+      observedCompletedToolCalls.add(payload.toolCallId);
+      if (typeof payload.toolName === "string") completedToolNames.add(payload.toolName);
+      else if (toolNameByCallId.has(payload.toolCallId)) completedToolNames.add(toolNameByCallId.get(payload.toolCallId));
+    }
+    if (type === "assistant_output" && typeof payload?.text === "string") lastAssistantText = payload.text;
     echoRunEvent(entry.body);
     spool.append(entry);
   }, eventCadenceSeconds);
@@ -248,7 +268,13 @@ async function main() {
   const correlator = new RpcCorrelator((line) => agent.stdin.write(line + "\n"));
   agent.on("error", (error) => log(`agent spawn error: ${error.message}\n`));
   agent.on("exit", (code, signal) => log(`agent exited code ${code} signal ${signal}\n`));
-  const onAgentExit = new Promise((resolve) => agent.on("exit", (code) => resolve(code)));
+  const onAgentExit = new Promise((resolve) => {
+    agent.on("exit", (code) => {
+      agentExited = true;
+      agentExitCode = code;
+      resolve(code);
+    });
+  });
   agent.stdout.setEncoding("utf8");
   let stdoutBuffer = "";
   agent.stdout.on("data", (chunk) => {
@@ -267,8 +293,8 @@ async function main() {
       }
       if (correlator.onRecord(record)) continue; // a handshake response, not an event
       if (mapper.onLine(line) && mapper.settled && !settled) {
-        settled = true;
-        agent.stdin.end(); // one prompt per run: close stdin for a graceful agent exit
+        settled = true; // stdin stays open: a failed publication toolcheck nudges a follow-up prompt
+        if (resolveSettle) { resolveSettle(); resolveSettle = null; }
       }
     }
   });
@@ -386,57 +412,92 @@ async function main() {
     return await spoolFailure("runtime_failure", `agent launch failed — ${error.message}`);
   }
 
-  const exitCode = await new Promise((resolve) => {
-    let grace = null;
-    // the 30s exit grace arms only AFTER agent_settled — an agent that has not settled keeps running
-    // with its heartbeat (its stop is the stop control path; a silent/never-settling agent is
-    // the Runtime API's reconciliation, never the Bridge's own kill)
-    const settleWatch = setInterval(() => {
-      if (!settled || grace) return;
-      clearInterval(settleWatch);
-      grace = setTimeout(() => {
-        log("agent did not exit 30s after settle — closing stdin, then SIGTERM\n");
-        agent.stdin.end();
-        setTimeout(() => {
-          agent.kill("SIGTERM");
-          setTimeout(() => agent.kill("SIGKILL"), 5000);
-        }, 10_000);
-      }, 30_000);
-    }, 250);
-    agent.on("exit", (code) => {
-      clearInterval(settleWatch);
-      if (grace) clearTimeout(grace);
-      resolve(code);
-    });
-  });
+  // ---- settle → publication toolcheck loop ----
+  // After every agent_settled the Bridge verifies the mandated publication kinds against the
+  // OBSERVED event stream (tool names with an error-free completed end) — the agent never
+  // self-reports. A missing mandate is nudged back into the same RPC session (at most
+  // PI_PUBLICATION_NUDGES times); a permission-denied mandate fails immediately (a nudge cannot
+  // help); exhausted nudges fail the run with `publication_missing`.
+  const failNow = (code, message) => {
+    clearInterval(heartbeatTimer);
+    clearInterval(flushTimer);
+    mapper.flushAggregated();
+    return spoolFailure(code, message);
+  };
+  const settleWait = () => new Promise((resolve) => { resolveSettle = resolve; });
+  let nudgesLeft = publicationNudges;
+  let confirmed = false;
+  for (;;) {
+    await Promise.race([settleWait(), onAgentExit]);
+    if (stopSignal) break; // the stop path owns the terminal
+    if (!settled) break; // the agent exited without settling — judged below
+    const check = checkPublications(requiredPublicationKinds, completedToolNames, mapper.deniedToolNames);
+    if (check.ok) { confirmed = true; break; }
+    if (check.denied.length > 0) {
+      return await failNow("required_permission_denied",
+        `mandatory publication kind(s) denied by the run's permission policy: ${check.denied.join(", ")}`);
+    }
+    if (agentExited || nudgesLeft <= 0) {
+      return await failNow("publication_missing",
+        `mandatory publication kind(s) never confirmed: ${check.missing.join(", ")}`);
+    }
+    nudgesLeft -= 1;
+    log(`mandatory publication kind(s) missing (${check.missing.join(", ")}) — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
+    settled = false; // the nudge restarts the turn: heartbeats and the settle wait resume
+    mapper.settled = false;
+    mapper.flushAggregated();
+    try {
+      await Promise.race([
+        correlator.command("prompt", { message: nudgePrompt(check.missing) }),
+        onAgentExit.then((code) => {
+          throw new Error(`agent exited during nudge acceptance (code ${code})`);
+        }),
+      ]);
+    } catch (error) {
+      return await failNow("runtime_failure", `publication nudge failed — ${error.message}`);
+    }
+  }
+
   clearInterval(heartbeatTimer);
   clearInterval(flushTimer);
   mapper.flushAggregated();
-  log(`agent lifecycle done (exit ${exitCode}, settled ${settled})\n`);
 
   // the stop path owns the terminal: a run interrupted by /stop is `cancelled` regardless of the
-  // exit shape (settled or killed) — no failed report, no manifest
+  // exit shape (settled or killed) — no completed report
   if (stopSignal) return await finishCancelled();
 
-  if (exitCode !== 0 || !settled) {
+  if (!confirmed || !settled) {
     // on a crash the Bridge reports failure with the agent's exit code
     return await spoolFailure("runtime_failure",
-      `agent process exited (code ${exitCode}) without settling — reported by the Runtime Bridge`);
+      `agent process exited (code ${agentExitCode}) without settling — reported by the Runtime Bridge`);
   }
 
-  // ---- result manifest: validate in place, derive Git facts, correlate publications ----
-  const manifest = loadManifest(workspace, log);
-  const invalid = validateManifest(manifest, workspace, observedCompletedToolCalls, requiredPublicationKinds, mapper.deniedToolCallIds);
-  if (invalid !== null) {
-    log(`result manifest invalid: ${invalid}\n`);
-    const code = invalid.startsWith("artifact_too_large") ? "artifact_too_large"
-      : invalid.startsWith("github_publication_failed") ? "github_publication_failed"
-      : invalid.startsWith("required_permission_denied") ? "required_permission_denied"
-      : "manifest_invalid";
-    return await spoolFailure(code, `result manifest invalid — ${invalid}`);
+  // ---- all mandated publications confirmed: collect the run result ----
+  const collected = collectArtifacts(workspace);
+  if (collected.error) {
+    return await spoolFailure(collected.error.code, `artifact collection failed — ${collected.error.message}`);
+  }
+  const summary = (lastAssistantText ?? "").trim() || "run completed";
+
+  // graceful agent exit: stdin EOF ends real pi; a one-shot stub exits by itself after settling
+  if (!agentExited) {
+    agent.stdin.end();
+    const exited = await Promise.race([onAgentExit.then(() => true), sleep(30_000).then(() => false)]);
+    if (!exited) {
+      log("agent did not exit 30s after the result collection — SIGTERM, then SIGKILL\n");
+      agent.kill("SIGTERM");
+      const killed = await Promise.race([onAgentExit.then(() => true), sleep(5_000).then(() => false)]);
+      if (!killed) agent.kill("SIGKILL");
+    }
+    await onAgentExit;
+  }
+  log(`agent lifecycle done (exit ${agentExitCode}, publications confirmed)\n`);
+  if (agentExitCode !== 0) {
+    return await spoolFailure("runtime_failure",
+      `agent process exited (code ${agentExitCode}) after settling — reported by the Runtime Bridge`);
   }
 
-  spool.append(terminalFromManifest(manifest, runId, sessionFilePath));
+  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace)));
   await finishWait();
 }
 

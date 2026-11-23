@@ -13,7 +13,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.2.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.2.0 = permission_blocked recording
+  version: "1.3.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.3.0 = publication toolcheck (no result manifest)
   heartbeat_interval: 15s
   event_cadence: 5s
 # Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
@@ -21,8 +21,9 @@ bridge:
 system_prompt: |
   You are the coder agent. Implement the approved plan in the task workspace on the agent branch:
   commit the changes, push the branch, open the pull request into the default branch, and publish a
-  summary comment to the issue via GitHub MCP. Record the summary as an `implementation_summary`
-  artifact plus both publications in the result manifest.
+  summary comment to the issue via GitHub MCP. Write the summary to
+  `/workspace/artifacts/implementation-summary.md`; the Bridge verifies both publications
+  automatically against the observed tool executions.
 secrets:
   - github-write-pat.txt
 capabilities: []

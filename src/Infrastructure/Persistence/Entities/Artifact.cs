@@ -21,8 +21,8 @@ public static class ArtifactFormats
 
 /// <summary>
 /// Explicit handoff between agents. Immutable after creation; content stored inline in
-/// PostgreSQL (≤256 KiB per artifact). Created by the Runtime API from validated Run
-/// manifests — only the table ships here, as the `TaskArtifactInput` FK target.
+/// PostgreSQL (≤256 KiB per artifact). Created by the Runtime API from the Bridge-collected
+/// artifacts/ directory files — only the table ships here, as the `TaskArtifactInput` FK target.
 /// Plan Artifacts carry no approval status: approval is expressed by the `/code` command that consumes
 /// the latest successful plan.
 /// </summary>
