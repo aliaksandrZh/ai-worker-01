@@ -71,7 +71,7 @@ public sealed class ProfileConfig
     public string? BridgeVersion { get; init; }
     public TimeSpan? BridgeHeartbeatInterval { get; init; }
     public TimeSpan? BridgeEventCadence { get; init; }
-    /// <summary>Stub-only scenario lever: `succeed` (default) | `fail` | `hang` | `never_start` | `permission_denied`.</summary>
+    /// <summary>Stub-only scenario lever: `succeed` (default) | `fail` | `hang` | `never_start` | `permission_denied` | `mcp_failed`.</summary>
     public string? BridgeBehavior { get; init; }
     public List<string>? Skills { get; init; }
     /// <summary>Secret reference names only — values live in host-managed files.</summary>

@@ -7,7 +7,8 @@
  * succeed (default) | fail | hang
  * | never_start (accepts the prompt, then never emits anything — startup_timeout) |
  * permission_denied (the run's mandatory publication tool call is denied by the
- * unattended permission policy — the fail-closed path).
+ * unattended permission policy — the fail-closed path) |
+ * mcp_failed (the Bridge's /mcp status probe sees a failed github server — the fail-fast path).
  *
  * The scenario lever exists only to make the failure/needs-human/hang paths testable; in the real
  * profiles these paths come from real agent work and MCP failures.
@@ -129,6 +130,18 @@ process.stdin.on("data", (chunk) => {
     }
     switch (rpc.type) {
       case "prompt":
+        // the /mcp probe (STUB_BEHAVIOR=mcp_failed): an extension command consumed the prompt —
+        // disposition "handled", a notify with the pi status format, and NO run started
+        if (behavior === "mcp_failed" && typeof rpc.message === "string" && rpc.message.startsWith("/mcp")) {
+          respond(rpc.id, "prompt", { disposition: "handled" });
+          emit({
+            type: "extension_ui_request",
+            method: "notify",
+            notifyType: "info",
+            message: "github: failed (direct)\n    Connection closed\n    boom: the stub mcp server died (exit 1)",
+          });
+          return;
+        }
         // rpc-commands.md: the response means accepted — the run then streams to `agent_settled`
         respond(rpc.id, "prompt", { disposition: "started" });
         answerPrompt();

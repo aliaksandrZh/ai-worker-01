@@ -454,6 +454,7 @@ test("stub agent: abort settles an in-flight run with aborted=true; clear_queue/
 function fakeRuntimeApi(stopReason) {
   const cancelledBodies = [];
   const completedBodies = [];
+  const failedBodies = [];
   let stopPolls = 0;
   const server = createServer((request, response) => {
     const respond = (status, body = { persisted: true }) => {
@@ -483,10 +484,15 @@ function fakeRuntimeApi(stopReason) {
         respond(200);
         return;
       }
+      if (request.method === "POST" && request.url.endsWith("/failed")) {
+        failedBodies.push(JSON.parse(raw));
+        respond(200);
+        return;
+      }
       respond(200); // events, heartbeat
     });
   });
-  return { server, cancelledBodies, completedBodies };
+  return { server, cancelledBodies, completedBodies, failedBodies };
 }
 
 test("bridge end-to-end stop: signal observed → clear_queue/abort settle → terminal cancelled delivered", async () => {
@@ -544,6 +550,71 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   assert.match(session, /"aborted":true/);
   // the bridge recorded its terminal marker
   assert.ok(existsSync(join(spoolDir, ".terminal-delivered")));
+  rmSync(workspace, { recursive: true, force: true });
+  rmSync(sessionDir, { recursive: true, force: true });
+  rmSync(logsDir, { recursive: true, force: true });
+  rmSync(spoolDir, { recursive: true, force: true });
+  rmSync(dirname(tokenFile), { recursive: true, force: true });
+});
+
+// ---- /mcp status probe (mcp_unavailable) ----
+
+test("bridge MCP probe: a failed server fails the run before the task prompt, with pi's full reason", async () => {
+  const runId = "mcp-probe-run";
+  const workspace = tempDir("ws-mcp-");
+  const sessionDir = tempDir("session-mcp-");
+  const logsDir = tempDir("logs-mcp-");
+  const spoolDir = tempDir("spool-mcp-");
+  const tokenFile = join(tempDir("tok-"), "callback-token");
+  writeFileSync(tokenFile, "per-run-callback-token");
+
+  const fake = fakeRuntimeApi(null);
+  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
+  const port = fake.server.address().port;
+
+  const bridge = spawn(process.execPath, [
+    fileURLToPath(new URL("./bridge.mjs", import.meta.url)),
+  ], {
+    env: {
+      ...process.env,
+      PI_RUN_ID: runId,
+      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
+      PI_CALLBACK_TOKEN_FILE: tokenFile,
+      PI_WORKSPACE: workspace,
+      PI_SESSION_DIR: sessionDir,
+      PI_LOGS_DIR: logsDir,
+      PI_SPOOL_DIR: spoolDir,
+      PI_AGENT_BIN: process.execPath,
+      PI_AGENT_ARGS: AGENT,
+      STUB_BEHAVIOR: "mcp_failed",
+      PI_HEARTBEAT_SECONDS: "300",
+      PI_EVENT_CADENCE_SECONDS: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let bridgeStderr = "";
+  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
+  const exitCode = await Promise.race([
+    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 20_000).unref()),
+  ]);
+  fake.server.close();
+
+  assert.equal(exitCode, 0, bridgeStderr);
+  // exactly one terminal — `failed`, never `completed`
+  assert.deepEqual(fake.completedBodies, []);
+  assert.deepEqual(fake.cancelledBodies, []);
+  assert.equal(fake.failedBodies.length, 1);
+  const failed = fake.failedBodies[0];
+  assert.equal(failed.error.code, "mcp_unavailable");
+  // the message carries pi's full /mcp status: the state AND the stderr tail
+  assert.match(failed.error.message, /pi \/mcp reports/);
+  assert.match(failed.error.message, /github: failed \(direct\)/);
+  assert.match(failed.error.message, /Connection closed/);
+  assert.match(failed.error.message, /boom: the stub mcp server died \(exit 1\)/);
+  // the task prompt was never delivered — the stub wrote no artifacts
+  assert.equal(existsSync(join(workspace, "artifacts")), false);
+  assert.equal(existsSync(join(spoolDir, ".terminal-delivered")), true);
   rmSync(workspace, { recursive: true, force: true });
   rmSync(sessionDir, { recursive: true, force: true });
   rmSync(logsDir, { recursive: true, force: true });
