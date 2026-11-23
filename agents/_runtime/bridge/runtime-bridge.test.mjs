@@ -168,6 +168,10 @@ test("promptDisposition: only 'started' begins a run", () => {
 
 test("checkPublications confirms mandated kinds from observed tool names", () => {
   assert.equal(checkPublications(["issue_comment"], new Set(["add_issue_comment"])).ok, true);
+  // real pi reports the server-prefixed MCP name — the normalization strips the `mcp__<server>__`
+  assert.equal(checkPublications(["issue_comment"], new Set(["mcp__github__add_issue_comment"])).ok, true);
+  assert.equal(checkPublications(["pull_request"], new Set(["mcp__github__pull_request_write"])).ok, true);
+  assert.equal(checkPublications(["review"], new Set(["mcp__github__pull_request_review_write"])).ok, true);
   const missing = checkPublications(["issue_comment", "pull_request"], new Set(["add_issue_comment"]));
   assert.deepEqual(missing, { ok: false, missing: ["pull_request"], denied: [] });
   // a kind with no mapped tool can never be confirmed — it fails diagnosably, not silently
@@ -176,7 +180,7 @@ test("checkPublications confirms mandated kinds from observed tool names", () =>
 });
 
 test("checkPublications: a mandated kind denied by the permission policy fails required_permission_denied", () => {
-  const denied = checkPublications(["issue_comment"], new Set(), new Set(["add_issue_comment"]));
+  const denied = checkPublications(["issue_comment"], new Set(), new Set(["mcp__github__add_issue_comment"]));
   assert.deepEqual(denied, { ok: false, missing: [], denied: ["issue_comment"] });
   // a denial of a tool no mandate needs does not affect the run
   assert.equal(checkPublications([], new Set(), new Set(["add_issue_comment"])).ok, true);
@@ -185,7 +189,7 @@ test("checkPublications: a mandated kind denied by the permission policy fails r
 test("nudgePrompt names the missing kinds and the no-duplicate rule", () => {
   const message = nudgePrompt(["issue_comment", "pull_request"]);
   assert.match(message, /issue_comment, pull_request/);
-  assert.match(message, /never duplicate/);
+  assert.match(message, /Never duplicate/);
 });
 
 test("collectArtifacts maps the artifacts/ directory by convention (no agent-side JSON)", () => {

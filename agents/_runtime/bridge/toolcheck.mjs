@@ -19,6 +19,12 @@ export const PUBLICATION_TOOLS = {
   review: ["pull_request_review_write"],
 };
 
+/** MCP tool records report the server-prefixed name (`mcp__github__add_issue_comment`) while the
+ * mandate kinds map the bare GitHub MCP tool name. The normalized name is the last `__` segment. */
+export function normalizeToolName(name) {
+  return typeof name === "string" && name.includes("__") ? name.split("__").pop() : name;
+}
+
 /**
  * Verifies every mandated publication kind against the observed tool stream.
  * `completedToolNames`: tool names of error-free completed `tool_execution_end` records.
@@ -28,12 +34,14 @@ export const PUBLICATION_TOOLS = {
  * @returns {ok: true} when every mandated kind is confirmed, else {ok: false, missing, denied}.
  */
 export function checkPublications(requiredKinds, completedToolNames = new Set(), deniedToolNames = new Set()) {
+  const completed = new Set([...completedToolNames].map(normalizeToolName));
+  const deniedNames = new Set([...deniedToolNames].map(normalizeToolName));
   const missing = [];
   const denied = [];
   for (const kind of requiredKinds) {
     const tools = PUBLICATION_TOOLS[kind] ?? [];
-    if (tools.some((tool) => completedToolNames.has(tool))) continue;
-    if (tools.some((tool) => deniedToolNames.has(tool))) denied.push(kind);
+    if (tools.some((tool) => completed.has(tool))) continue;
+    if (tools.some((tool) => deniedNames.has(tool))) denied.push(kind);
     else missing.push(kind);
   }
   return missing.length === 0 && denied.length === 0
@@ -47,9 +55,12 @@ export function nudgePrompt(missing) {
     "Your run cannot be completed yet: the mandatory publication(s) were not confirmed:",
     `${missing.join(", ")}.`,
     "",
-    "Perform the missing publication(s) now via the GitHub MCP tools. If you already attempted one,",
-    "verify on GitHub whether it landed BEFORE re-posting — never duplicate a comment, pull request",
-    "or review. If a publication is impossible, say so clearly in your final message.",
+    "First CHECK on GitHub (issue_read / pull_request_read) whether your earlier publication already",
+    "landed. If it did — do NOT post anything new and do not post a \"confirmation entry\": the",
+    "confirmation is automatic once the publishing tool call has succeeded again or its execution was",
+    "observed; simply finish your work. Only publish now if the publication truly never happened.",
+    "Never duplicate a comment, pull request or review. If a publication is impossible, say so",
+    "clearly in your final message.",
   ].join("\n");
 }
 
