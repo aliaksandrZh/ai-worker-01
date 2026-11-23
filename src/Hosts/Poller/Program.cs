@@ -1,3 +1,5 @@
+using PiAgent.Poller.GitHub;
+using PiAgent.Poller.Streams;
 using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure;
 using PiAgent.Poller;

@@ -1,3 +1,7 @@
+using PiAgent.OutboxWorker.GitHub;
+using PiAgent.BuildWorker.Docker;
+using PiAgent.BuildWorker.Builds;
+using PiAgent.BuildWorker.Api;
 using Microsoft.EntityFrameworkCore;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Infrastructure.Persistence;

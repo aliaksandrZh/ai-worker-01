@@ -1,3 +1,5 @@
+using PiAgent.Poller.Streams;
+using PiAgent.Poller.GitHub;
 using System.Net;
 using System.Text;
 using Microsoft.EntityFrameworkCore;

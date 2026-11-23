@@ -1,3 +1,4 @@
+using PiAgent.Poller.Streams;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;

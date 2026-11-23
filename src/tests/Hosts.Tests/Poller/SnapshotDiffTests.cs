@@ -1,3 +1,5 @@
+using PiAgent.Poller.Streams;
+using PiAgent.Poller.GitHub;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Poller;
 using Xunit;
