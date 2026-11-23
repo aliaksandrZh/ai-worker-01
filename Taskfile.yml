@@ -2,23 +2,45 @@ version: 3
 
 tasks:
   stack:
-    desc: Run the pi-agent control plane (postgres, migrator, runtime-api, host-monitor, build-worker, orchestrator, poller, outbox-worker; uses src/.env)
+    desc: Run the pi-agent control plane (postgres, migrator, runtime-api, host-monitor, build-worker, orchestrator, poller, outbox-worker; uses deploy/.env)
     cmds:
-      - test -f src/.env || cp src/.env.example src/.env
-      - docker compose --env-file src/.env -f src/compose.yaml up -d --wait
+      - test -f deploy/.env || cp deploy/.env.example deploy/.env
+      - docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --wait
 
   stack-rebuild:
     desc: Rebuild all control-plane images from current src/ (build only — starts nothing; run `task stack` after)
     cmds:
-      - test -f src/.env || cp src/.env.example src/.env
-      - docker compose --env-file src/.env -f src/compose.yaml build
+      - test -f deploy/.env || cp deploy/.env.example deploy/.env
+      - docker compose --env-file deploy/.env -f deploy/compose.yaml build
 
   stack-logs:
     desc: Follow control-plane logs
     cmds:
-      - docker compose --env-file src/.env -f src/compose.yaml logs -f --tail=50
+      - docker compose --env-file deploy/.env -f deploy/compose.yaml logs -f --tail=50
 
   stack-down:
     desc: Stop the control plane (volumes kept)
     cmds:
-      - docker compose --env-file src/.env -f src/compose.yaml down
+      - docker compose --env-file deploy/.env -f deploy/compose.yaml down
+
+  dev-db:
+    desc: Start the host-run debugging infra (postgres only, published on 127.0.0.1:5432)
+    cmds:
+      - test -f deploy/.env || cp deploy/.env.example deploy/.env
+      - docker compose --env-file deploy/.env -f deploy/compose.yaml up -d postgres --wait
+
+  dev-migrate:
+    desc: Apply DB migrations on the host (Migrator + dev/env/shared.env, the same env the Rider services get)
+    deps: [dev-db]
+    vars:
+      # shared.env is a Rider .env — extract the value with sed (task's interpreter is not a
+      # real shell: sourcing/exporting values containing ';' breaks). Each cmds line is a
+      # separate process, so the value must ride in via `env:`, not an in-line export.
+      CONNECTION_STRING:
+        sh: sed -n 's/^ConnectionStrings__DefaultDb=//p' dev/env/shared.env
+    env:
+      ConnectionStrings__DefaultDb: '{{.CONNECTION_STRING}}'
+    preconditions:
+      - sh -c 'test -f dev/env/shared.env || (echo "copy dev/env/shared.env.example to dev/env/shared.env first"; exit 1)'
+    cmds:
+      - dotnet run --project src/Migrator --no-launch-profile

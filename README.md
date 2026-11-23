@@ -5,7 +5,7 @@ command agents with slash commands in comments, a poller syncs GitHub state into
 Orchestrator turns commands into Workflows → Tasks → Runs, and per-Run containers execute Pi
 sessions whose results flow back to GitHub. PostgreSQL is the source of truth for orchestration
 state; GitHub remains the source of truth for issues/PRs/comments/reviews; desired configuration
-is YAML in `src/config/`, synced into the DB only at startup.
+is YAML in `deploy/config/` (+ `agents/` profiles), synced into the DB only at startup.
 
 ## Main flow
 
@@ -51,7 +51,7 @@ One comment travels like this:
 Services: `poller`, `orchestrator`, `runtime-api`, `outbox-worker`, `build-worker`, `host-monitor`
 (one executable each under `src/Hosts/`), plus `postgres`, `migrator`, `backups`, `config-snapshot`,
 and the log lake `loki` + `alloy` + `grafana` — every service's §14 JSON stdout lands in one
-Grafana log-list dashboard at http://localhost:3000 (`src/logging/`).
+Grafana log-list dashboard at http://localhost:3000 (`deploy/logging/`).
 Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
 `src/tests/Architecture.Tests`); they depend on the Docker socket only.
 
@@ -59,7 +59,7 @@ Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
 
 | path | what |
 |---|---|
-| `src/` | the system itself — .NET 10 + EF Core 10/Npgsql + xUnit: `Platform/` (logging, health, auth, heartbeat plumbing), `Infrastructure/` (AppDbContext + migrations), `Hosts/` (RuntimeApi, Orchestrator, Poller, OutboxWorker, HostMonitor, BuildWorker), `Migrator/`, `config/` (YAML config plane), `tests/` (Testcontainers). Details + quick start: `src/README.md` |
+| `src/` | the system itself — .NET 10 + EF Core 10/Npgsql + xUnit: `Platform/` (logging, health, auth, heartbeat plumbing), `Infrastructure/` (AppDbContext + migrations), `Hosts/` (RuntimeApi, Orchestrator, Poller, OutboxWorker, HostMonitor, BuildWorker), `Migrator/`, `agents/` (agent profiles + shared runtime bridge) , `tests/` (Testcontainers). Details + quick start: `src/README.md` |
 | `docs/komodo-vs-manual-docker.md` | the recorded Komodo trade-off analysis + the decision to drop it (decision 82) |
 | `docs/pi-agent-architecture/` | the accepted spec: architecture + flows, data model, state machines, API contracts, decisions 26–81. Frozen |
 | `docs/tasks/` | implementation tickets (01-stack-and-skeleton … 21-acceptance-readiness) tracking what is done |
@@ -70,9 +70,9 @@ Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
 See `src/README.md` for the full walkthrough; the short version:
 
 ```sh
-mkdir -p src/secrets               # sync PAT: its login must equal github.bot_login
-printf '<pat>' > src/secrets/github-sync-pat.txt
-printf '<write-pat>' > src/secrets/github-write-pat.txt
+mkdir -p secrets               # sync PAT: its login must equal github.bot_login
+printf '<pat>' > secrets/github-sync-pat.txt
+printf '<write-pat>' > secrets/github-write-pat.txt
 task stack                         # postgres → migrator → services (`task stack-rebuild` after src/ changes)
 curl localhost:8080/healthz        # runtime-api is the only host-published port (8080)
 ```

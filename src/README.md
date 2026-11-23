@@ -25,12 +25,15 @@ material; everything in this directory is the new system. Repo overview + main f
 | `Hosts/` | one executable per service: `RuntimeApi`, `Orchestrator`, `Poller`, `OutboxWorker`, `HostMonitor`, `BuildWorker` |
 | `Migrator/` | one-shot EF migration host (§13's `migrations` step) |
 | `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` (Hosts.Tests spins a Testcontainers postgres — Docker required for `dotnet test`) |
-| `config/` | configuration plane (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml`, `agents/<name>/profile.yaml` — mounted read-only into the orchestrator, synced only at startup |
-| `agents/` | shared agent-image implementation, single copy: `runtime-bridge/` (the Runtime Bridge modules every profile bakes). Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only into the orchestrator |
-| `backup/` | scheduled `pg_dump` + config-plane Git snapshot scripts (compose: `backups`, `config-snapshot`) |
-| `logging/` | centralized logging config: `loki-config.yaml` (single-binary Loki, 7-day retention), `alloy/config.alloy` (ships all container stdout/stderr to Loki, labels every stream with the compose `service` name, drops loki/alloy/grafana self-noise), `grafana/` provisioning (one datasource + one log-list dashboard "Pi Agent Logs") — compose services `loki`, `alloy`, `grafana` |
-| `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) |
-| `compose.yaml` | the §13 control-plane stack (13 services, private network `pi-agent-net`) |
+| `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) — the only build artifact left in `src/` |
+
+Outside `src/` (repo root):
+
+| path | what |
+|---|---|
+|  `deploy/config/` | configuration-plane yamls (01 §2, ticket 02): `system.yaml` (bot login + §16 knobs), `repositories.yaml`, `routing.yaml` — mounted read-only at the config root |
+| `agents/` | all agent assets: profile definitions (`agents/<name>/profile.yaml` + Dockerfile + entry…) and the shared runtime implementation `agents/_runtime/bridge/` — the Runtime Bridge modules every profile bakes. Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only INSIDE the orchestrator's config root (`/etc/pi-agent/config/agents/`) so the pinned tree shape holds |
+| `deploy/` | `compose.yaml` (the §13 control-plane stack, 13 services, private network `pi-agent-net`), `.env.example`, scheduled `pg_dump` + config-plane Git snapshot scripts (`backup/`), centralized logging config (`logging/`: loki/alloy/grafana) |
 ## Quick start
 
 ```sh
@@ -42,13 +45,13 @@ open http://localhost:3000 # the same logs in one place: "Pi Agent Logs" dashboa
 task stack-down
 ```
 
-`task stack` copies `src/.env.example` → `src/.env` on first run; the runtime-api provisions agent
+`task stack` copies `deploy/.env.example` → `deploy/.env` on first run; the runtime-api provisions agent
 containers itself over the Docker socket (decision 82 — Komodo was dropped; see
 `../docs/komodo-vs-manual-docker.md`), so no external container orchestrator is involved.
 
 ## Configuration plane (ticket 02)
 
-YAML in `config/` is the desired configuration; PostgreSQL holds the runtime state. The
+YAML in `deploy/config/` is the desired configuration; PostgreSQL holds the runtime state. The
 Config Loader — a startup component of the Orchestrator — validates everything and syncs the
 DB in one transaction at each startup; no hot reload, no admin API (decisions 55–56, 81).
 
@@ -58,16 +61,16 @@ DB in one transaction at each startup; no hot reload, no admin API (decisions 55
   authorization policy.
 - `routing.yaml` — global routing rules (`repository_id = NULL`) with per-repo overrides; the
   referenced version is pinned on the Task at creation (02 §12a).
-- `config/agents/<name>/profile.yaml` — profile definition; each configuration change creates a
+- `agents/<name>/profile.yaml` — profile definition; each configuration change creates a
   new immutable `AgentProfileVersion` (`draft`): normalized YAML + per-file sha256 + file contents
   + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata. Builds/dispatches are tickets 07/10.
 
 Before `task stack`: create the two secrets files and align identities
 
 ```sh
-mkdir -p src/secrets && printf '<your-pat>' > src/secrets/github-sync-pat.txt   # gitignored
-#   → the PAT's login (GET /user) must equal github.bot_login in src/config/system.yaml
-printf '<your-write-pat>' > src/secrets/github-write-pat.txt                    # task 03: outbox comments; task 12+: agent GitHub MCP (planner publication) + workspace clone
+mkdir -p secrets && printf '<your-pat>' > secrets/github-sync-pat.txt   # gitignored
+#   → the PAT's login (GET /user) must equal github.bot_login in deploy/config/system.yaml
+printf '<your-write-pat>' > secrets/github-write-pat.txt                    # task 03: outbox comments; task 12+: agent GitHub MCP (planner publication) + workspace clone
 ```
 
 Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown
@@ -108,12 +111,12 @@ the worker materializes the pinned build context from the version's `config_snap
 (hash-verified per file — a build never reads the live Git tree) and runs a local docker build
 (`agent-<profile>:v<n>`, no registry) → `GET /internal/builds/{buildId}` polling → validated
 result → version `ready` (or `build_failed` on a real build failure). The worker keeps durable
-local JSON state under `BUILD_STATE_ROOT` (default `./builds`): results stay retrievable after
+local JSON state under `BUILD_STATE_ROOT` (default `../runtime/builds`): results stay retrievable after
 worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
 with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
 Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile` (decision 56)
-are profile-Dockerfile responsibilities (see `config/agents/planner/Dockerfile`). The shared
-Runtime Bridge implementation is a single copy at `agents/runtime-bridge/` (never per-profile);
+are profile-Dockerfile responsibilities (see `agents/planner/Dockerfile`). The shared
+Runtime Bridge implementation is a single copy at `agents/_runtime/bridge/` (never per-profile);
 the Config Loader merges it into every profile's pinned snapshot under `runtime-bridge/` so the
 profile Dockerfiles keep `COPY runtime-bridge/` unchanged.
 

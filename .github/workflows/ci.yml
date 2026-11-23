@@ -6,6 +6,18 @@ on:
     branches: [main]
 
 jobs:
+  bridge-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test runtime bridge
+        run: node --test agents/_runtime/bridge/runtime-bridge.test.mjs
+
   dotnet-tests:
     runs-on: ubuntu-latest
     steps:

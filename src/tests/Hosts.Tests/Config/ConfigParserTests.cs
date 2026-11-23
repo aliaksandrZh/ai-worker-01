@@ -450,34 +450,80 @@ public class ConfigParserTests : IDisposable
         Assert.Contains("planner", exception.Message);
     }
 
-    /// <summary>Shipped configuration integrity (ticket 12): the real `src/config` tree must parse under
-    /// the strict schema — a dropped key in a profile.yaml aborts the Orchestrator at startup otherwise,
-    /// which CI should catch, not the next stack start. Skipped when the layout is absent (packaged CI).</summary>
+    /// <summary>Shipped configuration integrity (ticket 12): the real shipped tree (deploy/config yamls
+    /// + repo-root agents/ profiles) must parse under the strict schema — a dropped key in a
+    /// profile.yaml aborts the Orchestrator at startup otherwise, which CI should catch, not the next
+    /// stack start. Skipped when the layout is absent (packaged CI).</summary>
     [Fact]
     public void ShippedConfig_ParsesStrictly()
     {
         var configRoot = FindShippedConfigRoot();
         if (configRoot is null)
             return;
-        var parsed = ConfigParser.Parse(configRoot);
-        Assert.Contains(parsed.Profiles, p => p.Name == "planner");
-        var planner = parsed.Profiles.Single(p => p.Name == "planner");
-        Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
-        Assert.Equal("1.2.0", planner.BridgeVersion); // ticket 13 bumped the shared bridge (permission_blocked recording)
-        // ticket 19: the reviewer profile is shipped beside the planner and parses under the same strict schema
-        var reviewer = parsed.Profiles.Single(p => p.Name == "reviewer");
-        Assert.Equal(["github-write-pat.txt"], reviewer.Secrets);
-        Assert.Equal("1.2.0", reviewer.BridgeVersion);
+        try
+        {
+            var parsed = ConfigParser.Parse(configRoot);
+            Assert.Contains(parsed.Profiles, p => p.Name == "planner");
+            var planner = parsed.Profiles.Single(p => p.Name == "planner");
+            Assert.Equal(["github-write-pat.txt"], planner.Secrets); // decision 54/50: the repo write PAT reference
+            Assert.Equal("1.2.0", planner.BridgeVersion); // ticket 13 bumped the shared bridge (permission_blocked recording)
+            // ticket 19: the reviewer profile is shipped beside the planner and parses under the same strict schema
+            var reviewer = parsed.Profiles.Single(p => p.Name == "reviewer");
+            Assert.Equal(["github-write-pat.txt"], reviewer.Secrets);
+            Assert.Equal("1.2.0", reviewer.BridgeVersion);
+        }
+        finally
+        {
+            // the split layout materializes a temporary merged root — clean it up
+            if (Path.GetFileName(configRoot).StartsWith("pi-agent-shipped-config-", StringComparison.Ordinal))
+                Directory.Delete(configRoot, true);
+        }
     }
 
+    /// <summary>
+    /// Locates the shipped configuration in the repo layout the parser expects: a config root whose
+    /// `agents/` subdirectory holds the profiles. Two shapes are supported: a single-root tree
+    /// (`<dir>/config` with both the yamls and `agents/` inside) and the split layout (yamls in
+    /// `deploy/config`, profiles in the repo-root `agents/`). For the split layout a temporary merged
+    /// root is materialized with symlinks (the parser resolves paths under one root); on platforms
+    /// without symlink support the test simply skips.
+    /// </summary>
     private static string? FindShippedConfigRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent!)
         {
+            // single-root shape: `<dir>/config` carries the yamls and agents/ together
             var candidate = Path.Combine(directory.FullName, "config");
-            if (File.Exists(Path.Combine(candidate, "system.yaml")))
+            if (File.Exists(Path.Combine(candidate, "system.yaml")) &&
+                Directory.Exists(Path.Combine(candidate, "agents")))
                 return candidate;
-            // the test project lives under src/tests/...; the shipped config is src/config
+
+            // split shape: yamls in `deploy/config`, profiles in the sibling repo-root `agents/`
+            var yamlRoot = Path.Combine(directory.FullName, "deploy", "config");
+            var agentsRoot = Path.Combine(directory.FullName, "agents");
+            if (File.Exists(Path.Combine(yamlRoot, "system.yaml")) &&
+                Directory.Exists(Path.Combine(agentsRoot, "planner")))
+            {
+                try
+                {
+                    var merged = Path.Combine(Path.GetTempPath(), $"pi-agent-shipped-config-{Guid.NewGuid():N}");
+                    Directory.CreateDirectory(merged);
+                    foreach (var yaml in new[] { "system.yaml", "repositories.yaml", "routing.yaml" })
+                        File.Copy(Path.Combine(yamlRoot, yaml), Path.Combine(merged, yaml));
+                    Directory.CreateSymbolicLink(Path.Combine(merged, "agents"), agentsRoot);
+                    return merged;
+                }
+                catch (IOException)
+                {
+                    return null; // no symlink support on this platform — skip the shipped-tree test
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return null;
+                }
+            }
+
+            // legacy fallback: the pre-restructure src/config single-root tree
             var srcCandidate = Path.Combine(directory.FullName, "src", "config");
             if (File.Exists(Path.Combine(srcCandidate, "system.yaml")))
                 return srcCandidate;
