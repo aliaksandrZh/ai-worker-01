@@ -1,6 +1,6 @@
 #!/bin/sh
 # Self-check: config snapshots are pruned to the last 24 (mirrors the dump retention).
-# Run: sh src/backup/config-snapshot-retention-test.sh   (offline — clones a local git repo)
+# Run: sh deploy/backup/config-snapshot-retention-test.sh   (offline — clones a local git repo)
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

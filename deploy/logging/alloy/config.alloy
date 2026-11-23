@@ -1,4 +1,4 @@
-// Grafana Alloy — ships every container's stdout/stderr to Loki (src/compose.yaml `alloy`).
+// Grafana Alloy — ships every container's stdout/stderr to Loki (deploy/compose.yaml `alloy`).
 // Uses the Docker API through the read-only socket mount (same pattern as host-monitor),
 // not the logging driver, so `docker compose logs` / `task stack-logs` keep working.
 //

@@ -1,5 +1,5 @@
 # Grafana Loki — single-binary mode (monolithic), filesystem storage, 7-day retention.
-# Mounted read-only into the `loki` service in src/compose.yaml. No auth: the Loki port is
+# Mounted read-only into the `loki` service in deploy/compose.yaml. No auth: the Loki port is
 # published on 127.0.0.1 only and the network is private (same posture as postgres).
 
 auth_enabled: false

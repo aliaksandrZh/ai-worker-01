@@ -26,14 +26,18 @@ src/**/obj/
 src/**/TestResults/
 src/**/*.user
 
-# pi-agent control plane (src/) — local env with secrets (keep src/.env.example tracked)
-src/.env
+# pi-agent control plane — local env with secrets (keep deploy/.env.example tracked)
+deploy/.env
 
-# pi-agent control plane (src/) — runtime: compose state, host-storage mounts, backups, logs
-src/storage/
-src/builds/
-src/backups/
-src/state.json
-src/*.log
-# pi-agent control plane (src/) — host-managed secrets (read-only sync PAT etc., decisions 50/54)
-src/secrets/
+# pi-agent control plane — runtime: host-storage mounts, build-worker state, backups, logs
+# (anchored to the repo root with a leading slash: unanchored names like `runtime/` would
+# also match src/tests/Hosts.Tests/Runtime/ etc.)
+/runtime/
+/state.json
+/*.log
+# pi-agent control plane — host-managed secrets (read-only sync PAT etc., decisions 50/54)
+/secrets/
+
+# pi-agent control plane — host-run debugging (Rider): per-host env files carry secrets,
+# keep dev/env/*.env.example tracked
+dev/env/*.env

@@ -11,7 +11,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pi_agent}
       POSTGRES_USER: ${POSTGRES_USER:-pi_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in src/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432" # development-only, pgAdmin
     volumes:
@@ -25,7 +25,7 @@ services:
 
   migrator:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: Migrator }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
@@ -38,7 +38,7 @@ services:
 
   runtime-api:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: RuntimeApi }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
@@ -67,11 +67,12 @@ services:
       # (it creates/starts/stops/removes the pi-session-* containers on pi-agent-net).
       - /var/run/docker.sock:/var/run/docker.sock
       # The managed storage root (decision 52) — writable so /start provisioning can create trees.
-      - ${STORAGE_ROOT:-./storage}:/var/lib/pi-agent/workflows
+      - ${STORAGE_ROOT:-../runtime/storage}:/var/lib/pi-agent/workflows
       # Profile-secret existence checks (decision 54): read-only view of the host-managed files.
-      - ${SECRETS_DIR:-./secrets}:/etc/pi-agent/secrets:ro
-      # The configuration plane (system.yaml) for the reconcilers' §16 knobs.
-      - ./config:/etc/pi-agent/config:ro
+      - ${SECRETS_DIR:-../secrets}:/etc/pi-agent/secrets:ro
+      # The configuration plane (system.yaml) for the reconcilers' §16 knobs. Per-file mount:
+      # a read-only parent bind can't host nested mountpoints (docker mkdirat → EROFS).
+      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -84,7 +85,7 @@ services:
 
   host-monitor:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: HostMonitor }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
@@ -97,14 +98,14 @@ services:
       WorkerLoop__IntervalSeconds: 5
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${STORAGE_ROOT:-./storage}:/var/lib/pi-agent/workflows
+      - ${STORAGE_ROOT:-../runtime/storage}:/var/lib/pi-agent/workflows
     depends_on:
       migrator:
         condition: service_completed_successfully
 
   build-worker:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: BuildWorker }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
@@ -119,26 +120,31 @@ services:
       Build__StateRoot: /var/lib/pi-agent/builds
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${BUILD_STATE_ROOT:-./builds}:/var/lib/pi-agent/builds
+      - ${BUILD_STATE_ROOT:-../runtime/builds}:/var/lib/pi-agent/builds
     depends_on:
       migrator:
         condition: service_completed_successfully
 
   orchestrator:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: Orchestrator }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
     restart: unless-stopped
     volumes:
       # Configuration plane (01 §2): YAML is the source of desired configuration, synced only at startup.
-      - ./config:/etc/pi-agent/config:ro
-      # Shared Runtime Bridge implementation (single copy, merged into every profile's pinned snapshot).
-      - ./agents:/etc/pi-agent/agents:ro
+      # Per-file mounts: a read-only parent bind can't host the nested agents/ mountpoint below.
+      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
+      - ../deploy/config/repositories.yaml:/etc/pi-agent/config/repositories.yaml:ro
+      - ../deploy/config/routing.yaml:/etc/pi-agent/config/routing.yaml:ro
+      # Agent assets (../agents): profile definitions (../agents/<name>/) + shared runtime
+      # implementation (../agents/_runtime/bridge). Mounted INSIDE the config root so the container
+      # tree keeps the pinned shape the parser and DB rows expect: {configRoot}/agents/<name>/.
+      - ../agents:/etc/pi-agent/config/agents:ro
       # Host-managed secrets (decisions 50/54): the read-only sync PAT for the GET /user identity check.
-      # compose auto-creates ./secrets if absent; a missing PAT file is then a diagnosable config error.
-      - ./secrets:/etc/pi-agent/secrets:ro
+      # compose auto-creates ../secrets if absent; a missing PAT file is then a diagnosable config error.
+      - ../secrets:/etc/pi-agent/secrets:ro
     environment:
       ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
       ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
@@ -150,7 +156,7 @@ services:
       BuildWorker__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
       # Shared Runtime Bridge implementation (single copy, merged into every profile's pinned snapshot).
-      PI_AGENT_RUNTIME_BRIDGE_DIR: /etc/pi-agent/agents/runtime-bridge
+      PI_AGENT_RUNTIME_BRIDGE_DIR: /etc/pi-agent/config/agents/_runtime/bridge
       PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
       # Optional metadata pinned into agent profile versions (owner ruling: traceability only).
       PI_AGENT_SOURCE_COMMIT: ${PI_AGENT_SOURCE_COMMIT:-}
@@ -165,17 +171,19 @@ services:
 
   poller:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: Poller }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
     restart: unless-stopped
     volumes:
       # §16 polling knobs (decision 53: poll_interval / poll_overlap / per_page from system.yaml).
-      - ./config:/etc/pi-agent/config:ro
+      - ../deploy/config:/etc/pi-agent/config:ro
+      # §16 polling knobs (system.yaml only) — per-file mount (see runtime-api above).
+      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
       # The one read-only polling PAT for ALL configured repositories (decisions 50/65) —
       # the same github-sync-pat.txt the Config Loader uses.
-      - ./secrets:/etc/pi-agent/secrets:ro
+      - ../secrets:/etc/pi-agent/secrets:ro
     environment:
       ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
@@ -187,16 +195,16 @@ services:
 
   outbox-worker:
     build:
-      context: .
+      context: ../src
       dockerfile: Dockerfile
       args: { SERVICE: OutboxWorker }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
     restart: unless-stopped
     volumes:
       # The one §16 knob the outbox worker reads directly: outbox_retry_window (plan ruling 5).
-      - ./config:/etc/pi-agent/config:ro
+      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
       # Host-managed write PAT (decision 50): publishes orchestration-owned comments (task 03).
-      - ./secrets:/etc/pi-agent/secrets:ro
+      - ../secrets:/etc/pi-agent/secrets:ro
     environment:
       ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
       PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
@@ -211,7 +219,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-pi_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in src/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
       POSTGRES_DB: ${POSTGRES_DB:-pi_agent}
       BACKUP_DB_HOST: postgres
       BACKUPS_DIR: /backups
@@ -237,7 +245,7 @@ services:
       - backups:/backups
     entrypoint: ["/bin/sh", "/scripts/config-snapshot-loop.sh"]
 
-  # Centralized logging (config in src/logging/): every service logs §14 JSON to stdout and
+  # Centralized logging (config in deploy/logging/): every service logs §14 JSON to stdout and
   # Alloy ships it to Loki with a `service` label (compose service name); Grafana serves the
   # one provisioned log-list dashboard (Pi Agent Logs) on 127.0.0.1. No .NET or logging-driver
   # changes — docker-json-file stays, so `docker compose logs` keeps working.
@@ -272,7 +280,7 @@ services:
       - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in src/.env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in deploy/.env}
     volumes:
       - ./logging/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./logging/grafana/dashboards:/etc/grafana/dashboards:ro

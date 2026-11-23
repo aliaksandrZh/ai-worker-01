@@ -1,6 +1,6 @@
 namespace PiAgent.Hosts.Tests.Config;
 
-/// <summary>Shared test fixture: the shipping sample config-tree literals (parser, validator, loader tests; mirrored by src/config/).</summary>
+/// <summary>Shared test fixture: the shipping sample config-tree literals (parser, validator, loader tests; mirrored by deploy/config/ + agents/).</summary>
 public static class ConfigSamples
 {
     public const string System = """

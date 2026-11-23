@@ -293,6 +293,11 @@ public static class ConfigParser
         foreach (var profileDir in Directory.EnumerateDirectories(agentsPath).OrderBy(d => d, StringComparer.Ordinal))
         {
             var name = Path.GetFileName(profileDir);
+            if (name.StartsWith("_", StringComparison.Ordinal))
+                continue; // convention: `_`-prefixed agents/ subdirectories are shared runtime assets
+                          // (e.g. `_runtime/bridge`), not agent profiles — everything else must be one
+                          // (a directory without profile.yaml still aborts startup, so profile-name
+                          // typos fail closed as before)
             var relativeName = $"agents/{name}/profile.yaml";
             var profileYamlPath = Path.Combine(profileDir, "profile.yaml");
             if (!File.Exists(profileYamlPath))
