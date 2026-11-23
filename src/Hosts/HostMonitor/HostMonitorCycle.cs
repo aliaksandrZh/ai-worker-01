@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using PiAgent.Platform.Auth;
@@ -114,15 +115,4 @@ public sealed class HostMonitorCycle(
     }
 }
 
-// ---- telemetry envelope: the same shape the Runtime API's MonitorTelemetryApi expects ----
-
-public sealed record MonitorTelemetryRequest(DateTime ObservedAtUtc, MonitorContainerTelemetry[] Containers, MonitorStorageTelemetry? Storage);
-
-public sealed record MonitorContainerTelemetry(
-    string? ContainerId, string? Name, Guid? RunId, Guid? TaskId, string? State,
-    double? CpuPercent, int? ProcessCount, string[]? Processes, string[]? Binds, bool Busy, string? Note);
-
-public sealed record MonitorStorageTelemetry(
-    string Root, long? FreeBytes, long? UsedBytes, MonitorWorkflowDirTelemetry[] Directories);
-
-public sealed record MonitorWorkflowDirTelemetry(string Name, DateTime ModifiedAtUtc, long? SizeBytes);
+// ---- telemetry envelope: the shared Platform.Contracts copy (the Runtime API deserializes the same types) ----

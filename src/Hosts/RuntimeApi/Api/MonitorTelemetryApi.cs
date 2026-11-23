@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using PiAgent.RuntimeApi.Provisioning;
 using PiAgent.RuntimeApi.Runs;
 using PiAgent.RuntimeApi.Api;
@@ -8,17 +9,8 @@ using PiAgent.Platform.Auth;
 
 namespace PiAgent.RuntimeApi.Api;
 
-/// <summary>Telemetry payloads posted by the Execution Host Monitor (01 §2/04 §4, decision 62).</summary>
-public sealed record MonitorTelemetryRequest(DateTime ObservedAtUtc, MonitorContainerTelemetry[] Containers, MonitorStorageTelemetry? Storage);
-
-public sealed record MonitorContainerTelemetry(
-    string? ContainerId, string? Name, Guid? RunId, Guid? TaskId, string? State,
-    double? CpuPercent, int? ProcessCount, string[]? Processes, string[]? Binds, bool Busy, string? Note);
-
-public sealed record MonitorStorageTelemetry(
-    string Root, long? FreeBytes, long? UsedBytes, MonitorWorkflowDirTelemetry[] Directories);
-
-public sealed record MonitorWorkflowDirTelemetry(string Name, DateTime ModifiedAtUtc, long? SizeBytes);
+// The telemetry payload records (MonitorTelemetryRequest & co.) are the shared Platform.Contracts
+// copy — the Host Monitor serializes exactly these types; any field addition happens once. (01 §2/04 §4, decision 62).
 
 /// <summary>
 /// `POST /internal/runtime/monitor/telemetry` (04 §4, decision 62/65, ticket 13): the Execution Host
