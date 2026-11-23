@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Poller;
@@ -283,7 +284,8 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         await db.Runs.Where(r => r.TaskId == task.Id).ExecuteUpdateAsync(set => set
             .SetProperty(r => r.Status, RunStatuses.Succeeded)
             .SetProperty(r => r.CompletedAt, DateTime.UtcNow));
-        var consumer = new RunTerminalConsumer(harness.Services.GetRequiredService<IServiceScopeFactory>());
+        var consumer = new RunTerminalConsumer(harness.Services.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<RunTerminalConsumer>.Instance);
         await consumer.RunCycleAsync(default);
         db.ChangeTracker.Clear();
         Assert.Equal(OrchestrationTaskStatuses.Succeeded, (await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == task.Id)).Status);

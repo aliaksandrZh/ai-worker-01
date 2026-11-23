@@ -168,6 +168,9 @@ public sealed class CommentCommandProcessor(
                     return;
                 }
                 command = accepted;
+                logger.LogInformation(
+                    "command {commandId} received: /{command} from {author} on work item {workItemId} (event {eventId})",
+                    command.Id, command.CommandName ?? "(mention)", comment.AuthorLogin, workItem.Id, eventId);
             }
             else if (command.Status != AgentCommandStatuses.Received)
             {
@@ -197,7 +200,7 @@ public sealed class CommentCommandProcessor(
             // Commands rejected by the authorization gate keep their reason — never re-admitted here.
             var outcome = command.Status == AgentCommandStatuses.Authorized
                 ? await CommandAdmission.AdmitAsync(db, command, workItem, repository,
-                    configurationState.BotLogin, cancellationToken)
+                    configurationState.BotLogin, cancellationToken, logger)
                 : null;
             if (outcome is { } rejection)
                 await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);

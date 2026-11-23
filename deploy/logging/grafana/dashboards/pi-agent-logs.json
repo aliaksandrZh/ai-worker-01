@@ -40,16 +40,16 @@
           "refId": "A",
           "queryType": "range",
           "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{service=~\"$service\"}"
+          "expr": "{service=~\"$service\"} | json | line_format `{{.service}} | {{.message}}`"
         }
       ],
       "options": {
         "sortOrder": "Descending",
         "wrapLogLines": true,
         "showTime": true,
-        "showLabels": true,
+        "showLabels": false,
         "showCommonLabels": false,
-        "prettifyLogMessage": false,
+        "prettifyLogMessage": true,
         "enableLogDetails": true,
         "enableInfiniteScrolling": true
       }

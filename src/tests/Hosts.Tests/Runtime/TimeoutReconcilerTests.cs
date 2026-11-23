@@ -424,7 +424,8 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         var consumer = new PiAgent.Orchestrator.Orchestration.RunTerminalConsumer(
             new ServiceCollection().AddDbContext<AppDbContext>(options => options
                 .UseNpgsql(postgres.ConnectionString).UseSnakeCaseNamingConvention()).BuildServiceProvider()
-            .GetRequiredService<IServiceScopeFactory>());
+            .GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<PiAgent.Orchestrator.Orchestration.RunTerminalConsumer>.Instance);
         try
         {
             await consumer.RunCycleAsync(default);

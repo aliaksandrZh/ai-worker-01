@@ -4,6 +4,7 @@ using PiAgent.RuntimeApi.Api;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
@@ -30,7 +31,8 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
                 .UseNpgsql(connectionString)
                 .UseSnakeCaseNamingConvention())
             .BuildServiceProvider()
-            .GetRequiredService<IServiceScopeFactory>());
+            .GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<RunTerminalConsumer>.Instance);
     }
 
     /// <summary>Starts a run: Task starting, Run running/terminal per the scenario.</summary>

@@ -71,7 +71,7 @@ public sealed class ReviewTriggerCycle(
         }
     }
 
-    private static async Task ProcessAsync(AppDbContext db, GitHubEvent githubEvent, string botLogin, CancellationToken cancellationToken)
+    private async Task ProcessAsync(AppDbContext db, GitHubEvent githubEvent, string botLogin, CancellationToken cancellationToken)
     {
         var workItem = await db.WorkItems.SingleOrDefaultAsync(w => w.Id == githubEvent.WorkItemId, cancellationToken);
         if (workItem is null || workItem.Type != WorkItemTypes.PullRequest || workItem.State != "open")
@@ -103,7 +103,7 @@ public sealed class ReviewTriggerCycle(
 
     /// <summary>Creates the automatic initial review when the three conditions hold.
     /// Every failing condition is a silent no-op — the event is consumed, nothing is created.</summary>
-    private static async Task TryCreateInitialReviewAsync(
+    private async Task TryCreateInitialReviewAsync(
         AppDbContext db, GitHubEvent githubEvent, WorkItem workItem, string botLogin, CancellationToken cancellationToken)
     {
         // Condition 1: the bot request is still active (read from the synced snapshot).
@@ -129,7 +129,12 @@ public sealed class ReviewTriggerCycle(
 
         // Condition 2: no automatic initial review was created yet (once per Workflow lifetime).
         if (workflow.InitialReviewCreatedAt is not null)
+        {
+            logger.LogInformation(
+                "review trigger event {eventId} consumed: initial review already exists for work item {workItemId}",
+                githubEvent.Id, workItem.Id);
             return;
+        }
         if (workflow.Status is WorkflowStatuses.Failed or WorkflowStatuses.Closed)
             return;
 
@@ -138,7 +143,12 @@ public sealed class ReviewTriggerCycle(
             t => t.WorkflowId == workflow.Id && t.Type == OrchestrationTaskTypes.Review && t.TriggerCommandId != null,
             cancellationToken);
         if (explicitReviewExists)
+        {
+            logger.LogInformation(
+                "review trigger event {eventId} consumed: explicit /review already ran for work item {workItemId}",
+                githubEvent.Id, workItem.Id);
             return;
+        }
 
         // The one-unfinished-Task-per-Workflow invariant — defer if another Task is in flight.
         if (await db.OrchestrationTasks.AnyAsync(
@@ -147,7 +157,12 @@ public sealed class ReviewTriggerCycle(
 
         var version = await ResolveReviewVersionAsync(db, repository, cancellationToken);
         if (version is null)
+        {
+            logger.LogInformation(
+                "review trigger event {eventId} consumed: no ready reviewer profile for work item {workItemId}",
+                githubEvent.Id, workItem.Id);
             return; // no ready reviewer profile: the review is not created (the ready/recheck path reports it)
+        }
 
         var maxSequence = await db.OrchestrationTasks
             .Where(t => t.WorkflowId == workflow.Id)
@@ -188,6 +203,9 @@ public sealed class ReviewTriggerCycle(
         workflow.CurrentTaskId = task.Id;
         workflow.StartedAt ??= now;
         workflow.UpdatedAt = now;
+        logger.LogInformation(
+            "review trigger: automatic review task {taskId} created for work item {workItemId} (event {eventId}, profile version {versionId})",
+            task.Id, workItem.Id, githubEvent.Id, version.Id);
     }
 
     /// <summary>Withdrawn request: cancel only a QUEUED automatic review (a running review is never
@@ -195,18 +213,22 @@ public sealed class ReviewTriggerCycle(
     /// the claim-time path's job (`JobQueueWorker`, reason `review_request_removed_before_execution`), so the
     /// Task/Job state machine has one writer. `TriggerGithubEventId` stays set, so a renewed request never
     /// starts a second automatic review (the Workflow guard is `InitialReviewCreatedAt`, never cleared).</summary>
-    private static async Task CancelQueuedInitialReviewAsync(AppDbContext db, WorkItem workItem, CancellationToken cancellationToken)
+    private async Task CancelQueuedInitialReviewAsync(AppDbContext db, WorkItem workItem, CancellationToken cancellationToken)
     {
         var workflow = await db.Workflows.SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
         if (workflow is null)
             return;
         // Mark the queued automatic review so the claim path cancels it before it starts.
-        await db.OrchestrationTasks
+        var cancelled = await db.OrchestrationTasks
             .Where(t => t.WorkflowId == workflow.Id
                 && t.Type == OrchestrationTaskTypes.Review
                 && t.TriggerGithubEventId != null
                 && t.Status == OrchestrationTaskStatuses.Queued)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.FailureReason, AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution), cancellationToken);
+        if (cancelled > 0)
+            logger.LogInformation(
+                "review trigger: review request removed — queued review for work item {workItemId} will be cancelled at claim",
+                workItem.Id);
     }
 
     private static async Task<AgentProfileVersion?> ResolveReviewVersionAsync(

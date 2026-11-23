@@ -177,6 +177,9 @@ public sealed class JobQueueWorker(
             task.ClaimedAt = now;
             metrics.RecordClaim();
             claimed.Add((job.Id, task.Id));
+            logger.LogInformation(
+                "job {jobId} claimed: task {taskId} ({type}, attempt {attempt}, workflow {workflowId})",
+                job.Id, task.Id, task.Type, job.Attempts, task.WorkflowId);
         }
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -222,8 +225,13 @@ public sealed class JobQueueWorker(
             ? await db.AgentCommands.SingleAsync(c => c.Id == commandId, cancellationToken)
             : null;
 
-        async Task CancelAsync(string reason) =>
+        async Task CancelAsync(string reason)
+        {
+            logger.LogInformation(
+                "task {taskId} cancelled at claim: {reason} (job {jobId})",
+                task.Id, reason, job.Id);
             await TaskLifecycle.CancelTaskAtClaimAsync(db, task, job, repository, workItem, reason, metrics, cancellationToken);
+        }
         async Task ReleaseAsync()
         {
             var now = DateTime.UtcNow;
@@ -315,6 +323,9 @@ public sealed class JobQueueWorker(
         if (preparation is null)
         {
             // serialization hook refused (a previous Run of this Workflow is still non-terminal)
+            logger.LogInformation(
+                "task {taskId} claim released: a previous Run of the workflow is still non-terminal",
+                task.Id);
             await ReleaseAsync();
             return;
         }
