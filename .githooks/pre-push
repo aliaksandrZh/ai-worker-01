@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Pre-push hook: forbid pushing to main.
+#
+# Skip with: git push --no-verify
+
+remote="$1"
+
+# Current branch
+branch="$(git symbolic-ref --short HEAD 2>/dev/null)"
+
+if [ "$branch" = "main" ]; then
+  echo >&2 "ERROR: pushing to 'main' is not allowed."
+  echo >&2 "Push to a feature branch instead:"
+  echo >&2 "  git checkout -b feature/my-change"
+  echo >&2 "To bypass this check (use with care): git push --no-verify"
+  exit 1
+fi
+
+exit 0
