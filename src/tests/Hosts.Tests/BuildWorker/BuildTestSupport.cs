@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using PiAgent.OutboxWorker.GitHub;
 using PiAgent.BuildWorker.Docker;
 using PiAgent.BuildWorker.Builds;

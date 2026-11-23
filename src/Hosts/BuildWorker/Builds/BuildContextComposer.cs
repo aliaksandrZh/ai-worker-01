@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using PiAgent.BuildWorker.Docker;
 using PiAgent.BuildWorker.Builds;
 using PiAgent.BuildWorker.Api;

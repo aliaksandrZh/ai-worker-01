@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -105,11 +106,11 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         return (profile, version);
     }
 
-    private static BuildStatusResponse Status(BuildJob job, string state, string? tag = null, string? imageId = "sha256:abc", string? log = "/var/lib/pi-agent/builds/logs/x.log") =>
-        new(job.Id, state, tag, imageId, imageId, log, state == WorkerBuildStates.Failed ? "docker_build_failed" : null,
-            state == WorkerBuildStates.Failed ? "docker build failed: RUN exited 1" : null);
+    private static BuildResponse Status(BuildJob job, string state, string? tag = null, string? imageId = "sha256:abc", string? log = "/var/lib/pi-agent/builds/logs/x.log") =>
+        new(job.Id, "stub", 1, state, tag, imageId, imageId, log, state == BuildStates.Failed ? BuildFailureCodes.DockerBuildFailed : null,
+            state == BuildStates.Failed ? "docker build failed: RUN exited 1" : null);
 
-    private static HttpResponseMessage Json(BuildStatusResponse status) => new(HttpStatusCode.OK)
+    private static HttpResponseMessage Json(BuildResponse status) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(JsonSerializer.Serialize(status, BuildStatuses.PayloadJson), Encoding.UTF8, "application/json"),
     };
@@ -221,14 +222,14 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(BuildJobStates.Polling, job.State);
 
         stub.Answer = request => request.Method == HttpMethod.Get
-            ? Json(new BuildStatusResponse(job.Id, WorkerBuildStates.Building, null, null, null, null, null, null))
+            ? Json(new BuildResponse(job.Id, "stub", 1, BuildStates.Building, null, null, null, null, null, null))
             : throw new InvalidOperationException("no dispatch expected");
         await worker.RunCycleAsync(TestToken);
         job = await db.BuildJobs.AsNoTracking().SingleAsync();
         Assert.Equal(BuildJobStates.Polling, job.State);
         Assert.Equal(0, job.Attempts);
 
-        stub.Answer = request => Json(Status(job, WorkerBuildStates.Succeeded, tag: $"agent-{profile.Name}:v2"));
+        stub.Answer = request => Json(Status(job, BuildStates.Succeeded, tag: $"agent-{profile.Name}:v2"));
         await worker.RunCycleAsync(TestToken);
         job = await db.BuildJobs.AsNoTracking().SingleAsync();
         Assert.Equal(BuildJobStates.Completed, job.State);
@@ -253,7 +254,7 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         await worker.RunCycleAsync(TestToken);
         var job = await db.BuildJobs.AsNoTracking().SingleAsync();
 
-        stub.Answer = request => Json(Status(job, WorkerBuildStates.Failed));
+        stub.Answer = request => Json(Status(job, BuildStates.Failed));
         await worker.RunCycleAsync(TestToken);
         job = await db.BuildJobs.AsNoTracking().SingleAsync();
         Assert.Equal(BuildJobStates.Failed, job.State);
@@ -307,7 +308,7 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         var job = await db.BuildJobs.AsNoTracking().SingleAsync();
 
         // tag mismatch + missing image id/digest/log reference — decision 81 validation rejects it
-        stub.Answer = _ => Json(new BuildStatusResponse(job.Id, WorkerBuildStates.Succeeded,
+        stub.Answer = _ => Json(new BuildResponse(job.Id, "stub", 1, BuildStates.Succeeded,
             "agent-somewhere-else:v9", null, null, null, null, null));
         await worker.RunCycleAsync(TestToken);
         job = await db.BuildJobs.AsNoTracking().SingleAsync();
@@ -333,7 +334,7 @@ public class BuildDispatchTests(PostgresFixture postgres) : IClassFixture<Postgr
         // "restart": a fresh worker instance over the same durable rows — polling continues with the same buildId
         var second = NewWorker(postgres.ConnectionString);
         second.Stub.Answer = request => request.Method == HttpMethod.Get
-            ? Json(Status(job, WorkerBuildStates.Succeeded, tag: $"agent-{profile.Name}:v2"))
+            ? Json(Status(job, BuildStates.Succeeded, tag: $"agent-{profile.Name}:v2"))
             : throw new InvalidOperationException("no redispatch expected (a worker restart resumes polling)");
         await second.Worker.RunCycleAsync(TestToken);
 

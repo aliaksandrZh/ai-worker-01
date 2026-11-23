@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using Microsoft.Extensions.Options;
 using System.Text;
 using System.Text.Json;

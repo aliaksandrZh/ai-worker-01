@@ -1,3 +1,4 @@
+using PiAgent.Platform.Contracts;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -202,10 +203,10 @@ public sealed class ProfileBuildWorker(
             }
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            BuildStatusResponse? status;
+            BuildResponse? status;
             try
             {
-                status = JsonSerializer.Deserialize<BuildStatusResponse>(body, BuildStatuses.PayloadJson);
+                status = JsonSerializer.Deserialize<BuildResponse>(body, BuildStatuses.PayloadJson);
             }
             catch (JsonException exception)
             {
@@ -215,15 +216,15 @@ public sealed class ProfileBuildWorker(
 
             switch (status?.State)
             {
-                case WorkerBuildStates.Queued:
-                case WorkerBuildStates.Building:
+                case BuildStates.Queued:
+                case BuildStates.Building:
                     job.Attempts = 0; // successful contact
                     job.NextRetryAt = null;
                     job.LastError = null;
                     job.UpdatedAt = DateTime.UtcNow;
                     await db.SaveChangesAsync(cancellationToken);
                     return;
-                case WorkerBuildStates.Succeeded:
+                case BuildStates.Succeeded:
                     if (ValidateSuccess(status, profile, version) is { } violation)
                     {
                         metrics.InvalidPollResultsTotal++;
@@ -232,7 +233,7 @@ public sealed class ProfileBuildWorker(
                     }
                     await CompleteJobAsync(db, job, version, status, cancellationToken);
                     return;
-                case WorkerBuildStates.Failed:
+                case BuildStates.Failed:
                     await FailJobAsync(db, job, version, status.ErrorCode, status.ErrorMessage ?? "the Build Worker reported a failed build result", cancellationToken);
                     return;
                 default:
@@ -245,7 +246,7 @@ public sealed class ProfileBuildWorker(
 
     /// <summary>Decision 81: the Orchestrator validates the polled result before any version transition —
     /// the local image tag must match the pinned convention and ID/digest/log reference must be present.</summary>
-    private string? ValidateSuccess(BuildStatusResponse status, AgentProfile profile, AgentProfileVersion version)
+    private string? ValidateSuccess(BuildResponse status, AgentProfile profile, AgentProfileVersion version)
     {
         var expectedTag = BuildStatuses.ImageTagFor(profile.Name, version.Version);
         if (!string.Equals(status.ImageTag, expectedTag, StringComparison.Ordinal))
@@ -260,7 +261,7 @@ public sealed class ProfileBuildWorker(
     }
 
     private async Task CompleteJobAsync(
-        AppDbContext db, BuildJob job, AgentProfileVersion version, BuildStatusResponse status, CancellationToken cancellationToken)
+        AppDbContext db, BuildJob job, AgentProfileVersion version, BuildResponse status, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
         job.State = BuildJobStates.Completed;
