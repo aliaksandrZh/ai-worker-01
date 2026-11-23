@@ -99,10 +99,12 @@ public sealed record BuildWorkerHost(WebApplication App, HttpClient Client, stri
         return Client.PostAsync("/internal/builds", new StringContent(body, Encoding.UTF8, "application/json"));
     }
 
-    /// <summary>Waits until the build reaches a terminal state (bounded, low-noise polling).</summary>
+    /// <summary>Waits until the build reaches a terminal state (bounded, low-noise polling).
+    /// The 30 s default is CI-runner headroom: a loaded runner once ate the whole 10 s budget
+    /// without the build pipeline reaching its terminal state (observed as a flake).</summary>
     public async Task<(bool Terminal, BuildResponse? Status)> WaitTerminalAsync(Guid buildId, TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
         while (DateTime.UtcNow < deadline)
         {
             var response = await Client.GetAsync($"/internal/builds/{buildId}");
