@@ -41,3 +41,6 @@ deploy/.env
 # pi-agent control plane — host-run debugging (Rider): per-host env files carry secrets,
 # keep dev/env/*.env.example tracked
 dev/env/*.env
+
+# macOS Finder metadata
+**/.DS_Store
