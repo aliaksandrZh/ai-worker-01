@@ -26,6 +26,8 @@ builder.Services.AddSingleton(new GitHubReadClient(
     "the Poller syncs with a fine-grained read-only PAT")));
 
 builder.Services.AddSingleton(new PollerState());
+// Projects v2 boards (projects.yaml): which user-owned boards the projects pass lists and diffs.
+builder.Services.AddSingleton(ProjectSyncConfig.Read(builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config"));
 builder.Services.AddSingleton<IRepositoryStream, IssuesStream>();
 builder.Services.AddSingleton<IRepositoryStream, PullRequestsStream>();
 builder.Services.AddSingleton<IRepositoryStream, PrReviewsStream>();
@@ -33,7 +35,9 @@ builder.Services.AddSingleton<IRepositoryStream, IssueCommentsStream>();
 builder.Services.AddSingleton<IRepositoryStream, PrReviewCommentsStream>();
 builder.Services.AddSingleton<IRepositoryStream, TimelineStream>();
 builder.Services.AddSingleton<IRepositoryStream, DeletedCommentSweepStream>();
-builder.Services.AddSingleton<IWorkerCycle, PollerCycle>(); 
+builder.Services.AddSingleton<IWorkerCycle, PollerCycle>();
+// Projects pass AFTER the repository-streams cycle: it honors the rate-limit pause that cycle sets.
+builder.Services.AddSingleton<IWorkerCycle, ProjectItemsCycle>();
 
 var app = builder.Build();
 app.MapPiEndpoints();

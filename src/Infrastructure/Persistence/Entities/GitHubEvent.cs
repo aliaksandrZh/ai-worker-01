@@ -18,6 +18,9 @@ public static class GitHubEventTypes
     public const string ReviewRequested = "review_requested";
     public const string ReviewRequestRemoved = "review_request_removed";
     public const string PullRequestSynchronized = "pull_request_synchronized";
+    public const string ProjectItemAdded = "project_item_added";
+    public const string ProjectItemUpdated = "project_item_updated";
+    public const string ProjectItemRemoved = "project_item_removed";
 }
 
 /// <summary>Detection path enumeration. Current sources: rest_resource_sync and
@@ -25,6 +28,8 @@ public static class GitHubEventTypes
 public static class GitHubEventSources
 {
     public const string RestResourceSync = "rest_resource_sync";
+    /// <summary>The Poller's Projects v2 pass (list-diff over `/users/{owner}/projectsV2/{n}/items`).</summary>
+    public const string ProjectItemsSync = "project_items_sync";
     public const string TimelineApi = "timeline_api";
     public const string SnapshotDiff = "snapshot_diff";
     public const string FullReconciliation = "full_reconciliation";

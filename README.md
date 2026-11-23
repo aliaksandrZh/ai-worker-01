@@ -30,6 +30,9 @@ One comment travels like this:
 1. **Sync** — the Poller pulls configured repos from the GitHub REST API and persists normalized
    issues, PRs, comments, reviews, and timeline events into PostgreSQL (per-stream cursors,
    ETag conditional requests, tombstones for deletions). No inbound webhook/IP needed.
+   Additionally, the Projects v2 pass lists the boards configured in `deploy/config/projects.yaml`
+   (`/users/{owner}/projectsV2/{number}/items`, sync + logs scope) and emits `project_item_*`
+   events for added/field-changed/removed items.
 2. **Admission** — the Orchestrator consumes events, parses bot-mention slash commands
    (`/plan`, `/implement`, `/test-cases`, …), checks permissions, routing rules, and Workflow
    state, then creates a Workflow (one per root work item), a Task, and a first Run.

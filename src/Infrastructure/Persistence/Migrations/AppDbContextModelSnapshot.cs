@@ -1135,6 +1135,123 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.ToTable("outbox_action", (string)null);
                 });
 
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ProjectItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_github");
+
+                    b.Property<string>("FieldValues")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("field_values");
+
+                    b.Property<long>("ItemId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("item_id");
+
+                    b.Property<string>("ItemNodeId")
+                        .HasColumnType("text")
+                        .HasColumnName("item_node_id");
+
+                    b.Property<DateTime>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_synced_at");
+
+                    b.Property<int?>("Number")
+                        .HasColumnType("integer")
+                        .HasColumnName("number");
+
+                    b.Property<Guid>("ProjectSyncId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("project_sync_id");
+
+                    b.Property<string>("RepositoryFullName")
+                        .HasColumnType("text")
+                        .HasColumnName("repository_full_name");
+
+                    b.Property<Guid?>("RepositoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("repository_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<DateTime>("UpdatedAtGithub")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_github");
+
+                    b.HasKey("Id")
+                        .HasName("pk_project_item");
+
+                    b.HasIndex("RepositoryId")
+                        .HasDatabaseName("ix_project_item_repository_id");
+
+                    b.HasIndex("ProjectSyncId", "ItemId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_project_item_project_sync_id_item_id");
+
+                    b.ToTable("project_item", (string)null);
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ProjectSync", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Etag")
+                        .HasColumnType("text")
+                        .HasColumnName("etag");
+
+                    b.Property<DateTime?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("LastSuccessAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_success_at");
+
+                    b.Property<string>("Owner")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.Property<int>("ProjectNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("project_number");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_project_sync");
+
+                    b.HasIndex("Owner", "ProjectNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ix_project_sync_owner_project_number");
+
+                    b.ToTable("project_sync", (string)null);
+                });
+
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Repository", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1966,6 +2083,22 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_outbox_action_repository_repository_id");
+                });
+
+            modelBuilder.Entity("PiAgent.Infrastructure.Persistence.ProjectItem", b =>
+                {
+                    b.HasOne("PiAgent.Infrastructure.Persistence.ProjectSync", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectSyncId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_project_item_project_sync_project_sync_id");
+
+                    b.HasOne("PiAgent.Infrastructure.Persistence.Repository", null)
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_project_item_repository_repository_id");
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.Run", b =>

@@ -49,6 +49,30 @@ public sealed record ReviewRequestEventPayload(
     [property: JsonPropertyName("pr_number")] long PrNumber,
     [property: JsonPropertyName("reviewer")] string Reviewer);
 
+/// <summary>One listed Projects v2 item mapped defensively from the REST item payload:</summary>
+public sealed record ProjectItemSnapshot(
+    long ItemId,
+    string? ItemNodeId,
+    string ContentType,
+    string? RepositoryFullName,
+    int? Number,
+    string Title,
+    IReadOnlyList<ProjectFieldValue> Fields,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+/// <summary>One item field value in canonical form: single-select options collapse to their
+/// `name`, everything else to its raw JSON text — enough for the update diff and the log line.</summary>
+public sealed record ProjectFieldValue(long Id, string? Name, string Value);
+
+public sealed record ProjectItemEventPayload(
+    [property: JsonPropertyName("project")] string Project,
+    [property: JsonPropertyName("item_id")] long ItemId,
+    [property: JsonPropertyName("content_type")] string ContentType,
+    [property: JsonPropertyName("number")] int? Number,
+    [property: JsonPropertyName("repository")] string? Repository,
+    [property: JsonPropertyName("changes")] IReadOnlyDictionary<string, string>? Changes);
+
 public sealed record CommentCreatedEventPayload(
     [property: JsonPropertyName("comment_id")] long CommentId,
     [property: JsonPropertyName("issue_number")] long IssueNumber,

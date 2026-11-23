@@ -1,0 +1,9 @@
+# Projects v2 boards the Poller syncs (items + field changes → project_item_* events,
+# logged by the Orchestrator). `owner` is the account owning the board (user-owned boards are
+# addressed as /users/{owner}/projectsV2/{number}); `number` comes from the board URL:
+#   https://github.com/users/<owner>/projects/<number>/views/...
+# The sync PAT needs read access to each configured board (the owner's PAT, or the board shared
+# with the PAT's account with read access).
+projects:
+  - owner: aliaksandrZh
+    number: 6
