@@ -48,22 +48,6 @@ One comment travels like this:
    (task failure, rejections, cancellations) go out through the durable Outbox with retry and
    dead-letter handling. Workflow storage is cleaned up when the root item closes.
 
-Services: `poller`, `orchestrator`, `runtime-api`, `outbox-worker`, `build-worker`, `host-monitor`
-(one executable each under `src/Hosts/`), plus `postgres`, `migrator`, `backups`, `config-snapshot`,
-and the log lake `loki` + `alloy` + `grafana` — every service's §14 JSON stdout lands in one
-Grafana log-list dashboard at http://localhost:3000 (`deploy/logging/`).
-Boundary rule: Host Monitor and Build Worker never touch PostgreSQL (enforced by
-`src/tests/Architecture.Tests`); they depend on the Docker socket only.
-
-## Layout
-
-| path | what |
-|---|---|
-| `src/` | the system itself — .NET 10 + EF Core 10/Npgsql + xUnit: `Platform/` (logging, health, auth, heartbeat plumbing), `Infrastructure/` (AppDbContext + migrations), `Hosts/` (RuntimeApi, Orchestrator, Poller, OutboxWorker, HostMonitor, BuildWorker), `Migrator/`, `agents/` (agent profiles + shared runtime bridge) , `tests/` (Testcontainers). Details + quick start: `src/README.md` |
-| `docs/komodo-vs-manual-docker.md` | the recorded Komodo trade-off analysis + the decision to drop it (decision 82) |
-| `docs/pi-agent-architecture/` | the accepted spec: architecture + flows, data model, state machines, API contracts, decisions 26–81. Frozen |
-| `docs/tasks/` | implementation tickets (01-stack-and-skeleton … 21-acceptance-readiness) tracking what is done |
-| `Taskfile.yml` | `task stack` / `stack-rebuild` / `stack-logs` / `stack-down` (control plane) |
 
 ## Quick start
 
