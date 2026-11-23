@@ -21,7 +21,9 @@ builder.Services.AddSingleton(Options.Create(PollerConfig.Read(
     builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config")));
 builder.Services.AddSingleton(new GitHubReadClient(
     new HttpClient { BaseAddress = new Uri("https://api.github.com/"), Timeout = TimeSpan.FromSeconds(30) },
-    PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_PAT_FILE"], "PI_AGENT_GITHUB_PAT_FILE")));
+    PiAgent.Platform.Secrets.PatFile.Read(builder.Configuration["PI_AGENT_GITHUB_PAT_FILE"], "PI_AGENT_GITHUB_PAT_FILE",
+    // the fine-grained read-only sync PAT (decisions 50/65) — messages preserved verbatim
+    "the Poller syncs with a fine-grained read-only PAT (decision 50)")));
 
 builder.Services.AddSingleton(new PollerState());
 builder.Services.AddSingleton<IRepositoryStream, IssuesStream>();
