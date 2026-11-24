@@ -138,6 +138,14 @@ public sealed class ProjectEventLogCycle(
                 githubEvent.Id);
             return false;
         }
+        if (!AiScopeLabels.HasScope(workItem, OrchestrationTaskTypes.Plan))
+        {
+            // scope gate: everything must converge — the transition without the AI:Plan label is nothing
+            logger.LogInformation("plan trigger: event {eventId} consumed — {label} is not on {workItem} (scope gate)",
+                githubEvent.Id, AiScopeLabels.Plan, Label(workItem, await db.Repositories.AsNoTracking()
+                    .SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken)));
+            return false;
+        }
 
         // Currency check: the trigger reacts to the recorded transition, but a plan for an item that
         // has since left `to` (a replayed/deferred event, or the human moved the card back) is noise —

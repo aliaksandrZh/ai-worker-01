@@ -81,7 +81,9 @@ public static class CommandTestSupport
             State = "open",
             AuthorLogin = author ?? "someone",
             Assignees = "[]",
-            Labels = "[]",
+            // the AI-scope labels default ON in the shared seed: admission tests exercise the gates
+            // downstream of the scope check (which has its own tests overriding this to "[]")
+            Labels = "[\"AI:Plan\",\"AI:Code\",\"AI:Review\",\"AI:Test\"]",
             CreatedAtGithub = DateTime.UtcNow.AddDays(-1),
             UpdatedAtGithub = DateTime.UtcNow,
             LastSyncedAt = DateTime.UtcNow,

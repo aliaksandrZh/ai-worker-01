@@ -29,6 +29,10 @@ public static class AgentCommandRejectionReasons
     public const string AgentProfileNotConfigured = "agent_profile_not_configured";
     public const string AgentImageNotReady = "agent_image_not_ready";
     public const string PlanNotAvailable = "plan_not_available";
+    /// <summary>SILENT admission gate: the item does not carry the task type's AI-scope label
+    /// (AI:Plan/AI:Code/AI:Review/AI:Test) — the command is stored rejected but never answered.
+    /// The owner adds the label; the scope-label scanner then starts the run when conditions converge.</summary>
+    public const string LabelScopeMissing = "label_scope_missing";
     /// <summary>/retry rejected — the most recent non-cancelled task is not a failed one.</summary>
     public const string TaskNotRetryable = "task_not_retryable";
     /// <summary>/retry rejected — the pinned profile version is disabled or not `ready`.</summary>

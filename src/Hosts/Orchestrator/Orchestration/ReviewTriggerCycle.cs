@@ -90,6 +90,8 @@ public sealed class ReviewTriggerCycle(
             case GitHubEventTypes.WorkItemUpdated:
                 if (!IsDraftToReady(githubEvent) || workItem.Draft != false)
                     return;
+                if (!AiScopeLabels.HasScope(workItem, OrchestrationTaskTypes.Review))
+                    return; // scope gate: the draft→ready path requires the AI:Review label too
                 await TryCreateInitialReviewAsync(db, githubEvent, workItem, botLogin, cancellationToken);
                 return;
 
@@ -108,6 +110,9 @@ public sealed class ReviewTriggerCycle(
     {
         // Condition 1: the bot request is still active (read from the synced snapshot).
         if (!RequestedReviewers(workItem).Contains(botLogin, StringComparer.OrdinalIgnoreCase))
+            return;
+        // Scope gate: no task-producing signal runs without the item's exact AI-scope label.
+        if (!AiScopeLabels.HasScope(workItem, OrchestrationTaskTypes.Review))
             return;
 
         var repository = await db.Repositories.SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);

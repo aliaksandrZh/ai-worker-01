@@ -247,10 +247,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<OrchestrationTask>(entity =>
         {
-            // Every Task carries at least one trigger reference: a command
-            // row for command-created Tasks, or the producing GitHub event for system-created ones.
-            entity.ToTable("task", tb => tb.HasCheckConstraint("ck_task_has_trigger",
-                "trigger_command_id IS NOT NULL OR trigger_github_event_id IS NOT NULL"));
+            // Trigger references by origin: a command row for command-created Tasks, the producing
+            // GitHub event for event-created system Tasks (automatic review, board plan trigger),
+            // and both NULL for scope-label-scanner Tasks (LabelTriggerCycle re-derives the
+            // decision from the synced state every tick, so there is no event to carry).
+            entity.ToTable("task");
             entity.HasIndex(t => new { t.WorkflowId, t.Sequence }).IsUnique();
             entity.HasIndex(t => new { t.Status, t.CreatedAt });
             // One command creates at most one Task
