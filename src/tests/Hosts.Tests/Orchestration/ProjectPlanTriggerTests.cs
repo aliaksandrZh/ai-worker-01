@@ -22,6 +22,10 @@ namespace PiAgent.Hosts.Tests.Orchestration;
 public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private const string Board = "aliaksandrZh/7";
+
+    /// <summary>Postgres timestamptz stores microseconds; a raw UtcNow carries 100ns ticks that
+    /// get truncated on the write-back — seed timestamps pre-truncated so strict equality holds.</summary>
+    private static DateTime Micros(DateTime value) => new(value.Ticks / 10 * 10, DateTimeKind.Utc);
     private static readonly ProjectPlanTrigger Trigger = new("aliaksandrZh", 7, "Status", "Backlog", "Clarifying");
     private static CancellationToken TestToken => default;
 
@@ -72,7 +76,7 @@ public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<P
                 repository = "octo-org/example",
                 changes = new Dictionary<string, string> { [field] = $"{from} -> {to}" },
             }),
-            OccurredAtGithub = DateTime.UtcNow.AddMinutes(-5),
+            OccurredAtGithub = Micros(DateTime.UtcNow.AddMinutes(-5)),
             ReceivedAt = DateTime.UtcNow,
             ProcessingStatus = GitHubEventStatuses.Pending,
         };
