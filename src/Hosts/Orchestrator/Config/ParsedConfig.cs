@@ -33,13 +33,12 @@ public sealed record ProjectBoardTrigger(
 /// One Projects v2 board status config (projects.yaml `ai_statuses`): the column names the
 /// Orchestrator drives on the `owner/number` board — `processing` when a run is handed off
 /// (AI Processing), `review` when an implement Task succeeds (the PR is up). Null entries mean
-/// "do not move the board for this state". `code_lock_statuses` are the columns where the MANUAL
-/// /code is rejected (the automation owns the card there — the auto_code trigger + the running
-/// implement Task); an item not on a board (or on a board without this key) is not locked.
-/// Values compare ordinal (exact-case option names).
+/// "do not move the board for this state". `code_statuses` are the columns the MANUAL /code is
+/// allowed in (STATUS + LABEL holds for the manual command too); an item not on a board (or on a
+/// board without this key) cannot be verified — fail open. Values compare ordinal (exact-case).
 /// </summary>
 public sealed record ProjectStatusConfig(string Owner, int Number, string StatusField, string? Processing,
-    string? Review, IReadOnlyList<string>? CodeLockStatuses = null)
+    string? Review, IReadOnlyList<string>? CodeStatuses = null)
 {
     public string Board => $"{Owner}/{Number}";
 }

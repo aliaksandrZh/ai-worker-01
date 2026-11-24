@@ -272,7 +272,7 @@ public static class ConfigParser
         [YamlMember(Alias = "status_field")] public string? StatusField { get; set; }
         [YamlMember(Alias = "processing")] public string? Processing { get; set; }
         [YamlMember(Alias = "review")] public string? Review { get; set; }
-        [YamlMember(Alias = "code_lock_statuses")] public List<string>? CodeLockStatuses { get; set; }
+        [YamlMember(Alias = "code_statuses")] public List<string>? CodeStatuses { get; set; }
     }
 
     private static (List<ProjectBoardTrigger> Triggers, List<ProjectStatusConfig> StatusConfigs) ParseProjects(string path)
@@ -319,7 +319,7 @@ public static class ConfigParser
                     string.IsNullOrWhiteSpace(statuses.StatusField) ? "Status" : statuses.StatusField.Trim(),
                     string.IsNullOrWhiteSpace(statuses.Processing) ? null : statuses.Processing.Trim(),
                     string.IsNullOrWhiteSpace(statuses.Review) ? null : statuses.Review.Trim(),
-                    (statuses.CodeLockStatuses ?? [])
+                    (statuses.CodeStatuses ?? [])
                         .Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList()));
             }
         }

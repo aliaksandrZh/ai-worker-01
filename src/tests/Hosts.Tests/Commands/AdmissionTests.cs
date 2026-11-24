@@ -195,35 +195,36 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
     }
 
     [Fact]
-    public async Task CodeInLockedColumn_RejectedBeforeEverythingElse()
+    public async Task CodeInAllowedColumn_AdmissionContinues()
     {
         var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
         await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
 
-        var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
-            botLogin: null, default, boardStatus: "In Progress", codeLockStatuses: ["In Progress", "Ready"]);
-        await db.SaveChangesAsync();
-
-        Assert.NotNull(outcome);
-        Assert.Equal(AgentCommandRejectionReasons.CodeLockedByBoard, outcome!.Reason);
-        Assert.False(outcome.Silent); // the human gets a reply explaining the lock
-        Assert.False(await db.Workflows.AsNoTracking().AnyAsync());
-    }
-
-    [Fact]
-    public async Task CodeInUnlockedColumn_TheBoardGateDoesNotFire()
-    {
-        var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
-        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
-
-        // Backlog is unlocked: the flow continues to the NEXT gate (no plan) — not the board lock
-        foreach (var column in new[] { "Backlog", "Clarifying", "In Review", "Testing" })
+        // Ready / In Progress — the allowed columns: the flow continues to the NEXT gate (no plan)
+        foreach (var column in new[] { "Ready", "In Progress" })
         {
             var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
-                botLogin: null, default, boardStatus: column, codeLockStatuses: ["In Progress", "Ready"]);
+                botLogin: null, default, boardStatus: column, codeStatuses: ["Ready", "In Progress"]);
             Assert.NotNull(outcome);
             Assert.Equal(AgentCommandRejectionReasons.PlanNotAvailable, outcome!.Reason);
         }
+    }
+
+    [Fact]
+    public async Task CodeInDisallowedColumn_RejectedWithVisibleReply()
+    {
+        var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+
+        foreach (var column in new[] { "Backlog", "Clarifying", "In Review", "Testing" })
+        {
+            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
+                botLogin: null, default, boardStatus: column, codeStatuses: ["Ready", "In Progress"]);
+            Assert.NotNull(outcome);
+            Assert.Equal(AgentCommandRejectionReasons.CodeBoardStatusNotAllowed, outcome!.Reason);
+            Assert.False(outcome.Silent); // the human gets a reply explaining the allowed columns
+        }
+        Assert.False(await db.Workflows.AsNoTracking().AnyAsync());
     }
 
     [Fact]
@@ -234,7 +235,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
 
         // boardStatus null = the item is not on a board — fail open, the next gate answers
         var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
-            botLogin: null, default, boardStatus: null, codeLockStatuses: ["In Progress", "Ready"]);
+            botLogin: null, default, boardStatus: null, codeStatuses: ["Ready", "In Progress"]);
         Assert.NotNull(outcome);
         Assert.Equal(AgentCommandRejectionReasons.PlanNotAvailable, outcome!.Reason);
     }

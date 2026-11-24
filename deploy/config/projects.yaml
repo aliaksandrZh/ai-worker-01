@@ -18,10 +18,9 @@
 # Board status config (optional `ai_statuses`): the columns the Orchestrator itself moves on the
 # board — `processing` when a run is handed off to the Runtime API (the item is AI Processing),
 # `review` when an implement Task succeeds (the pull request is up). A null/absent key means "do
-# not move the board for that state". `code_lock_statuses` are the columns where the MANUAL /code
-# is rejected (the automation owns the card there: the auto_code trigger fired and the implement
-# task runs / just ran); everywhere else — Backlog, Clarifying, In Review, Testing — manual /code
-# works. An item not on the board is not locked. Values are exact-case single-select option names.
+# not move the board for that state". `code_statuses` are the columns the MANUAL /code is allowed
+# in (STATUS + LABEL holds for the manual command too: Ready / In Progress); an item not on the
+# board is not verified (fail open). Values are exact-case single-select option names.
 projects:
   - owner: aliaksandrZh
     number: 7
@@ -37,4 +36,4 @@ projects:
       status_field: Status
       processing: In Progress
       review: In Review
-      code_lock_statuses: [In Progress, Ready]
+      code_statuses: [Ready, In Progress]
