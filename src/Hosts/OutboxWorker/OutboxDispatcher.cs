@@ -45,6 +45,12 @@ public sealed class OutboxDispatcher(
 
     private async Task DeliverAsync(OutboxActionStore store, AppDbContext db, OutboxAction action, CancellationToken cancellationToken)
     {
+        if (action.ActionType == OutboxActionTypes.AiLabel)
+        {
+            await DeliverAiLabelAsync(store, db, action, cancellationToken);
+            return;
+        }
+
         var payload = ParsePayload(action.Payload);
         if (payload is null)
         {
@@ -116,6 +122,90 @@ public sealed class OutboxDispatcher(
                 logger.LogWarning("outbox transient delivery failure {action_id} (attempt {attempts}) retry in {delay}: {error}",
                     action.Id, action.Attempts, delay, exception.Message);
             }
+        }
+    }
+
+    /// <summary>The AI-label transition: no marker/duplicate-suppression probe is needed — the
+    /// apply is idempotent by construction (remove-other-three + add-target; re-delivery after an
+    /// ambiguous failure re-applies the same state). Error classification is identical to comments:
+    /// GitHub statuses the client did not translate to success go through the same permanent/transient split.</summary>
+    private async Task DeliverAiLabelAsync(OutboxActionStore store, AppDbContext db, OutboxAction action,
+        CancellationToken cancellationToken)
+    {
+        var (issueNumber, target) = ParseAiLabelPayload(action.Payload);
+        if (issueNumber is null)
+        {
+            var reason = $"payload is not a valid ai_label payload: {Summarize(action.Payload)}";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id} after {attempts} attempts: {error}",
+                action.Id, action.Attempts, reason);
+            return;
+        }
+
+        var repository = await db.Repositories.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Id == action.RepositoryId, cancellationToken);
+        if (repository is null)
+        {
+            var reason = $"outbox action {action.Id}: repository {action.RepositoryId} no longer exists";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id}: {error}", action.Id, reason);
+            return;
+        }
+
+        try
+        {
+            await client.ApplyAiStateLabelAsync(repository.Owner, repository.Name, issueNumber.Value, target, cancellationToken);
+            await store.MarkCompletedAsync(action.Id, _dispatcherId, cancellationToken);
+            logger.LogInformation("outbox ai_label delivered {action_id} to {repo}/{issue_number}: {label} (attempts {attempts})",
+                action.Id, repository.FullName, issueNumber, target ?? "(clear)", action.Attempts);
+        }
+        catch (GitHubDeliveryException exception)
+        {
+            if (exception.Status is null)
+            {
+                var error = $"ambiguous: {exception.Message}";
+                await store.MarkTransientFailureAsync(action.Id, _dispatcherId, error, Backoff(action.Attempts), cancellationToken);
+                logger.LogWarning("outbox ambiguous ai_label delivery {action_id} (attempt {attempts}): {error}",
+                    action.Id, action.Attempts, error);
+            }
+            else if (IsPermanent(exception))
+            {
+                await store.MarkDeadLetterAsync(action.Id, _dispatcherId, exception.Message, cancellationToken);
+                logger.LogWarning("outbox dead_letter {action_id} after {attempts} attempts: {error}",
+                    action.Id, action.Attempts, exception.Message);
+            }
+            else
+            {
+                var delay = Backoff(action.Attempts);
+                if (exception.RetryAfterSeconds is { } retryAfter)
+                    delay = TimeSpan.FromTicks(Math.Min(MaxInterval.Ticks, Math.Max(delay.Ticks, TimeSpan.FromSeconds(retryAfter).Ticks)));
+                await store.MarkTransientFailureAsync(action.Id, _dispatcherId, exception.Message, delay, cancellationToken);
+                logger.LogWarning("outbox transient ai_label delivery failure {action_id} (attempt {attempts}) retry in {delay}: {error}",
+                    action.Id, action.Attempts, delay, exception.Message);
+            }
+        }
+    }
+
+    /// <summary>Payload contract: `{ "issue_number": long, "label": string|null }` — null label = clear.</summary>
+    private static (long? IssueNumber, string? Target) ParseAiLabelPayload(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var issueNumber = document.RootElement.GetProperty("issue_number").GetInt64();
+            var labelElement = document.RootElement.GetProperty("label");
+            if (issueNumber <= 0)
+                return (null, null);
+            return labelElement.ValueKind == JsonValueKind.Null
+                ? (issueNumber, null)
+                : labelElement.ValueKind == JsonValueKind.String
+                    ? (issueNumber, labelElement.GetString())
+                    : (null, null);
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException
+            or InvalidOperationException or FormatException)
+        {
+            return (null, null);
         }
     }
 
