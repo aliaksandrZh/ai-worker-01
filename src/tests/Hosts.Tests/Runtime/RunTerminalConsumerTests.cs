@@ -343,6 +343,9 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         // the failed attempt's container goes to desired `stopped`
         var container = await db.ContainerInstances.AsNoTracking().SingleAsync(c => c.RunId == originalRun.Id);
         Assert.Equal(ContainerDesiredStates.Stopped, container.DesiredState);
+        // the AI-state labels are untouched on a silent retry: the item stays AI Processing
+        // (set at handoff) — AI Failed is reserved for the FINAL failure
+        Assert.Empty(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync());
     }
 
     [Fact]
@@ -373,6 +376,11 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal(RunErrorCodes.StartupTimeout, task.FailureReason);
         Assert.NotNull(task.CompletedAt);
         Assert.Equal(1, task.AutomaticRetriesUsed); // never grew past the exhausted budget
+        // the budget is exhausted — the work is OVER unsuccessfully: exactly the AI Failed transition
+        var failedLabel = Assert.Single(await db.OutboxActions.AsNoTracking()
+            .Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync());
+        using var labelPayload = System.Text.Json.JsonDocument.Parse(failedLabel.Payload);
+        Assert.Equal(AiStateLabels.Failed, labelPayload.RootElement.GetProperty("label").GetString());
         var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId);
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
         Assert.Null(workflow.CurrentTaskId);
