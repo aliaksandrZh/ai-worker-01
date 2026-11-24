@@ -259,9 +259,7 @@ public static class CommandAdmission
     /// agent's own work, not user input). All lookups are fail-open: detection gaps can only allow a
     /// repeat, never deny one; a pre-watermark previous Task (TriggerAtGithub null) never rejects.
     /// </summary>
-    // Internal: shared with LabelTriggerCycle — the scanner applies the identical "was there a new
-    // human signal since the previous run" rule before re-triggering a task type that already ran.
-    internal static async Task<bool> IsNoNewInputRepeatAsync(
+    private static async Task<bool> IsNoNewInputRepeatAsync(
         AppDbContext db, Workflow workflow, string taskType, WorkItem workItem,
         string? botLogin, CancellationToken cancellationToken)
     {

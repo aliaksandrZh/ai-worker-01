@@ -20,10 +20,9 @@ namespace PiAgent.Orchestrator.Orchestration;
 ///   non-draft PR with no initial review yet and no explicit `/review` (the label IS the request);
 ///   TestDesign — not implemented (no routing rule), so it silently never fires;
 /// - the profile version is `ready` (else the tick silently skips — retried next tick);
-/// - the run-decision rule (owner ruling): NO previous run of this type → run; a previous run
-///   with no new human signal since its anchor → no-new-input, nothing; a previous run WITH new
-///   human signal → run again. A failed/cancelled previous run is never re-triggered (the /retry
-///   path owns that); a `blocked` one waits for the human's answer.
+/// - the run-decision rule (owner ruling): the scanner auto-starts a type ONLY if it never ran
+///   before on this item — a standing label plus a new human comment does NOT re-run anything
+///   (that needs an explicit `/plan`); a failed/cancelled previous run stays with `/retry`.
 /// Created Tasks are scanner-created (no command, no event — the relaxed `ck_task_has_trigger`),
 /// carry the same Workflow/Task/Job shape as every other creator, and mark `AI Scheduled`.
 /// </summary>
@@ -40,7 +39,6 @@ public sealed class LabelTriggerCycle(
     {
         if (!configurationState.Synchronized || string.IsNullOrEmpty(configurationState.BotLogin))
             return; // cold-start gate
-        var botLogin = configurationState.BotLogin;
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -63,7 +61,7 @@ public sealed class LabelTriggerCycle(
                     continue;
                 try
                 {
-                    await TryStartAsync(db, item, taskType, botLogin, cancellationToken);
+                    await TryStartAsync(db, item, taskType, cancellationToken);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -80,7 +78,7 @@ public sealed class LabelTriggerCycle(
 
     /// <summary>All failing conditions are silent per-item skips — the scanner re-derives them next tick.</summary>
     private async Task TryStartAsync(AppDbContext db, Candidate item, string taskType,
-        string botLogin, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         var repository = await db.Repositories.AsNoTracking()
             .SingleOrDefaultAsync(r => r.Id == item.RepositoryId, cancellationToken);
@@ -99,25 +97,12 @@ public sealed class LabelTriggerCycle(
                 t => t.WorkflowId == workflow.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
             return; // the single slot is occupied — the scanner fires when it frees
 
-        // The run-decision rule: the previous run of this type decides whether the label (re)starts one.
-        var previous = workflow is null
-            ? null
-            : await db.OrchestrationTasks.AsNoTracking()
-                .Where(t => t.WorkflowId == workflow.Id && t.Type == taskType)
-                .OrderByDescending(t => t.Sequence)
-                .Select(t => new { t.Id, t.Status, t.TriggerAtGithub })
-                .FirstOrDefaultAsync(cancellationToken);
-        if (previous is { } last)
-        {
-            if (last.Status != OrchestrationTaskStatuses.Succeeded)
-                return; // failed/cancelled → /retry owns it; blocked → the human answer owns it
-            if (last.TriggerAtGithub is not { } anchor
-                || await CommandAdmission.IsNoNewInputRepeatAsync(db, workflow!, taskType, workItem,
-                    botLogin, cancellationToken))
-                return; // ran before and nothing changed since its anchor → no-new-input
-            logger.LogInformation("label trigger: new human signal since {anchor} — re-triggering {taskType} on {repo}#{number}",
-                anchor, taskType, repository.FullName, item.Number);
-        }
+        // The owner's rule: the scanner auto-starts a type only if it never ran before on this
+        // item. A standing label plus a new human comment does NOT re-run anything (that needs an
+        // explicit /plan); a failed/cancelled previous run stays with /retry.
+        if (workflow is not null && await db.OrchestrationTasks.AsNoTracking()
+                .AnyAsync(t => t.WorkflowId == workflow.Id && t.Type == taskType, cancellationToken))
+            return;
 
         var (resolved, reason, detail) = await ProfileGate.ResolveAsync(db, repository, taskType, cancellationToken);
         if (resolved is null)

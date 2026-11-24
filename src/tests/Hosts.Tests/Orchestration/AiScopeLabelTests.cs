@@ -204,7 +204,8 @@ public class AiScopeLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
         await SeedBoardStatusAsync(db, workItem, "Clarifying");
         var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false);
         var workflowId = seeded.Workflow.Id;
-        // the anchor AFTER the seed's comment (-5 min): nothing human happened since the run
+        // the anchor BEFORE the seed's comment (-5 min): a fresh human comment exists, and the
+        // rule still says no auto re-run
         await db.OrchestrationTasks.Where(t => t.Id == seeded.Task.Id)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.Status, OrchestrationTaskStatuses.Succeeded)
@@ -218,7 +219,7 @@ public class AiScopeLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
     }
 
     [Fact]
-    public async Task Scanner_PreviousPlanWithNewHumanSignal_RunsAgain()
+    public async Task Scanner_PreviousPlan_NewHumanComment_DoesNotRestart_ExplicitCommandOwnsIt()
     {
         await postgres.ResetAsync();
         await using var db = postgres.NewDbContext();
@@ -252,8 +253,10 @@ public class AiScopeLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
         await NewScanner(postgres).RunCycleAsync(TestToken);
 
         await using var verify = postgres.NewDbContext();
-        Assert.Equal(2, await verify.OrchestrationTasks.CountAsync());
-        Assert.Equal(2, (await verify.OrchestrationTasks.AsNoTracking().OrderBy(t => t.Sequence).LastAsync()).Sequence);
+        // a standing label + a fresh human comment is NOT a re-run trigger: re-running needs an
+        // explicit /plan (the anchor sits before the comment on purpose — this is rule 2, not
+        // no-new-input bookkeeping)
+        Assert.Equal(1, await verify.OrchestrationTasks.CountAsync());
     }
 
     [Fact]
