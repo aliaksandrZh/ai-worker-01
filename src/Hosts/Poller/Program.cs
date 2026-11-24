@@ -27,7 +27,7 @@ builder.Services.AddSingleton(new GitHubReadClient(
 
 builder.Services.AddSingleton(new PollerState());
 // Projects v2 boards (projects.yaml): which user-owned boards the projects pass lists and diffs.
-builder.Services.AddSingleton(ProjectSyncConfig.Read(builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config"));
+builder.Services.AddSingleton(Options.Create(ProjectSyncConfig.Read(builder.Configuration["PI_AGENT_CONFIG_DIR"] ?? "config")));
 builder.Services.AddSingleton<IRepositoryStream, IssuesStream>();
 builder.Services.AddSingleton<IRepositoryStream, PullRequestsStream>();
 builder.Services.AddSingleton<IRepositoryStream, PrReviewsStream>();
