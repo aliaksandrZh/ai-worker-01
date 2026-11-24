@@ -271,8 +271,12 @@ async function main() {
       toolNameByCallId.set(payload.toolCallId, payload.toolName);
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)) {
       observedCompletedToolCalls.add(payload.toolCallId);
-      if (typeof payload.toolName === "string") completedToolNames.add(payload.toolName);
-      else if (toolNameByCallId.has(payload.toolCallId)) completedToolNames.add(toolNameByCallId.get(payload.toolCallId));
+      const toolName = typeof payload.toolName === "string"
+        ? payload.toolName
+        : toolNameByCallId.get(payload.toolCallId);
+      // store the NORMALIZED name (the last __ segment): every consumer — checkPublications,
+      // the outcome mandate — matches bare tool names against this set
+      if (typeof toolName === "string") completedToolNames.add(normalizeToolName(toolName));
     }
     if (type === "assistant_output" && typeof payload?.text === "string") lastAssistantText = payload.text;
     echoRunEvent(entry.body);
@@ -496,7 +500,13 @@ async function main() {
     mapper.flushAggregated();
     return spoolFailure(code, message);
   };
-  const settleWait = () => new Promise((resolve) => { resolveSettle = resolve; });
+  const settleWait = () => new Promise((resolve) => {
+    resolveSettle = resolve;
+    // the agent may settle BEFORE the loop starts (the prompt acceptance is slow, the run is fast):
+    // the wake-up at the stream handler ran with resolveSettle = null — the recorded `settled` flag
+    // must resolve the first wait immediately, or the loop hangs forever on a still-alive agent
+    if (settled && !confirmed) resolve();
+  });
   let nudgesLeft = publicationNudges;
   let confirmed = false;
   for (;;) {
