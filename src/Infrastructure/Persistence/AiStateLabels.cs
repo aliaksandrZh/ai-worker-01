@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace PiAgent.Infrastructure.Persistence;
 
 /// <summary>
@@ -26,14 +28,28 @@ public static class AiStateLabels
 
     /// <summary>Enqueues the replace action in the caller's transaction: the Outbox dispatcher
     /// removes the other three labels (404 = already absent, fine) and adds `target`;
-    /// `target = null` removes all four (the clear action).</summary>
-    public static Task MarkAsync(
+    /// `target = null` removes all four (the clear action). A pull request that is linked to an
+    /// issue (the review→fix loop's card) marks BOTH items — the PR and the issue carry the same
+    /// AI state while review work runs; an issue (or an unlinked PR) is marked alone.</summary>
+    public static async Task MarkAsync(
         AppDbContext db, Guid repositoryId, Guid workItemId, long issueNumber, Guid? taskId,
-        string? target, CancellationToken cancellationToken) =>
-        new OutboxActionStore(db).EnqueueAiLabelAsync(
+        string? target, CancellationToken cancellationToken)
+    {
+        var store = new OutboxActionStore(db);
+        await store.EnqueueAiLabelAsync(
             new AiLabelEnqueueRequest(repositoryId, workItemId, taskId, issueNumber, target), cancellationToken);
+        var linkedIssue = await db.WorkItemLinks.AsNoTracking()
+            .Where(l => l.PrWorkItemId == workItemId)
+            .Join(db.WorkItems.AsNoTracking(), l => l.IssueWorkItemId, w => w.Id,
+                (l, w) => new { w.Id, w.Number })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (linkedIssue is { } card)
+            await store.EnqueueAiLabelAsync(
+                new AiLabelEnqueueRequest(repositoryId, card.Id, taskId, card.Number, target), cancellationToken);
+    }
 
-    /// <summary>Removes all four AI labels (cancellation / root closure — not a failure).</summary>
+    /// <summary>Removes all four AI labels (cancellation / root closure — not a failure); marks the
+    /// linked issue too (the same dual-write rule <see cref="MarkAsync"/> follows).</summary>
     public static Task ClearAsync(
         AppDbContext db, Guid repositoryId, Guid workItemId, long issueNumber, Guid? taskId,
         CancellationToken cancellationToken) =>

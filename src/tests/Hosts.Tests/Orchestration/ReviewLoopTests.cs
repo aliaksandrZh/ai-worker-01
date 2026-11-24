@@ -176,10 +176,11 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal("head-sha-1", task.TargetHeadSha); // pinned to the PR, not the card
         Assert.Equal("base-sha-1", task.TargetBaseSha);
         Assert.NotNull(workflow.InitialReviewCreatedAt);
-        // the AI Scheduled label rides the PR (the item the review works on)
-        var labels = await db.OutboxActions.AsNoTracking().SingleAsync();
-        Assert.Equal(OutboxActionTypes.AiLabel, labels.ActionType);
-        Assert.Contains("AI Scheduled", labels.Payload);
+        // the AI Scheduled label rides BOTH the PR and the card (the review loop's dual write)
+        var labels = await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync();
+        Assert.Equal(2, labels.Count);
+        Assert.All(labels, a => Assert.Contains("AI Scheduled", a.Payload));
+        Assert.Equal(2, labels.Select(a => JsonDocument.Parse(a.Payload).RootElement.GetProperty("issue_number").GetInt64()).Distinct().Count());
     }
 
     [Fact]
@@ -295,11 +296,11 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(OrchestrationTaskStatuses.Succeeded, (await ReloadTaskAsync(task.Id)).Status);
         // the card does NOT move back: the loop parks
         Assert.Equal(0, await db.OutboxActions.CountAsync(a => a.ActionType == OutboxActionTypes.ProjectStatus));
-        // AI Finished was enqueued by the success path, then AI Failed replaces it on delivery
-        // (card + PR) — the queue keeps all three actions
+        // AI Finished was enqueued by the success path, then AI Failed replaces it on delivery —
+        // the dual write (PR + card) keeps four actions: Finished ×2 then Failed ×2
         var labels = await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync();
         Assert.Equal(2, labels.Count(a => a.Payload.Contains("AI Failed")));
-        Assert.Single(labels, a => a.Payload.Contains("AI Finished"));
+        Assert.Equal(2, labels.Count(a => a.Payload.Contains("AI Finished")));
         // the special exhaustion comment on the card
         var comment = await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment);
         Assert.Contains(ReviewFlow.ExhaustedCode, comment.Payload);

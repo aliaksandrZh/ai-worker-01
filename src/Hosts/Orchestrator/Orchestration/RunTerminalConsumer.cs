@@ -275,10 +275,9 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
         if (card.ReviewFixRounds >= maxRounds)
         {
             // the cap is reached — park: the card keeps its review column, the loop waits for a human.
-            // AI Failed replaces the just-set AI Finished (the work did NOT end well for the loop).
-            await AiStateLabels.MarkAsync(db, card.RepositoryId, card.Id, card.Number,
-                task.Id, AiStateLabels.Failed, cancellationToken);
-            await AiStateLabels.MarkAsync(db, pullRequest.RepositoryId, pullRequest.Id, pullRequest.Number,
+            // AI Failed replaces the just-set AI Finished (the work did NOT end well for the loop);
+            // the dual write covers the PR and the card (AiStateLabels marks the linked issue too)
+            await AiStateLabels.MarkAsync(db, card.RepositoryId, pullRequest.Id, pullRequest.Number,
                 task.Id, AiStateLabels.Failed, cancellationToken);
             await new OutboxActionStore(db).EnqueueAsync(
                 new OutboxEnqueueRequest(card.RepositoryId, card.Id, task.Id, card.Number,
