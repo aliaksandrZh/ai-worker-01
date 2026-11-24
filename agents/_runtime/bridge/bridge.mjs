@@ -23,7 +23,7 @@ import { EventMapper, isSuccessfulToolEnd } from "./events.mjs"; // the mapper o
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
-import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, outcomeNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
+import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, outcomeNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal, normalizeToolName } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
