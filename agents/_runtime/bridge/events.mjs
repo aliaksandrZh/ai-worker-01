@@ -31,6 +31,8 @@ export class EventMapper {
     this.settled = false;
     this.deniedToolCallIds = new Set(); // tool calls denied by the permission policy
     this.deniedToolNames = new Set(); // tool NAMES denied by the permission policy (the toolcheck)
+    this.completedToolCalls = []; // [{tool: normalizedName, args}] — successful ends (the verdict toolcheck)
+    this.argsByCallId = new Map(); // toolCallId → the tool_execution_start args
   }
 
   nextEventId(prefix = "evt") {
@@ -71,6 +73,7 @@ export class EventMapper {
       }
       case "tool_execution_start":
         this.flushAggregated();
+        if (typeof data.toolCallId === "string") this.argsByCallId.set(data.toolCallId, data.args ?? {});
         this.push("tool_started", { toolCallId: data.toolCallId, toolName: data.toolName });
         break;
       case "tool_execution_update":
@@ -78,6 +81,9 @@ export class EventMapper {
         break;
       case "tool_execution_end":
         this.flushAggregated();
+        if (isSuccessfulToolEnd(endPayload(data)) && typeof data.toolName === "string")
+          // keep the ORIGINAL name (the verifier normalizes the server-prefixed shape)
+          this.completedToolCalls.push({ toolName: data.toolName, args: this.argsByCallId.get(data.toolCallId) ?? {} });
         this.push("tool_completed", endPayload(data));
         break;
       case "permission_denied":

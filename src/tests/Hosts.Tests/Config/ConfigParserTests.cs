@@ -746,11 +746,11 @@ public class ConfigParserTests : IDisposable
             Assert.Contains(parsed.Profiles, p => p.Name == "planner");
             var planner = parsed.Profiles.Single(p => p.Name == "planner");
             Assert.Equal(["github-write-pat.txt"], planner.Secrets); // the repo write PAT reference
-            Assert.Equal("1.4.0", planner.BridgeVersion); // the shared bridge version (/mcp status probe + publication toolcheck)
+            Assert.Equal("1.5.0", planner.BridgeVersion); // the shared bridge version (/mcp status probe + publication toolcheck + review-verdict mandate)
             // the reviewer profile is shipped beside the planner and parses under the same strict schema
             var reviewer = parsed.Profiles.Single(p => p.Name == "reviewer");
             Assert.Equal(["github-write-pat.txt"], reviewer.Secrets);
-            Assert.Equal("1.4.0", reviewer.BridgeVersion);
+            Assert.Equal("1.5.0", reviewer.BridgeVersion);
         }
         finally
         {

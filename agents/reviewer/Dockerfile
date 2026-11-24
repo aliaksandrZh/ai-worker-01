@@ -31,6 +31,7 @@ ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=review \
     PI_REVIEW_OUTCOME_TOOL=request_changes \
+    PI_REQUIRED_REVIEW_VERDICT=1 \
     PI_PUBLICATION_NUDGES=2 \
     GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
 

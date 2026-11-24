@@ -17,7 +17,7 @@ import { openSpool } from "./spool.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
-import { checkPublications, nudgePrompt, collectArtifacts, completedTerminal, gitFacts, renderPrompt } from "./toolcheck.mjs";
+import { checkPublications, nudgePrompt, verdictNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal, gitFacts, renderPrompt } from "./toolcheck.mjs";
 
 // The stub CLI lives in the stub profile (only agent that bakes it); cross-reference kept explicit.
 const AGENT = fileURLToPath(new URL("../../stub/stub-agent/pi-stub.mjs", import.meta.url));
@@ -246,6 +246,33 @@ test("completedTerminal carries the review verdict as outcome; absent verdict me
   assert.equal("outcome" in silent.body, false); // a passing review adds nothing
 });
 
+// ---- reviewVerdict: the mandate reads the OBSERVED tool calls (names + args) ----
+
+test("reviewVerdict: the changes tool decides changes_requested; APPROVE submit decides passed", () => {
+  const requested = reviewVerdict(
+    [{ toolName: "mcp__outcome__request_changes", args: { reason: "broken" } }], "request_changes");
+  assert.deepEqual(requested, { decided: true, changesRequested: true });
+
+  const approved = reviewVerdict([
+    { toolName: "mcp__github__pull_request_review_write", args: { method: "submit_pending", event: "APPROVE" } },
+  ], "request_changes");
+  assert.deepEqual(approved, { decided: true, changesRequested: false });
+
+  // a REQUEST_CHANGES submission without the tool call is a verdict too
+  const submittedChanges = reviewVerdict([
+    { toolName: "pull_request_review_write", args: { method: "submit_pending", event: "request_changes" } },
+  ], "request_changes");
+  assert.deepEqual(submittedChanges, { decided: true, changesRequested: true });
+
+  // a COMMENT submission is NOT a verdict; nor is a create/inline call or silence
+  const commented = reviewVerdict([
+    { toolName: "pull_request_review_write", args: { method: "submit_pending", event: "COMMENT" } },
+    { toolName: "pull_request_review_write", args: { method: "create" } },
+  ], "request_changes");
+  assert.deepEqual(commented, { decided: false, changesRequested: false });
+  assert.deepEqual(reviewVerdict([], "request_changes"), { decided: false, changesRequested: false });
+});
+
 // ---- review-outcome MCP server: the review→fix loop's verdict marker ----
 
 test("review-outcome server answers initialize, lists the tool and records the call", async () => {
@@ -257,7 +284,7 @@ test("review-outcome server answers initialize, lists the tool and records the c
   assert.equal(initialized[0].result.serverInfo.name, "review-outcome");
 
   const listed = send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-  assert.equal(listed[0].result.tools[0].name, "request_changes");
+  assert.ok(listed[0].result.tools.some((t) => t.name === "request_changes"));
 
   const called = send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_changes", arguments: { reason: "the loop leaks" } } }));
   assert.match(called[0].result.content[0].text, /requests changes/);
