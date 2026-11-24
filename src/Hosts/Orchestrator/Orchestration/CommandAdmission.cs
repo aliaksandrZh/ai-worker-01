@@ -71,8 +71,10 @@ public static class RetryPolicies
 }
 
 /// <summary>Non-null = rejection (reason + short detail) for the processor's RejectAsync path; null =
-/// admitted (Task+Job written) or the command stayed untouched (control commands, non-failed /retry).</summary>
-public sealed record AdmissionOutcome(string Reason, string Detail);
+/// admitted (Task+Job written) or the command stayed untouched (control commands, non-failed /retry).
+/// `Silent` rejections are stored on the command row but never answered in the issue (the AI-scope
+/// label gate — "we simply ignore it").</summary>
+public sealed record AdmissionOutcome(string Reason, string Detail, bool Silent = false);
 
 /// <summary>The pinned effective policy a consumer acts on (repository override not
 /// representable in the configuration shape — profile level only).</summary>
@@ -127,6 +129,13 @@ public static class CommandAdmission
                 "the work item is closed");
 
         var taskType = TaskTypeFor[name];
+
+        // The AI-scope gate: a task-producing command runs only on an item that carries the type's
+        // exact label (AI:Plan/AI:Code/AI:Review/AI:Test); everything else is silently ignored —
+        // the owner adds the label and the scope-label scanner starts the run when conditions converge.
+        if (!AiScopeLabels.HasScope(workItem, taskType))
+            return new AdmissionOutcome(AgentCommandRejectionReasons.LabelScopeMissing,
+                $"'{AiScopeLabels.LabelForTaskType[taskType]}' is required on this item", Silent: true);
 
         // Routing/profile gates — the same resolution /help lists with.
         var (resolved, reason, detail) = await ProfileGate.ResolveAsync(db, repository, taskType, cancellationToken);
@@ -250,7 +259,9 @@ public static class CommandAdmission
     /// agent's own work, not user input). All lookups are fail-open: detection gaps can only allow a
     /// repeat, never deny one; a pre-watermark previous Task (TriggerAtGithub null) never rejects.
     /// </summary>
-    private static async Task<bool> IsNoNewInputRepeatAsync(
+    // Internal: shared with LabelTriggerCycle — the scanner applies the identical "was there a new
+    // human signal since the previous run" rule before re-triggering a task type that already ran.
+    internal static async Task<bool> IsNoNewInputRepeatAsync(
         AppDbContext db, Workflow workflow, string taskType, WorkItem workItem,
         string? botLogin, CancellationToken cancellationToken)
     {

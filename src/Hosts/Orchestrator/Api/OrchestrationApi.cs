@@ -260,10 +260,11 @@ public static class OrchestrationApi
                 command.Status = AgentCommandStatuses.Rejected;
                 command.RejectionReason = rejection.Reason;
                 command.ProcessedAt = DateTime.UtcNow;
-                await new OutboxActionStore(db).EnqueueAsync(
-                    new OutboxEnqueueRequest(repository.Id, workItem.Id, null, workItem.Number,
-                        AgentCommandRejectionReplies.Text(rejection.Reason, rejection.Detail), Guid.NewGuid()),
-                    cancellationToken);
+                if (!rejection.Silent) // the AI-scope label gate ignores silently — no issue reply
+                    await new OutboxActionStore(db).EnqueueAsync(
+                        new OutboxEnqueueRequest(repository.Id, workItem.Id, null, workItem.Number,
+                            AgentCommandRejectionReplies.Text(rejection.Reason, rejection.Detail), Guid.NewGuid()),
+                        cancellationToken);
             }
             else if (command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
             {

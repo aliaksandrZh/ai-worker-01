@@ -34,7 +34,12 @@ One comment travels like this:
    (`/users/{owner}/projectsV2/{number}/items`, sync + logs scope) and emits `project_item_*`
    events for added/field-changed/removed items; a board with an `auto_plan` trigger in
    `deploy/config/projects.yaml` turns a matching status transition (e.g. Backlog → Clarifying)
-   into a system-owned `/plan` on the item's work item — no comment needed.
+   into a system-owned `/plan` on the item's work item — no comment needed. Task-producing
+   signals (commands and system triggers) run only on items carrying the exact AI-scope label
+   (`AI:Plan`/`AI:Code`/`AI:Review`/`AI:Test`, read from the synced labels); anything else is
+   silently ignored, and the `LabelTriggerCycle` scanner starts the mapped task type when the
+   label appears and all conditions converge (no previous run → run; previous run with no new
+   human signal → no-new-input).
 2. **Admission** — the Orchestrator consumes events, parses bot-mention slash commands
    (`/plan`, `/implement`, `/test-cases`, …), checks permissions, routing rules, and Workflow
    state, then creates a Workflow (one per root work item), a Task, and a first Run.

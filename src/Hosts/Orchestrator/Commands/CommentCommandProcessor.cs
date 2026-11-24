@@ -203,7 +203,17 @@ public sealed class CommentCommandProcessor(
                     configurationState.BotLogin, cancellationToken, logger)
                 : null;
             if (outcome is { } rejection)
-                await RejectAsync(db, command, workItem, repository, rejection.Reason, rejection.Detail, cancellationToken);
+            {
+                command.Status = AgentCommandStatuses.Rejected;
+                command.RejectionReason = rejection.Reason;
+                command.ProcessedAt = DateTime.UtcNow;
+                metrics.RecordRejected(rejection.Reason);
+                if (!rejection.Silent)
+                    await EnqueueReplyAsync(db, repository, workItem, rejection.Reason, rejection.Detail,
+                        permittedCommands: null, cancellationToken);
+                // silent gate (label_scope_missing): stored, never answered — the owner adds the
+                // AI-scope label and the scanner starts the run when conditions converge
+            }
             else if (command.Status == AgentCommandStatuses.Authorized && command.CommandName is AgentCommandNames.Status or AgentCommandNames.Help or AgentCommandNames.Stop or AgentCommandNames.Retry)
                 // Control commands: /status//help answered in place; /stop is
                 // a state-changing control path handled by StopCommandHandler

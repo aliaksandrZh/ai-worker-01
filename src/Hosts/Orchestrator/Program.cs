@@ -39,6 +39,9 @@ builder.Services.AddSingleton<IWorkerCycle, RootClosureCycle>();
 // Projects v2 events (sync + logs scope): logged and settled, no orchestration state touched.
 builder.Services.AddSingleton<IWorkerCycle, ProjectEventLogCycle>();
 builder.Services.AddSingleton<IWorkerCycle, ReviewTriggerCycle>();
+// AI-scope labels (AI:Plan/AI:Code/AI:Review/AI:Test): the standing convergence scanner — no
+// events claimed, conditions re-derived from the synced state on every tick.
+builder.Services.AddSingleton<IWorkerCycle, LabelTriggerCycle>();
 // Durable job queue (task 07): admission hands commands to Task+Job rows; this worker claims and prepares.
 builder.Services.AddOptions<JobQueueOptions>().BindConfiguration("JobQueue");
 builder.Services.AddSingleton<JobQueueMetrics>();

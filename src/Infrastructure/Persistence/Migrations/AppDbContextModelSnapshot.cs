@@ -987,10 +987,7 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_task_workflow_id_sequence");
 
-                    b.ToTable("task", null, t =>
-                        {
-                            t.HasCheckConstraint("ck_task_has_trigger", "trigger_command_id IS NOT NULL OR trigger_github_event_id IS NOT NULL");
-                        });
+                    b.ToTable("task", (string)null);
                 });
 
             modelBuilder.Entity("PiAgent.Infrastructure.Persistence.OrphanCandidate", b =>

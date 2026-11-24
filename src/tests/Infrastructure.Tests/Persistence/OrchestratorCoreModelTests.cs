@@ -91,16 +91,15 @@ public class OrchestratorCoreModelTests
     }
 
     [Fact]
-    public void OrchestrationTask_HasTriggerCheckConstraint()
+    public void OrchestrationTask_HasNoTriggerCheckConstraint()
     {
+        // the ck_task_has_trigger constraint was relaxed (RelaxTaskTriggerCheck): scope-label-scanner
+        // Tasks are legitimately created with neither a command row nor a producing event — the
+        // LabelTriggerCycle re-derives the decision from the synced state on every tick
         using var dbContext = NewDbContext();
-        // check constraints live in the design-time model, not the read-optimized one
         var entity = ((IInfrastructure<IServiceProvider>)dbContext).Instance
             .GetRequiredService<IDesignTimeModel>().Model.FindEntityType(typeof(OrchestrationTask))!;
-        var check = Assert.Single(entity.GetCheckConstraints());
-        Assert.Equal("ck_task_has_trigger", check.Name);
-        Assert.Contains("trigger_command_id IS NOT NULL", check.Sql);
-        Assert.Contains("trigger_github_event_id IS NOT NULL", check.Sql);
+        Assert.Empty(entity.GetCheckConstraints());
     }
 
     [Fact]
