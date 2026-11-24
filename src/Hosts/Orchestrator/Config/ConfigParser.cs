@@ -23,7 +23,7 @@ public static class ConfigParser
         var repositories = ParseRepositories(Path.Combine(configRoot, "repositories.yaml"));
         var routing = ParseRouting(Path.Combine(configRoot, "routing.yaml"));
         var profiles = ParseProfiles(Path.Combine(configRoot, "agents"));
-        var (boardTriggers, statusConfigs) = ParseProjects(Path.Combine(configRoot, "projects.yaml"));
+        var (boardTriggers, statusConfigs, reviewLoops) = ParseProjects(Path.Combine(configRoot, "projects.yaml"));
 
         return new ParsedConfig
         {
@@ -33,6 +33,7 @@ public static class ConfigParser
             Profiles = profiles,
             ProjectBoardTriggers = boardTriggers,
             ProjectStatusConfigs = statusConfigs,
+            ReviewLoopConfigs = reviewLoops,
         };
     }
 
@@ -257,7 +258,10 @@ public static class ConfigParser
         [YamlMember(Alias = "number")] public int? Number { get; set; }
         [YamlMember(Alias = "auto_plan")] public AutoPlanDto? AutoPlan { get; set; }
         [YamlMember(Alias = "auto_code")] public AutoPlanDto? AutoCode { get; set; }
+        [YamlMember(Alias = "auto_fix")] public AutoPlanDto? AutoFix { get; set; }
+        [YamlMember(Alias = "auto_review")] public AutoPlanDto? AutoReview { get; set; }
         [YamlMember(Alias = "ai_statuses")] public AiStatusesDto? AiStatuses { get; set; }
+        [YamlMember(Alias = "review_loop")] public ReviewLoopDto? ReviewLoop { get; set; }
     }
 
     private sealed class AutoPlanDto
@@ -272,18 +276,27 @@ public static class ConfigParser
         [YamlMember(Alias = "status_field")] public string? StatusField { get; set; }
         [YamlMember(Alias = "processing")] public string? Processing { get; set; }
         [YamlMember(Alias = "review")] public string? Review { get; set; }
+        [YamlMember(Alias = "testing")] public string? Testing { get; set; }
         [YamlMember(Alias = "code_statuses")] public List<string>? CodeStatuses { get; set; }
+        [YamlMember(Alias = "review_statuses")] public List<string>? ReviewStatuses { get; set; }
     }
 
-    private static (List<ProjectBoardTrigger> Triggers, List<ProjectStatusConfig> StatusConfigs) ParseProjects(string path)
+    private sealed class ReviewLoopDto
+    {
+        [YamlMember(Alias = "max_rounds")] public int? MaxRounds { get; set; }
+    }
+
+    private static (List<ProjectBoardTrigger> Triggers, List<ProjectStatusConfig> StatusConfigs,
+        List<ReviewLoopConfig> ReviewLoops) ParseProjects(string path)
     {
         const string name = "projects.yaml";
         if (!File.Exists(path))
-            return ([], []);
+            return ([], [], []);
 
         var dto = Load<ProjectsDto>(path, name);
         var triggers = new List<ProjectBoardTrigger>();
         var statusConfigs = new List<ProjectStatusConfig>();
+        var reviewLoops = new List<ReviewLoopConfig>();
         foreach (var item in dto.Projects ?? [])
         {
             if (string.IsNullOrWhiteSpace(item.Owner))
@@ -291,10 +304,12 @@ public static class ConfigParser
             if (item.Number is not { } number || number <= 0)
                 throw new ConfigException($"{name}: project entry '{item.Owner}' must have a positive `number`");
 
-            foreach (var (triggerDto, key, taskType) in new[]
+            foreach (var (triggerDto, key, taskType, requiresPlanArtifact) in new[]
                      {
-                     (item.AutoPlan, "auto_plan", OrchestrationTaskTypes.Plan),
-                     (item.AutoCode, "auto_code", OrchestrationTaskTypes.Implement),
+                     (item.AutoPlan, "auto_plan", OrchestrationTaskTypes.Plan, false),
+                     (item.AutoCode, "auto_code", OrchestrationTaskTypes.Implement, true),
+                     (item.AutoFix, "auto_fix", OrchestrationTaskTypes.Implement, false),
+                     (item.AutoReview, "auto_review", OrchestrationTaskTypes.Review, false),
                      })
             {
                 if (triggerDto is not { } block)
@@ -307,23 +322,35 @@ public static class ConfigParser
                         $"{name}: {key} for project '{item.Owner}/{number}': `from` and `to` must differ");
                 triggers.Add(new ProjectBoardTrigger(item.Owner.Trim(), number,
                     string.IsNullOrWhiteSpace(block.StatusField) ? "Status" : block.StatusField.Trim(),
-                    block.From.Trim(), block.To.Trim(), taskType));
+                    block.From.Trim(), block.To.Trim(), taskType, requiresPlanArtifact));
             }
 
             if (item.AiStatuses is { } statuses)
             {
-                if (string.IsNullOrWhiteSpace(statuses.Processing) && string.IsNullOrWhiteSpace(statuses.Review))
+                if (string.IsNullOrWhiteSpace(statuses.Processing) && string.IsNullOrWhiteSpace(statuses.Review)
+                    && string.IsNullOrWhiteSpace(statuses.Testing))
                     throw new ConfigException(
-                        $"{name}: ai_statuses for project '{item.Owner}/{number}' requires `processing` and/or `review`");
+                        $"{name}: ai_statuses for project '{item.Owner}/{number}' requires `processing` and/or `review` or `testing`");
                 statusConfigs.Add(new ProjectStatusConfig(item.Owner.Trim(), number,
                     string.IsNullOrWhiteSpace(statuses.StatusField) ? "Status" : statuses.StatusField.Trim(),
                     string.IsNullOrWhiteSpace(statuses.Processing) ? null : statuses.Processing.Trim(),
                     string.IsNullOrWhiteSpace(statuses.Review) ? null : statuses.Review.Trim(),
+                    string.IsNullOrWhiteSpace(statuses.Testing) ? null : statuses.Testing.Trim(),
                     (statuses.CodeStatuses ?? [])
+                        .Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList(),
+                    (statuses.ReviewStatuses ?? [])
                         .Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList()));
             }
+
+            if (item.ReviewLoop is { } loop)
+            {
+                if (loop.MaxRounds is not { } rounds || rounds <= 0)
+                    throw new ConfigException(
+                        $"{name}: review_loop for project '{item.Owner}/{number}' requires a positive `max_rounds`");
+                reviewLoops.Add(new ReviewLoopConfig(item.Owner.Trim(), number, rounds));
+            }
         }
-        return (triggers, statusConfigs);
+        return (triggers, statusConfigs, reviewLoops);
     }
 
     private sealed class ProfileDto

@@ -35,9 +35,15 @@ One comment travels like this:
    events for added/field-changed/removed items; a board with an `auto_plan` trigger in
    `deploy/config/projects.yaml` turns a matching status transition (e.g. Backlog → Clarifying)
    into a system-owned `/plan` on the item's work item — no comment needed (an `auto_code` trigger
-   does the same for the coder: e.g. Clarifying → Ready + the `AI:Code` label → `/code`); a board
-   with `ai_statuses` gets its card moved by the Orchestrator itself — `processing` when a run is
-   handed off (AI Processing), `review` when an implement Task succeeds (the PR is up). Task-producing
+   does the same for the coder: e.g. Clarifying → Ready + the `AI:Code` label → `/code`); the review
+   loop works the same way: an `auto_review` trigger (In Progress → In Review + `AI:Review`) starts
+   the review on the card's linked pull request, `auto_fix` (In Review → In Progress + `AI:Code`)
+   queues the fix-round coder on the PR's own branch, `review_loop.max_rounds` caps the automatic
+   review→fix rounds (default 3 — beyond it the card parks in review with `AI Failed` and a
+   `review_loop_exhausted` comment; any manual task-producing command resets the counter), and a
+   passing review moves the card to the `testing` column; a board with `ai_statuses` gets its card moved by the Orchestrator itself — `processing` when a run is
+   handed off (AI Processing), `review` when an implement Task succeeds (the PR is up), `testing`
+   when a review Task succeeds. Task-producing
    signals (commands and system triggers) run only on items carrying the exact AI-scope label
    (`AI:Plan`/`AI:Code`/`AI:Review`/`AI:Test`, read from the synced labels); anything else is
    silently ignored, and the `LabelTriggerCycle` scanner starts the mapped task type when the

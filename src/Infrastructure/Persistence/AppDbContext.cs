@@ -156,6 +156,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(w => w.Assignees).HasColumnType("jsonb");
             entity.Property(w => w.Labels).HasColumnType("jsonb");
             entity.Property(w => w.RequestedReviewers).HasColumnType("jsonb");
+            entity.Property(w => w.ReviewFixRounds).HasDefaultValue(0);
             entity.HasOne<Repository>()
                 .WithMany()
                 .HasForeignKey(w => w.RepositoryId)

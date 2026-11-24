@@ -35,7 +35,7 @@ public class PollerStoresModelTests
         Assert.Equal("work_item", entity.GetTableName());
 
         var properties = entity.GetProperties().ToDictionary(p => p.Name);
-        Assert.Equal(22, properties.Count);
+        Assert.Equal(24, properties.Count); // + head_ref, review_fix_rounds (the review→fix loop)
         foreach (var required in new[] { nameof(WorkItem.Id), nameof(WorkItem.RepositoryId), nameof(WorkItem.GithubNodeId),
                      nameof(WorkItem.Number), nameof(WorkItem.Type), nameof(WorkItem.Title), nameof(WorkItem.State),
                      nameof(WorkItem.AuthorLogin), nameof(WorkItem.Assignees), nameof(WorkItem.Labels),

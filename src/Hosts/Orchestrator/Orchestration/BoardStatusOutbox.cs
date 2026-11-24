@@ -20,7 +20,7 @@ namespace PiAgent.Orchestrator.Orchestration;
 public static class BoardStatusOutbox
 {
     /// <summary>The state the board moves to; `null` targets mean "do not move for this state".</summary>
-    public enum State { Processing, Review }
+    public enum State { Processing, Review, Testing }
 
     /// <summary>The item's current board column (exact-case), or null when the item is not on a
     /// configured board. Used by the manual-/code gate — a null is "not locked" (fail open).</summary>
@@ -53,6 +53,7 @@ public static class BoardStatusOutbox
         {
             State.Processing => board.Config.Processing,
             State.Review => board.Config.Review,
+            State.Testing => board.Config.Testing,
             _ => null,
         };
         if (string.IsNullOrEmpty(target))

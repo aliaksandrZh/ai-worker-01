@@ -77,6 +77,7 @@ public sealed class ConfigLoaderHostedService(
 
             state.SetProjectBoardTriggers(parsed.ProjectBoardTriggers);
             state.SetProjectStatusConfigs(parsed.ProjectStatusConfigs);
+            state.SetReviewLoopConfigs(parsed.ReviewLoopConfigs);
             state.MarkSynchronized(parsed.System.BotLogin, parsed.System.MaxConcurrentRuns);
             logger.LogInformation(
                 "configuration synchronized from {root}: repositories created {created} (cursors {cursors}), {versions} new agent profile version(s), {rules} routing rule(s) upserted, {deleted} deleted",

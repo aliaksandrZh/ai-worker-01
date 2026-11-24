@@ -110,8 +110,9 @@ const FORMAT_BY_EXT = new Map([
 
 /** Builds the terminal `completed` body (the publication toolcheck precedes it).
  * `sessionFilePath` is the per-Run path the Bridge discovered at launch (`get_state.sessionFile`,
- * carried so the Runtime API can record the actual path on the AgentSession row). */
-export function completedTerminal(runId, sessionFilePath, summary, artifacts, facts) {
+ * carried so the Runtime API can record the actual path on the AgentSession row). `outcome` is the
+ * review verdict (`changes_requested`) observed via the review-outcome tool — undefined otherwise. */
+export function completedTerminal(runId, sessionFilePath, summary, artifacts, facts, outcome) {
   return {
     id: `evt-${runId}-terminal`,
     route: "completed",
@@ -119,6 +120,7 @@ export function completedTerminal(runId, sessionFilePath, summary, artifacts, fa
       eventId: `evt-${runId}-terminal`,
       occurredAt: new Date().toISOString(),
       ...(sessionFilePath ? { sessionFilePath } : {}),
+      ...(outcome ? { outcome } : {}),
       result: {
         summary,
         artifacts,

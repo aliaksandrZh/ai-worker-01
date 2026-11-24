@@ -78,6 +78,7 @@ public static class WorkItemPageSync
         Labels: ParseList(row.Labels),
         RequestedReviewers: ParseList(row.RequestedReviewers),
         HeadSha: row.HeadSha,
+        HeadRef: row.HeadRef,
         BaseSha: row.BaseSha,
         Draft: row.Draft,
         ClosedAt: row.ClosedAtGithub,
@@ -100,6 +101,7 @@ public static class WorkItemPageSync
         Labels = SerializeList(item.Labels),
         RequestedReviewers = item.RequestedReviewers.Count > 0 ? SerializeList(item.RequestedReviewers) : null,
         HeadSha = item.HeadSha,
+        HeadRef = item.HeadRef,
         BaseSha = item.BaseSha,
         Draft = item.Draft,
         MergedAt = item.MergedAt,
@@ -122,6 +124,7 @@ public static class WorkItemPageSync
         row.ClosedAtGithub = item.ClosedAt;
         // PR-only fields come exclusively from the pulls stream (plan task-5 semantics)
         row.HeadSha = item.HeadSha;
+        row.HeadRef = item.HeadRef;
         row.BaseSha = item.BaseSha;
         row.Draft = item.Draft;
         row.MergedAt = item.MergedAt;

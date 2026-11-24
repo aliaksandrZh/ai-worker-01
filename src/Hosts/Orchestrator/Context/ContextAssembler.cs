@@ -104,7 +104,10 @@ public static class ContextAssembler
                 draft = workItem.Draft,
             }, source: new { kind = SourceKinds.WorkItem, reference = $"{repository.FullName}#{workItem.Number}" }, included))
             return TooLarge(composer, "workItem");
-        if (!AddMandatory(composer, "instructions", ContextInstructions.For(task.Type)))
+        if (!AddMandatory(composer, "instructions", task.Type == OrchestrationTaskTypes.Implement
+                && artifactPurposes.Count == 0 // a fix-round coder task: no approved-plan input linked
+                ? ContextInstructions.FixRound
+                : ContextInstructions.For(task.Type)))
             return TooLarge(composer, "instructions");
 
         if (!AddMandatory(composer, "command", command?.CommandName ?? task.Type))
@@ -137,6 +140,24 @@ public static class ContextAssembler
         {
             ComposeReviews(composer, included, excluded, reviews);
             ComposeThreads(composer, included, excluded, comments, reviews);
+        }
+        // the coder on the review→fix round (and any later /code with the PR up) reads the findings
+        // of the pull request it continues: the linked PR's submitted reviews and review threads —
+        // the same sections a review Task gets
+        if (task.Type == OrchestrationTaskTypes.Implement)
+        {
+            var pullRequest = await Orchestration.ReviewFlow.LinkedOpenPullRequestAsync(db, workItem.Id, cancellationToken);
+            if (pullRequest is not null)
+            {
+                var prReviews = await db.GitHubReviews.AsNoTracking()
+                    .Where(r => r.WorkItemId == pullRequest.Id)
+                    .ToListAsync(cancellationToken);
+                var prComments = await db.GitHubComments.AsNoTracking()
+                    .Where(c => c.WorkItemId == pullRequest.Id)
+                    .ToListAsync(cancellationToken);
+                ComposeReviews(composer, included, excluded, prReviews);
+                ComposeThreads(composer, included, excluded, prComments, prReviews);
+            }
         }
         ComposeArtifacts(composer, included, excluded, artifacts, artifactPurposes);
         ComposeRelatedWorkItems(composer, included, excluded, related);

@@ -106,6 +106,13 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                 if (task.Type == OrchestrationTaskTypes.Implement)
                     await BoardStatusOutbox.MoveAsync(db, configurationState, workItem.RepositoryId, workItem.Id,
                         workItem.Number, task.Id, BoardStatusOutbox.State.Review, cancellationToken);
+                // a review Task succeeding settles the review→fix loop: `completed` moves the card to
+                // the testing column; `changes_requested` either spends one more fix round (the card
+                // back to In Progress — that transition IS the auto_fix trigger) or parks it: the cap
+                // (projects.yaml `review_loop.max_rounds`) reached → the card stays in review, the
+                // item is marked AI Failed and a review_loop_exhausted comment waits for a human
+                if (task.Type == OrchestrationTaskTypes.Review)
+                    await SettleReviewLoopAsync(db, configurationState, task, run, workItem, outcome, cancellationToken);
                 break;
 
             case RunStatuses.Failed:
@@ -231,6 +238,81 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
         await db.RunEvents.AsNoTracking()
             .AnyAsync(e => e.RunId == runId && e.Type == RunEventTypes.AgentStarted, cancellationToken);
 
+    /// <summary>
+    /// The review→fix loop settlement (review Task succeeded). The loop card is the PR's linked
+    /// issue (the board card the human moves); the counter and the cap live on it:
+    /// <list type="bullet">
+    /// <item>`completed` — the review passed: the card moves to the testing column
+    /// (projects.yaml `ai_statuses.testing`);</item>
+    /// <item>`changes_requested` with rounds left — the card returns to In Progress and the counter
+    /// increments; that In Review → In Progress transition IS the auto_fix trigger (the fix coder
+    /// continues the PR branch from the review findings);</item>
+    /// <item>`changes_requested` with the cap (`review_loop.max_rounds`, default 3) already reached —
+    /// the card STAYS in the review column: AI Failed (replaces the Finished the success path set)
+    /// on the PR and the card, and one review_loop_exhausted comment on the card waits for a human
+    /// (any manual task-producing command resets the counter and restarts the loop).</item>
+    /// </list>
+    /// Best-effort like every board move: a card off a configured board just skips the move; the
+    /// round counter still increments (the cap is what stops the loop, not the board).
+    /// </summary>
+    private async Task SettleReviewLoopAsync(
+        AppDbContext db, ConfigurationState configurationState, OrchestrationTask task, Run run,
+        WorkItem pullRequest, string outcome, CancellationToken cancellationToken)
+    {
+        var card = await ReviewFlow.LoopCardAsync(db, pullRequest, cancellationToken);
+        if (card is null)
+            return; // dangling link: nothing to settle the loop on
+
+        if (outcome != RunEventVocabulary.ChangesRequested)
+        {
+            await BoardStatusOutbox.MoveAsync(db, configurationState, card.RepositoryId, card.Id,
+                card.Number, task.Id, BoardStatusOutbox.State.Testing, cancellationToken);
+            return;
+        }
+
+        var maxRounds = await ReviewFlow.MaxRoundsAsync(db, configurationState,
+            card.RepositoryId, card.Number, cancellationToken);
+        if (card.ReviewFixRounds >= maxRounds)
+        {
+            // the cap is reached — park: the card keeps its review column, the loop waits for a human.
+            // AI Failed replaces the just-set AI Finished (the work did NOT end well for the loop).
+            await AiStateLabels.MarkAsync(db, card.RepositoryId, card.Id, card.Number,
+                task.Id, AiStateLabels.Failed, cancellationToken);
+            await AiStateLabels.MarkAsync(db, pullRequest.RepositoryId, pullRequest.Id, pullRequest.Number,
+                task.Id, AiStateLabels.Failed, cancellationToken);
+            await new OutboxActionStore(db).EnqueueAsync(
+                new OutboxEnqueueRequest(card.RepositoryId, card.Id, task.Id, card.Number,
+                    ExhaustedText(task.Id, maxRounds), run.Id), cancellationToken);
+            logger.LogInformation(
+                "review loop exhausted on card {cardNumber}: {rounds}/{max} fix rounds consumed — parked in review (run {runId}, task {taskId})",
+                card.Number, card.ReviewFixRounds, maxRounds, run.Id, task.Id);
+            return;
+        }
+
+        // one more round: the counter increments and the card returns to In Progress — the
+        // transition event is the auto_fix trigger that queues the fix coder
+        await db.WorkItems.Where(w => w.Id == card.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(w => w.ReviewFixRounds, card.ReviewFixRounds + 1), cancellationToken);
+        await BoardStatusOutbox.MoveAsync(db, configurationState, card.RepositoryId, card.Id,
+            card.Number, task.Id, BoardStatusOutbox.State.Processing, cancellationToken);
+        logger.LogInformation(
+            "review requested changes on card {cardNumber}: fix round {round}/{max} starts — the card returns to In Progress (run {runId}, task {taskId})",
+            card.Number, card.ReviewFixRounds + 1, maxRounds, run.Id, task.Id);
+    }
+
+    /// <summary>The exhaustion comment: what happened, where the findings are, how a human resumes.</summary>
+    private static string ExhaustedText(Guid taskId, int maxRounds) =>
+        $"Review loop exhausted (code: {ReviewFlow.ExhaustedCode})\n" +
+        $"The review has requested changes {maxRounds} time(s) in a row (the automatic fix limit is {maxRounds}). " +
+        "The card stays in the review column and the automatic loop stops — the review findings (inline comments on the pull request) need human attention.\n\n" +
+        "How to resume: address the findings yourself (or move the card back to In Progress and run /code — a manual command resets the round counter), " +
+        "then the loop continues from a fresh review." +
+        $"\n(task: {taskId})";
+
+    /// <summary>True when the Run's agent actually began working (a persisted `agent_started` callback,
+    /// the event-driven run promotion); the boundary between the automatic-retry window
+    /// and manual `/retry`.</summary>
+
     /// <summary>Automatic retry: the Task silently re-enters the normal claim flow —
     /// `Failed → Queued`, terminal markers cleared, a fresh OrchestrationJob schedules the new attempt
     /// after the pinned exponential backoff. The claim flow revalidates preconditions and creates the
@@ -327,4 +409,9 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
 public static class RunEventVocabulary
 {
     public const string NeedsHumanInput = "needs_human_input";
+
+    /// <summary>The reviewer's verdict carried in the completed callback's `outcome`: the reviewer
+    /// called the request_changes tool (the Bridge observes the execution and reports the call) —
+    /// fixes are needed; the absence of the call means the review passed.</summary>
+    public const string ChangesRequested = "changes_requested";
 }

@@ -23,7 +23,7 @@ import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
-import { renderPrompt, gitFacts, checkPublications, nudgePrompt, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
+import { renderPrompt, gitFacts, checkPublications, nudgePrompt, collectArtifacts, completedTerminal, normalizeToolName } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -43,6 +43,10 @@ const agentArgs = (env.PI_AGENT_ARGS || defaultStubAgent).split(" ").filter(Bool
 // toolcheck against the event stream; the agent never self-reports (there is no result manifest).
 const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
   .split(",").map((kind) => kind.trim()).filter(Boolean);
+// the review-verdict tool (the reviewer image only): an OBSERVED error-free execution of this tool
+// turns the terminal `completed` into `outcome: "changes_requested"` — the review demanded fixes;
+// its absence means the review passed. A verdict, not a publication: never nudged, never mandated.
+const outcomeTool = env.PI_REVIEW_OUTCOME_TOOL || "";
 // how many times a settle with unconfirmed mandated publications is nudged back to the agent
 // (a follow-up prompt in the same session) before the run fails with `publication_missing`
 const publicationNudges = (() => {
@@ -553,7 +557,8 @@ async function main() {
       `agent process exited (code ${agentExitCode}) after settling — reported by the Runtime Bridge`);
   }
 
-  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace)));
+  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace),
+    outcomeTool && completedToolNames.has(normalizeToolName(outcomeTool)) ? "changes_requested" : undefined));
   await finishWait();
 }
 

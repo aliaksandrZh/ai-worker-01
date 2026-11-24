@@ -381,7 +381,8 @@ public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<P
     // ---- auto_code (Clarifying → Ready + AI:Code → the system-owned implement Task) ----
 
     private static readonly ProjectBoardTrigger CodeTrigger =
-        new("aliaksandrZh", 7, "Status", "Clarifying", "Ready", OrchestrationTaskTypes.Implement);
+        new("aliaksandrZh", 7, "Status", "Clarifying", "Ready", OrchestrationTaskTypes.Implement,
+            RequiresPlanArtifact: true); // auto_code implements an APPROVED plan; auto_fix does not
 
     /// <summary>The coder's convergence seed: AI:Code on the item, a Workflow holding a SUCCEEDED
     /// plan Task with its plan artifact (the coder implements an approved plan), the coder profile ready.</summary>

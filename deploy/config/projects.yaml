@@ -15,12 +15,29 @@
 # must have produced a successful plan artifact (the coder implements an approved plan), the item
 # open, the workflow not failed/closed, the coder profile version ready.
 #
+# Board trigger (optional `auto_fix`): the review→fix round — when the card moves `from → to` (the
+# review demanded changes and the Orchestrator moved it back) plus the `AI:Code` label, an implement
+# Task continues the EXISTING pull request branch from the review findings: no plan artifact is
+# required, the pinned `git.branch` (the PR's head branch) rides the frozen input, and the coder
+# never opens a second pull request.
+#
+# Board trigger (optional `auto_review`): the automatic review start — the `from → to` move plus the
+# `AI:Review` label on the card admits the system-owned review Task on the card's LINKED open pull
+# request (WorkItemLink; no linked open PR — the event is consumed with a log line).
+#
 # Board status config (optional `ai_statuses`): the columns the Orchestrator itself moves on the
-# board — `processing` when a run is handed off to the Runtime API (the item is AI Processing),
-# `review` when an implement Task succeeds (the pull request is up). A null/absent key means "do
-# not move the board for that state". `code_statuses` are the columns the MANUAL /code is allowed
-# in (STATUS + LABEL holds for the manual command too: Ready / In Progress); an item not on the
-# board is not verified (fail open). Values are exact-case single-select option names.
+# board — `processing` when a run is handed off (AI Processing), `review` when an implement Task
+# succeeds (the PR is up), `testing` when a review Task succeeds without changes requested. A
+# null/absent key means "do not move the board for that state". `code_statuses` are the columns the
+# MANUAL /code is allowed in (STATUS + LABEL holds for the manual command too: Ready / In Progress);
+# `review_statuses` are the columns a review launch (manual /review, label scanner, bot-requested
+# reviewer) is allowed in — the review runs only while the card sits in one of them. An item not on
+# the board is not verified (fail open). Values are exact-case single-select option names.
+#
+# Review loop config (optional `review_loop`): `max_rounds` caps the automatic review→fix rounds
+# per card. When a review demands changes and the cap is already reached, the card STAYS in the
+# review column, the item is marked `AI Failed`, a `review_loop_exhausted` comment explains, and a
+# human takes over (any manual task-producing command resets the counter). Default: 3.
 projects:
   - owner: aliaksandrZh
     number: 7
@@ -32,8 +49,20 @@ projects:
       status_field: Status
       from: Clarifying
       to: Ready
+    auto_fix:
+      status_field: Status
+      from: In Review
+      to: In Progress
+    auto_review:
+      status_field: Status
+      from: In Progress
+      to: In Review
     ai_statuses:
       status_field: Status
       processing: In Progress
       review: In Review
+      testing: Testing
       code_statuses: [Ready, In Progress]
+      review_statuses: [In Review]
+    review_loop:
+      max_rounds: 3

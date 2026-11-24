@@ -150,6 +150,21 @@ public static class CommandAdmission
             return new AdmissionOutcome(reason!, detail!);
         var version = resolved.Version;
 
+        // The review board gate — STATUS + LABEL holds for the review too: the loop card (the
+        // linked issue of the PR, else the item) must sit in one of `ai_statuses.review_statuses`.
+        // An item off a board (or a board without the key) cannot be verified — fail open.
+        if (taskType == OrchestrationTaskTypes.Review
+            && configurationState is not null
+            && !await ReviewFlow.StatusAllowedAsync(db, configurationState, repository.Id, workItem, cancellationToken))
+        {
+            var reviewCard = await ReviewFlow.LoopCardAsync(db, workItem, cancellationToken);
+            var reviewColumn = reviewCard is null ? null
+                : (await BoardStatusOutbox.TryGetBoardStatusAsync(db, configurationState,
+                    repository.Id, reviewCard.Number, cancellationToken))?.Status;
+            return new AdmissionOutcome(AgentCommandRejectionReasons.ReviewBoardStatusNotAllowed,
+                reviewColumn ?? "(not on a board)");
+        }
+
         Guid? workflowId = await db.Workflows
             .Where(w => w.WorkItemId == workItem.Id)
             .Select(w => (Guid?)w.Id)
@@ -266,6 +281,9 @@ public static class CommandAdmission
 
         command.Status = AgentCommandStatuses.Queued;
         command.ProcessedAt = now;
+        // a manual task-producing command is human intervention: the review→fix round budget
+        // restarts on the loop card (the review loop's anti-infinity guard is per automatic streak)
+        await ResetReviewFixRoundsAsync(db, workItem, cancellationToken);
         logger?.LogInformation(
             "command {commandId} admitted: /{command} on work item {workItemId} → task {taskId} (job {jobId}, workflow {workflowId}, profile version {versionId})",
             command.Id, name, workItem.Id, task.Id, orchestrationJob.Id, workflow.Id, version.Id);
@@ -348,6 +366,26 @@ public static class CommandAdmission
         {
             return false; // unreadable payload: fail open
         }
+    }
+
+    /// <summary>Resets the review→fix round counter on the loop card (the issue itself, or the
+    /// linked issue when the command ran on the PR). Idempotent (already 0 → a no-op update).</summary>
+    private static async Task ResetReviewFixRoundsAsync(AppDbContext db, WorkItem workItem,
+        CancellationToken cancellationToken)
+    {
+        if (workItem.Type == WorkItemTypes.Issue)
+        {
+            await db.WorkItems.Where(w => w.Id == workItem.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(w => w.ReviewFixRounds, 0), cancellationToken);
+            return;
+        }
+        var issueId = await db.WorkItemLinks.AsNoTracking()
+            .Where(l => l.PrWorkItemId == workItem.Id)
+            .Select(l => (Guid?)l.IssueWorkItemId)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (issueId is not null)
+            await db.WorkItems.Where(w => w.Id == issueId)
+                .ExecuteUpdateAsync(s => s.SetProperty(w => w.ReviewFixRounds, 0), cancellationToken);
     }
 
     /// <summary>`SELECT … FOR UPDATE` on the Workflow row serializes same-Workflow admissions;

@@ -250,8 +250,9 @@ public static class CallbackHandler
             return RunPipelineApi.Error(400, "validation", "result is required");
         if (string.IsNullOrWhiteSpace(request.Result.Summary))
             return RunPipelineApi.Error(400, "validation", "result.summary is required");
-        if (request.Outcome is { } outcome && outcome is not ("completed" or "needs_human_input"))
-            return RunPipelineApi.Error(400, "validation", "outcome must be 'completed' or 'needs_human_input'");
+        if (request.Outcome is { } outcome && outcome is not ("completed" or "needs_human_input" or "changes_requested"))
+            return RunPipelineApi.Error(400, "validation",
+                "outcome must be 'completed', 'needs_human_input' or 'changes_requested'");
 
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == run.TaskId, cancellationToken);
         var workspace = await db.Workspaces.AsNoTracking().SingleAsync(w => w.TaskId == task.Id, cancellationToken);

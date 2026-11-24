@@ -35,4 +35,15 @@ public static class ContextInstructions
             "MCP. This designs tests; it does not implement or run them.",
         _ => throw new InvalidOperationException($"no context instructions configured for task type '{taskType}'"),
     };
+
+    /// <summary>The review→fix round's directive: there is no plan to implement — the pull request
+    /// exists and the review findings (the threads and reviews sections of the input) are the work.
+    /// The agent continues the EXISTING branch and pull request; it never opens a second one.</summary>
+    public const string FixRound =
+        "You are the coder agent on a review-fix round. The pull request already exists; its review " +
+        "requested changes. Address the review findings (the reviews and threads sections of this " +
+        "input) on the EXISTING agent branch — the branch name is in the git section: check it out " +
+        "from origin (it already exists remotely; never create a new branch and never open a second " +
+        "pull request), commit the fixes, push, and publish a summary comment to the issue via GitHub " +
+        "MCP. Write the summary to `/workspace/artifacts/implementation-summary.md`.";
 }

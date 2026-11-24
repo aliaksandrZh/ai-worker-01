@@ -18,10 +18,19 @@ if [ -n "${GIT_CLONE_REPO:-}" ]; then
   # Workspace persistence is per-Task (retry reuse): clone only into an EMPTY workspace.
   if [ -z "$(ls -A /workspace 2>/dev/null)" ]; then
     : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to run without the repository clone}"
-    GIT_TERMINAL_PROMPT=0 git clone \
-      "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+    if [ -n "${GIT_CLONE_BRANCH:-}" ]; then
+      # A fix-round workspace IS the pull request branch: clone that branch directly —
+      # the agent continues the EXISTING pull request (a push updates it; no second PR).
+      GIT_TERMINAL_PROMPT=0 git clone --branch "${GIT_CLONE_BRANCH}" \
+        "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace \
+        || { echo "agent-entry: fix_branch_unavailable: branch ${GIT_CLONE_BRANCH} cannot be cloned from ${GIT_CLONE_REPO}" >&2; exit 75; }
+      echo "agent-entry: cloned ${GIT_CLONE_REPO} branch ${GIT_CLONE_BRANCH} into /workspace"
+    else
+      GIT_TERMINAL_PROMPT=0 git clone \
+        "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+      echo "agent-entry: cloned ${GIT_CLONE_REPO} into /workspace"
+    fi
     git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub the token
-    echo "agent-entry: cloned ${GIT_CLONE_REPO} into /workspace"
   else
     echo "agent-entry: /workspace not empty — keeping the existing workspace (retry reuse)"
   fi

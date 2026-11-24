@@ -94,7 +94,7 @@ public static class StartRunHandler
             // The work item's repository name travels as GIT_CLONE_REPO (not secret — profiles whose
             // entry script clones use their mounted token file; the stub ignores it).
             if (!TryBuildContainerPlan(run, task, version, storage, provisionerOptions.Value, workspaceHost, runTreeHost,
-                    repository.FullName, workItem.Number, out var plan, out var planError))
+                    repository.FullName, workItem.Number, workspace.BranchName, out var plan, out var planError))
                 return RunPipelineApi.Error(400, "validation", planError!);
 
             // 4. Docker: create + start + wait running; a created-but-not-confirmed container
@@ -179,6 +179,7 @@ public static class StartRunHandler
         string runTreeHost,
         string? workItemRepository,
         long? reviewPullRequestNumber,
+        string? gitCloneBranch,
         out ContainerPlan? plan,
         out string? error)
     {
@@ -244,6 +245,10 @@ public static class StartRunHandler
         Env("STUB_BEHAVIOR", ParseBridgeBehavior(version.BridgeConfiguration));
         if (!string.IsNullOrEmpty(workItemRepository))
             Env("GIT_CLONE_REPO", workItemRepository);
+        // a fix-round coder's workspace IS the pull request branch: the entry clones it directly
+        // (GIT_CLONE_BRANCH) so the agent never assembles the checkout from the default branch
+        if (!string.IsNullOrEmpty(gitCloneBranch))
+            Env("GIT_CLONE_BRANCH", gitCloneBranch);
         // a review Task's workspace is formed from the PINNED revisions — the
         // reviewer entry checks out `target_head_sha` and forms the diff locally from `target_base_sha`.
         if (task.Type == OrchestrationTaskTypes.Review)

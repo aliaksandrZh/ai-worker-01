@@ -15,16 +15,24 @@ public sealed class ParsedConfig
     /// by the dispatch/terminal paths (the AI Processing → In Progress and the implement-success →
     /// In Review board moves).</summary>
     public required List<ProjectStatusConfig> ProjectStatusConfigs { get; init; } = [];
+    /// <summary>Review-loop configs from projects.yaml (`review_loop`); empty when the file is
+    /// absent or a board declares none. Consumed by the review-terminal path (the review→fix
+    /// round cap); a board without the config uses the system default (3).</summary>
+    public required List<ReviewLoopConfig> ReviewLoopConfigs { get; init; } = [];
 }
 
 /// <summary>
-/// One Projects v2 board trigger (projects.yaml `auto_plan` / `auto_code`): when the Poller reports
-/// an item's `status_field` moving `from → to` on the `owner/number` board, the project-event cycle
-/// admits a system-owned Task of `task_type` on the item's work item — the board move IS the human
-/// signal, no comment needed. Values compare ordinal (GitHub column names are exact-case).
+/// One Projects v2 board trigger (projects.yaml `auto_plan` / `auto_code` / `auto_fix` /
+/// `auto_review`): when the Poller reports an item's `status_field` moving `from → to` on the
+/// `owner/number` board, the project-event cycle admits a system-owned Task of `task_type` on the
+/// item's work item — the board move IS the human signal, no comment needed. Values compare ordinal
+/// (GitHub column names are exact-case). `RequiresPlanArtifact` holds only for the plan-following
+/// coder trigger (`auto_code`): the fix-round coder (`auto_fix`) continues the existing pull
+/// request branch from the review findings and needs no plan.
 /// </summary>
 public sealed record ProjectBoardTrigger(
-    string Owner, int Number, string StatusField, string From, string To, string TaskType)
+    string Owner, int Number, string StatusField, string From, string To, string TaskType,
+    bool RequiresPlanArtifact = false)
 {
     public string Board => $"{Owner}/{Number}";
 }
@@ -38,8 +46,22 @@ public sealed record ProjectBoardTrigger(
 /// board without this key) cannot be verified — fail open. Values compare ordinal (exact-case).
 /// </summary>
 public sealed record ProjectStatusConfig(string Owner, int Number, string StatusField, string? Processing,
-    string? Review, IReadOnlyList<string>? CodeStatuses = null)
+    string? Review, string? Testing = null, IReadOnlyList<string>? CodeStatuses = null,
+    IReadOnlyList<string>? ReviewStatuses = null)
 {
+    public string Board => $"{Owner}/{Number}";
+}
+
+/// <summary>
+/// One Projects v2 board review-loop config (projects.yaml `review_loop`): the maximum number of
+/// review→fix rounds the automatic loop consumes on this board before it parks the card in the
+/// review column with `AI Failed` + a `review_loop_exhausted` comment and waits for a human.
+/// `max_rounds` must be positive; the effective default when the key is absent is
+/// <see cref="DefaultMaxRounds"/>.
+/// </summary>
+public sealed record ReviewLoopConfig(string Owner, int Number, int MaxRounds)
+{
+    public const int DefaultMaxRounds = 3;
     public string Board => $"{Owner}/{Number}";
 }
 

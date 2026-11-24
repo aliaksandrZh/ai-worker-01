@@ -24,22 +24,30 @@ state beyond its one comment.
 
 ## The agent branch
 
-1. If the task input carries `git.branch`, continue on that branch (create it from the current HEAD
-   if it does not exist yet). Otherwise create a new branch from the default branch named
-   `agent/<issue-number>-<short-slug>` (lowercase, hyphenated).
-2. Implement the approved plan. Where the plan names gaps/assumptions, resolve them conservatively
-   and note the choices in the summary.
+1. If the task input carries `git.branch`, continue on that branch — the workspace is ALREADY
+   checked out on it (the entry cloned the pull request's branch directly; a review-fix round
+   continues the existing pull request). Verify with `git branch --show current`; if the checkout
+   is somehow not on the branch, fetch and check it out (`git fetch origin <branch> && git checkout
+   <branch>`). Never create a new branch when `git.branch` is present and never open a second pull
+   request; a push to the same branch updates the same PR. Only when no `git.branch` is present,
+   create a new branch from the default branch named `agent/<issue-number>-<short-slug>`
+   (lowercase, hyphenated).
+2. Implement the approved plan (or, on a review-fix round, address the review findings — the reviews
+   and threads sections of the input). Where the plan names gaps/assumptions, resolve them
+   conservatively and note the choices in the summary.
 3. Build and run the repository's tests before finishing; fix only failures your change introduced.
 4. Commit everything, then push with `git push -u origin HEAD`. Push failures: retry once; on a
    non-fast-forward, never force-push — rebase onto the fetched default branch and push again.
 
 ## Mandatory publications — the pull request AND the issue comment
 
-1. Create ONE pull request from the agent branch to the repository's default branch (the default
-   branch is named in the task input) via the GitHub MCP tool `create_pull_request`:
-   the title names the work item, the body is concise Markdown for a human reviewer (what was
-   implemented, the agent branch and its head SHA, test/build outcome, deviations from the plan,
-   and `Closes #<issue-number>` to close the issue on merge).
+1. On a review-fix round (`git.branch` in the task input) the pull request already exists: do NOT
+   create one — the push to the agent branch updates it. Only a first round (no `git.branch`) opens
+   ONE pull request from the agent branch to the repository's default branch (the default branch is
+   named in the task input) via the GitHub MCP tool `create_pull_request`: the title names the work
+   item, the body is concise Markdown for a human reviewer (what was implemented, the agent branch
+   and its head SHA, test/build outcome, deviations from the plan, and `Closes #<issue-number>` to
+   close the issue on merge).
 2. Post exactly ONE issue comment on the task's issue via the GitHub MCP tool `add_issue_comment`.
    The comment is the short human-readable result: what was implemented, the pull request link and
    number, the agent branch name and its head SHA, test/build outcome, and any deviations from the
