@@ -85,6 +85,71 @@ public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
         return bodies;
     }
 
+    /// <summary>The AI-label transition: remove the other three (404 = already absent, fine),
+    /// then add `target`; `target = null` removes all four (cancellation/closure). No PATCH — it
+    /// would replace the whole label set and clobber the human's labels.</summary>
+    public async Task ApplyAiStateLabelAsync(string owner, string name, long issueNumber, string? target,
+        CancellationToken cancellationToken)
+    {
+        var toRemove = target is null
+            ? (IEnumerable<string>)PiAgent.Infrastructure.Persistence.AiStateLabels.All
+            : PiAgent.Infrastructure.Persistence.AiStateLabels.All.Where(label => label != target);
+        foreach (var label in toRemove)
+            await DeleteIssueLabelAsync(owner, name, issueNumber, label, cancellationToken);
+        if (target is not null)
+            await AddIssueLabelAsync(owner, name, issueNumber, target, cancellationToken);
+    }
+
+    private async Task AddIssueLabelAsync(string owner, string name, long issueNumber, string label,
+        CancellationToken cancellationToken)
+    {
+        var path = $"repos/{owner}/{name}/issues/{issueNumber}/labels";
+        var json = JsonSerializer.Serialize(new { labels = new[] { label } }, Json);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                throw await DeliveryFailureAsync(path, response, cancellationToken);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new GitHubDeliveryException(null, null, null, $"{path}: network failure (ambiguous): {exception.Message}", exception);
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GitHubDeliveryException(null, null, null, $"{path}: request timed out (ambiguous): {exception.Message}", exception);
+        }
+    }
+
+    /// <summary>Removes one label; GitHub answers 404 when the label is not on the issue —
+    /// that is the normal, expected outcome of the replace action and counts as success.</summary>
+    private async Task DeleteIssueLabelAsync(string owner, string name, long issueNumber, string label,
+        CancellationToken cancellationToken)
+    {
+        var path = $"repos/{owner}/{name}/issues/{issueNumber}/labels/{Uri.EscapeDataString(label)}";
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Delete, path);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return;
+            if (!response.IsSuccessStatusCode)
+                throw await DeliveryFailureAsync(path, response, cancellationToken);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new GitHubDeliveryException(null, null, null, $"{path}: network failure (ambiguous): {exception.Message}", exception);
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new GitHubDeliveryException(null, null, null, $"{path}: request timed out (ambiguous): {exception.Message}", exception);
+        }
+    }
+
     private async Task<GitHubDeliveryException> DeliveryFailureAsync(string path, HttpResponseMessage response, CancellationToken cancellationToken)
     {
         var detail = GitHubHttp.Redact((await response.Content.ReadAsStringAsync(cancellationToken)).Trim(), _pat);
