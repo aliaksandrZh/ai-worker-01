@@ -258,6 +258,10 @@ public sealed class LabelTriggerCycle(
         await db.SaveChangesAsync(cancellationToken);
         await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
+        // a review start clears the fix-required marker (the PR path's dual write covers the card)
+        if (taskType == OrchestrationTaskTypes.Review)
+            await ReviewFlow.SetChangesRequiredAsync(db, repository.Id, workItem.Id, workItem.Number,
+                task.Id, add: false, cancellationToken);
         logger.LogInformation("label trigger: {taskType} task {taskId} started for {repo}#{number} (label {label}, profile version {versionId})",
             taskType, task.Id, repository.FullName, item.Number, AiScopeLabels.LabelForTaskType[taskType], resolved.Version.Id);
     }
@@ -383,6 +387,9 @@ public sealed class LabelTriggerCycle(
         await db.SaveChangesAsync(cancellationToken);
         await AiStateLabels.MarkAsync(db, repository.Id, pr.Id, pr.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
+        // a review start clears the fix-required marker on the PR and its card
+        await ReviewFlow.SetChangesRequiredAsync(db, repository.Id, pr.Id, pr.Number,
+            task.Id, add: false, cancellationToken);
         logger.LogInformation(
             "label trigger: review task {taskId} started on linked PR {repo}#{prNumber} for card {repo}#{number} (label {label}, profile version {versionId})",
             task.Id, repository.FullName, pr.Number, repository.FullName, item.Number,

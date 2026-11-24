@@ -61,7 +61,7 @@ public static class BoardStatusOutbox
 
         await new OutboxActionStore(db).EnqueueProjectStatusAsync(
             new ProjectStatusEnqueueRequest(repositoryId, workItemId, taskId, issueNumber,
-                board.Owner, board.Number, projectItem.ItemId, board.StatusField, target),
+                board.Owner, board.Number, projectItem.ItemId, projectItem.ItemNodeId, board.StatusField, target),
             cancellationToken);
     }
 

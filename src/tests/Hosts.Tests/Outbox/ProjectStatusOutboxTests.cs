@@ -94,6 +94,7 @@ public class ProjectStatusOutboxTests(PostgresFixture postgres) : IClassFixture<
             Id = Guid.NewGuid(),
             ProjectSyncId = sync.Id,
             ItemId = 42,
+            ItemNodeId = "PVTI_test-item-42",
             ContentType = "Issue",
             RepositoryId = repo.Id,
             RepositoryFullName = repo.FullName,
@@ -125,6 +126,7 @@ public class ProjectStatusOutboxTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal("aliaksandrZh", payload.RootElement.GetProperty("owner").GetString());
         Assert.Equal(7, payload.RootElement.GetProperty("project_number").GetInt32());
         Assert.Equal(42, payload.RootElement.GetProperty("item_id").GetInt64());
+        Assert.Equal("PVTI_test-item-42", payload.RootElement.GetProperty("item_node_id").GetString()); // the GraphQL mutation resolves only the GLOBAL node id
         Assert.Equal("Status", payload.RootElement.GetProperty("field").GetString());
         Assert.Equal("In Progress", payload.RootElement.GetProperty("status").GetString());
     }
@@ -178,7 +180,7 @@ public class ProjectStatusOutboxTests(PostgresFixture postgres) : IClassFixture<
         Assert.Contains("PVTPROJ_1", handler.Bodies[1]);
         Assert.Contains("FIELD_1", handler.Bodies[1]);
         Assert.Contains("OPT_In Review", handler.Bodies[1]);
-        Assert.Contains("\"item\":42", handler.Bodies[1].Replace(" ", ""));
+        Assert.Contains("\"item\":\"PVTI_test-item-42\"", handler.Bodies[1].Replace(" ", "")); // the mutation binds the GLOBAL node id, not the database id
     }
 
     [Fact]

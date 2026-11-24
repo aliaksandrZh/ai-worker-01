@@ -97,6 +97,36 @@ public sealed class OutboxActionStore(AppDbContext db)
         return action;
     }
 
+    /// <summary>Adds or removes ONE named label on the issue (the review loop's
+    /// `Code changes are Required`). Idempotent at GitHub by construction: adding a present
+    /// label converges, removing an absent one answers 404 (counted as success).</summary>
+    public async Task<OutboxAction> EnqueueLabelAsync(LabelEnqueueRequest request, CancellationToken cancellationToken)
+    {
+        if (request.IssueNumber <= 0)
+            throw new ArgumentException($"issue_number must be positive, got {request.IssueNumber}", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Label))
+            throw new ArgumentException("label must be non-empty", nameof(request));
+
+        var payload = JsonSerializer.Serialize(new { issue_number = request.IssueNumber, label = request.Label, add = request.Add });
+        var now = DateTime.UtcNow;
+        var action = new OutboxAction
+        {
+            Id = Guid.NewGuid(),
+            RepositoryId = request.RepositoryId,
+            WorkItemId = request.WorkItemId,
+            TaskId = request.TaskId,
+            ActionType = OutboxActionTypes.Label,
+            Payload = payload,
+            Status = OutboxStatuses.Pending,
+            AvailableAt = now,
+            IdempotencyKey = Guid.NewGuid().ToString(),
+            CreatedAt = now,
+        };
+        db.OutboxActions.Add(action);
+        await db.SaveChangesAsync(cancellationToken);
+        return action;
+    }
+
     /// <summary>One AI-driven board status move (the single-select field set to the named option).
     /// Idempotent at GitHub by construction (setting the same value twice converges), so a fresh
     /// random idempotency key per transition is safe — replays after a crash re-apply the same state.</summary>
@@ -111,6 +141,9 @@ public sealed class OutboxActionStore(AppDbContext db)
             throw new ArgumentException($"project_number must be positive, got {request.ProjectNumber}", nameof(request));
         if (request.ItemId <= 0)
             throw new ArgumentException($"item_id must be positive, got {request.ItemId}", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ItemNodeId))
+            throw new ArgumentException(
+                "item_node_id must be non-empty (the GraphQL global node id, e.g. PVTI_...; the database id is not a node id)", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Field) || string.IsNullOrWhiteSpace(request.Status))
             throw new ArgumentException("field and status must be non-empty", nameof(request));
         if (!await db.Repositories.AnyAsync(r => r.Id == request.RepositoryId, cancellationToken))
@@ -122,6 +155,7 @@ public sealed class OutboxActionStore(AppDbContext db)
             owner = request.Owner,
             project_number = request.ProjectNumber,
             item_id = request.ItemId,
+            item_node_id = request.ItemNodeId,
             field = request.Field,
             status = request.Status,
         });

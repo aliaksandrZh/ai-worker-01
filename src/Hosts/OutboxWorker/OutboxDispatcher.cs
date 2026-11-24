@@ -50,6 +50,11 @@ public sealed class OutboxDispatcher(
             await DeliverAiLabelAsync(store, db, action, cancellationToken);
             return;
         }
+        if (action.ActionType == OutboxActionTypes.Label)
+        {
+            await DeliverLabelAsync(store, db, action, cancellationToken);
+            return;
+        }
         if (action.ActionType == OutboxActionTypes.ProjectStatus)
         {
             await DeliverProjectStatusAsync(store, db, action, cancellationToken);
@@ -218,14 +223,14 @@ public sealed class OutboxDispatcher(
             return;
         }
 
-        var (owner, projectNumber, itemId, field, status) = payload.Value;
+        var (owner, projectNumber, itemId, itemNodeId, field, status) = payload.Value;
         try
         {
-            await client.SetProjectItemStatusAsync(owner, projectNumber, itemId, field, status, cancellationToken);
+            await client.SetProjectItemStatusAsync(owner, projectNumber, itemNodeId, field, status, cancellationToken);
             await store.MarkCompletedAsync(action.Id, _dispatcherId, cancellationToken);
             logger.LogInformation(
-                "outbox project_status delivered {action_id} to board {owner}/{project_number} item {item_id}: {field} = {status} (attempts {attempts})",
-                action.Id, owner, projectNumber, itemId, field, status, action.Attempts);
+                "outbox project_status delivered {action_id} to board {owner}/{project_number} item {item_id} ({item_node_id}): {field} = {status} (attempts {attempts})",
+                action.Id, owner, projectNumber, itemId, itemNodeId, field, status, action.Attempts);
         }
         catch (GitHubDeliveryException exception)
         {
@@ -255,8 +260,10 @@ public sealed class OutboxDispatcher(
     }
 
     /// <summary>Payload contract: `{ "owner": string, "project_number": int, "item_id": long,
-    /// "field": string, "status": string }`.</summary>
-    private static (string Owner, int ProjectNumber, long ItemId, string Field, string Status)?
+    /// "item_node_id": string, "field": string, "status": string }`. `item_node_id` is the GraphQL
+    /// GLOBAL node id (PVTI_…): the mutation resolves nothing by database id — a payload without it
+    /// is unparsable (dead-letter), never a retry.</summary>
+    private static (string Owner, int ProjectNumber, long ItemId, string ItemNodeId, string Field, string Status)?
         ParseProjectStatusPayload(string payload)
     {
         try
@@ -266,12 +273,14 @@ public sealed class OutboxDispatcher(
             var owner = root.GetProperty("owner").GetString();
             var projectNumber = root.GetProperty("project_number").GetInt32();
             var itemId = root.GetProperty("item_id").GetInt64();
+            var itemNodeId = root.GetProperty("item_node_id").GetString();
             var field = root.GetProperty("field").GetString();
             var status = root.GetProperty("status").GetString();
             if (string.IsNullOrWhiteSpace(owner) || projectNumber <= 0 || itemId <= 0
+                || string.IsNullOrWhiteSpace(itemNodeId)
                 || string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(status))
                 return null;
-            return (owner, projectNumber, itemId, field, status);
+            return (owner, projectNumber, itemId, itemNodeId, field, status);
         }
         catch (JsonException)
         {
@@ -292,6 +301,91 @@ public sealed class OutboxDispatcher(
     }
 
     /// <summary>Payload contract: `{ "issue_number": long, "label": string|null }` — null label = clear.</summary>
+    /// <summary>The named-label add/remove: no marker/duplicate-suppression probe is needed —
+    /// the apply is idempotent by construction (POST on a present label converges, DELETE on an
+    /// absent one answers 404 = fine). Error classification is identical to the AI labels.</summary>
+    private async Task DeliverLabelAsync(OutboxActionStore store, AppDbContext db, OutboxAction action,
+        CancellationToken cancellationToken)
+    {
+        var (issueNumber, label, add) = ParseLabelPayload(action.Payload);
+        if (issueNumber is null || label is null)
+        {
+            var reason = $"payload is not a valid label payload: {Summarize(action.Payload)}";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id}: {error}", action.Id, reason);
+            return;
+        }
+
+        var repository = await db.Repositories.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Id == action.RepositoryId, cancellationToken);
+        if (repository is null)
+        {
+            var reason = $"outbox action {action.Id}: repository {action.RepositoryId} no longer exists";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id}: {error}", action.Id, reason);
+            return;
+        }
+
+        try
+        {
+            await client.SetIssueLabelAsync(repository.Owner, repository.Name, issueNumber.Value, label, add, cancellationToken);
+            await store.MarkCompletedAsync(action.Id, _dispatcherId, cancellationToken);
+            logger.LogInformation("outbox label delivered {action_id} to {repo}/{issue_number}: {verb} '{label}' (attempts {attempts})",
+                action.Id, repository.FullName, issueNumber, add ? "add" : "remove", label, action.Attempts);
+        }
+        catch (GitHubDeliveryException exception)
+        {
+            await ClassifyDeliveryFailureAsync(store, action, exception, "label", cancellationToken);
+        }
+    }
+
+    private static (long? IssueNumber, string? Label, bool Add) ParseLabelPayload(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var issueNumber = document.RootElement.GetProperty("issue_number").GetInt64();
+            var label = document.RootElement.GetProperty("label").GetString();
+            var add = document.RootElement.GetProperty("add").GetBoolean();
+            return issueNumber > 0 && !string.IsNullOrWhiteSpace(label) ? (issueNumber, label, add) : (null, null, false);
+        }
+        catch (JsonException)
+        {
+            return (null, null, false);
+        }
+        catch (FormatException)
+        {
+            return (null, null, false);
+        }
+    }
+
+    /// <summary>The shared permanent/transient split for the idempotent GitHub writes: an ambiguous
+    /// failure (no HTTP status) retries; a permanent status dead-letters; otherwise backoff retry.</summary>
+    private async Task ClassifyDeliveryFailureAsync(OutboxActionStore store, OutboxAction action,
+        GitHubDeliveryException exception, string kind, CancellationToken cancellationToken)
+    {
+        if (exception.Status is null)
+        {
+            var error = $"ambiguous: {exception.Message}";
+            await store.MarkTransientFailureAsync(action.Id, _dispatcherId, error, Backoff(action.Attempts), cancellationToken);
+            logger.LogWarning("outbox ambiguous {kind} delivery {action_id} (attempt {attempts}): {error}", kind, action.Id, action.Attempts, error);
+        }
+        else if (IsPermanent(exception))
+        {
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, exception.Message, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id} after {attempts} attempts: {error}", action.Id, action.Attempts, exception.Message);
+        }
+        else
+        {
+            var delay = Backoff(action.Attempts);
+            if (exception.RetryAfterSeconds is { } retryAfter)
+                delay = TimeSpan.FromTicks(Math.Min(MaxInterval.Ticks, Math.Max(delay.Ticks, TimeSpan.FromSeconds(retryAfter).Ticks)));
+            await store.MarkTransientFailureAsync(action.Id, _dispatcherId, exception.Message, delay, cancellationToken);
+            logger.LogWarning("outbox transient {kind} delivery failure {action_id} (attempt {attempts}) retry in {delay}: {error}",
+                kind, action.Id, action.Attempts, delay, exception.Message);
+        }
+    }
+
     private static (long? IssueNumber, string? Target) ParseAiLabelPayload(string payload)
     {
         try

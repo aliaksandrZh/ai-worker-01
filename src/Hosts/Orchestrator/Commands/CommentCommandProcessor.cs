@@ -224,10 +224,17 @@ public sealed class CommentCommandProcessor(
                     scope.ServiceProvider.GetService<RuntimeApiClient>(), metrics, cancellationToken);
 
             if (command.Status == AgentCommandStatuses.Queued)
+            {
                 // admitted task-producing command: the AI-lifecycle label starts at Scheduled —
                 // same transaction as the admission writes (durable, retried by the Outbox).
                 await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
                     null, AiStateLabels.Scheduled, cancellationToken);
+                // a manual review start clears the fix-required marker (the dual write covers the
+                // PR and its card; other task types never touch it)
+                if (command.CommandName == AgentCommandNames.Review)
+                    await ReviewFlow.SetChangesRequiredAsync(db, repository.Id, workItem.Id, workItem.Number,
+                        null, add: false, cancellationToken);
+            }
 
             MarkProcessed(githubEvent);
             await db.SaveChangesAsync(cancellationToken);

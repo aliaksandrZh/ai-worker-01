@@ -111,6 +111,7 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
             Id = Guid.NewGuid(),
             ProjectSyncId = sync.Id,
             ItemId = 42,
+            ItemNodeId = "PVTI_test-item-42",
             ContentType = "Issue",
             RepositoryId = repo.Id,
             RepositoryFullName = repo.FullName,
@@ -181,6 +182,15 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal(2, labels.Count);
         Assert.All(labels, a => Assert.Contains("AI Scheduled", a.Payload));
         Assert.Equal(2, labels.Select(a => JsonDocument.Parse(a.Payload).RootElement.GetProperty("issue_number").GetInt64()).Distinct().Count());
+        // a review start clears the fix-required marker on both items
+        var markers = await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Label).ToListAsync();
+        Assert.Equal(2, markers.Count);
+        Assert.All(markers, a =>
+        {
+            using var marker = JsonDocument.Parse(a.Payload);
+            Assert.Equal(ReviewFlow.ChangesRequiredLabel, marker.RootElement.GetProperty("label").GetString());
+            Assert.False(marker.RootElement.GetProperty("add").GetBoolean());
+        });
     }
 
     [Fact]
@@ -277,6 +287,15 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
         Assert.Equal("In Progress", payload.RootElement.GetProperty("status").GetString());
         // no exhaustion comment
         Assert.Equal(0, await db.OutboxActions.CountAsync(a => a.ActionType == OutboxActionTypes.Comment));
+        // the verdict's marker lands on the PR and the card (add)
+        var markers = await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Label).ToListAsync();
+        Assert.Equal(2, markers.Count);
+        Assert.All(markers, a =>
+        {
+            using var marker = JsonDocument.Parse(a.Payload);
+            Assert.Equal(ReviewFlow.ChangesRequiredLabel, marker.RootElement.GetProperty("label").GetString());
+            Assert.True(marker.RootElement.GetProperty("add").GetBoolean());
+        });
     }
 
     [Fact]

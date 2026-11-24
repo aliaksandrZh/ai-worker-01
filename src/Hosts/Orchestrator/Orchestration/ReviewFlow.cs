@@ -18,6 +18,31 @@ public static class ReviewFlow
     /// <summary>The diagnostic code the exhaustion comment names (special error code, human text around it).</summary>
     public const string ExhaustedCode = "review_loop_exhausted";
 
+    /// <summary>The review verdict's visible marker: the review demanded changes — the label sits on
+    /// the PR and its linked issue until the NEXT review starts (every review start clears it).</summary>
+    public const string ChangesRequiredLabel = "Code changes are Required";
+
+    /// <summary>Sets or clears <see cref="ChangesRequiredLabel"/> on the pull request AND its
+    /// linked issue (the loop card) — the same dual-write rule the AI state labels follow. Called
+    /// with `add: true` when the reviewer's `request_changes` verdict settles, and `add: false` on
+    /// every review start. Best-effort like every label write: an unlinked PR marks itself alone.</summary>
+    public static async Task SetChangesRequiredAsync(
+        AppDbContext db, Guid repositoryId, Guid prWorkItemId, long prNumber, Guid? taskId, bool add,
+        CancellationToken cancellationToken)
+    {
+        var store = new OutboxActionStore(db);
+        await store.EnqueueLabelAsync(
+            new LabelEnqueueRequest(repositoryId, prWorkItemId, taskId, prNumber, ChangesRequiredLabel, add), cancellationToken);
+        var linkedIssue = await db.WorkItemLinks.AsNoTracking()
+            .Where(l => l.PrWorkItemId == prWorkItemId)
+            .Join(db.WorkItems.AsNoTracking(), l => l.IssueWorkItemId, w => w.Id,
+                (l, w) => new { w.Id, w.Number })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (linkedIssue is { } card)
+            await store.EnqueueLabelAsync(
+                new LabelEnqueueRequest(repositoryId, card.Id, taskId, card.Number, ChangesRequiredLabel, add), cancellationToken);
+    }
+
     /// <summary>The board card the review loop runs on: the linked issue of a pull request, else the
     /// item itself. Null only when a PR's linked issue row vanished (referential integrity bug).</summary>
     public static async Task<WorkItem?> LoopCardAsync(

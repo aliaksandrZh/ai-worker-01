@@ -270,6 +270,11 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
             return;
         }
 
+        // the verdict's visible marker: changes were requested — the label sits on the PR and the
+        // card until the next review start clears it (both the fix-round and the parked paths)
+        await ReviewFlow.SetChangesRequiredAsync(db, card.RepositoryId, pullRequest.Id, pullRequest.Number,
+            task.Id, add: true, cancellationToken);
+
         var maxRounds = await ReviewFlow.MaxRoundsAsync(db, configurationState,
             card.RepositoryId, card.Number, cancellationToken);
         if (card.ReviewFixRounds >= maxRounds)
