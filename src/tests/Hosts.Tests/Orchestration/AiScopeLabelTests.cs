@@ -29,11 +29,16 @@ public class AiScopeLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
     private const string NoLabels = "[]";
     private static CancellationToken TestToken => default;
 
-    private static LabelTriggerCycle NewScanner(PostgresFixture fixture, bool synchronized = true)
+    private static LabelTriggerCycle NewScanner(PostgresFixture fixture, bool synchronized = true,
+        IReadOnlyList<ProjectBoardTrigger>? triggers = null)
     {
         var configuration = new ConfigurationState();
         if (synchronized)
+        {
+            if (triggers is not null)
+                configuration.SetProjectBoardTriggers(triggers);
             configuration.MarkSynchronized(Bot, 10);
+        }
         return new LabelTriggerCycle(
             new ServiceCollection()
                 .AddDbContext<AppDbContext>(options => options
@@ -320,6 +325,82 @@ public class AiScopeLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
         var input = await verify.TaskArtifactInputs.AsNoTracking().SingleAsync(i => i.TaskId == task.Id);
         Assert.Equal(artifact.Id, input.ArtifactId);
         Assert.Equal(ArtifactInputPurposes.ApprovedPlan, input.Purpose);
+    }
+
+    // ---- the STATUS + LABEL invariant for the scanner's implement run ----
+
+    private static readonly ProjectBoardTrigger AutoCodeTrigger =
+        new("octo-org", 6, "Status", "Clarifying", "Ready", OrchestrationTaskTypes.Implement);
+
+    /// <summary>With auto_code configured, the scanner's implement run converges ONLY when the
+    /// card sits in the trigger's target column: STATUS + LABEL, nothing else.</summary>
+    [Theory]
+    [InlineData("Ready", 1)]   // the target column + the label + the plan → the run starts
+    [InlineData("Clarifying", 0)] // the label without the column is nothing
+    [InlineData("In Progress", 0)]
+    [InlineData("Backlog", 0)]
+    public async Task Scanner_ImplementRun_RequiresTheAutoCodeTargetColumn(string column, int expectedTasks)
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        await SetLabelsAsync(db, workItem, """["AI:Code"]""");
+        var (_, version, _) = await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+        await SeedBoardStatusAsync(db, workItem, "Ready");
+        // the card's current column per the scenario
+        await db.ProjectItems.ExecuteUpdateAsync(s => s
+            .SetProperty(i => i.FieldValues, "[{\"id\":1,\"name\":\"Status\",\"value\":\"" + column + "\"}]"));
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false);
+        var artifact = new Artifact
+        {
+            Id = Guid.NewGuid(), TaskId = seeded.Task.Id, WorkflowId = seeded.Workflow.Id,
+            Type = ArtifactTypes.Plan, Format = ArtifactFormats.Markdown, Content = "the plan",
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Artifacts.Add(artifact);
+        await db.OrchestrationTasks.Where(t => t.Id == seeded.Task.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.Type, OrchestrationTaskTypes.Plan)
+                .SetProperty(t => t.Status, OrchestrationTaskStatuses.Succeeded));
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        await NewScanner(postgres, triggers: [AutoCodeTrigger]).RunCycleAsync(TestToken);
+
+        await using var verify = postgres.NewDbContext();
+        Assert.Equal(expectedTasks, await verify.OrchestrationTasks
+            .CountAsync(t => t.Type == OrchestrationTaskTypes.Implement));
+    }
+
+    [Fact]
+    public async Task Scanner_ImplementRun_NoAutoCodeTrigger_LabelAloneStillRunsTheCode()
+    {
+        // no auto_code configured → the scanner keeps the legacy label-driven behavior
+        // (the shipped config always carries auto_code; this pins the fallback)
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        await SetLabelsAsync(db, workItem, """["AI:Code"]""");
+        var (_, version, _) = await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version, withRun: false);
+        db.Artifacts.Add(new Artifact
+        {
+            Id = Guid.NewGuid(), TaskId = seeded.Task.Id, WorkflowId = seeded.Workflow.Id,
+            Type = ArtifactTypes.Plan, Format = ArtifactFormats.Markdown, Content = "the plan",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.OrchestrationTasks.Where(t => t.Id == seeded.Task.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.Type, OrchestrationTaskTypes.Plan)
+                .SetProperty(t => t.Status, OrchestrationTaskStatuses.Succeeded));
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        await NewScanner(postgres).RunCycleAsync(TestToken);
+
+        await using var verify = postgres.NewDbContext();
+        Assert.Equal(1, await verify.OrchestrationTasks
+            .CountAsync(t => t.Type == OrchestrationTaskTypes.Implement));
     }
 
     [Fact]

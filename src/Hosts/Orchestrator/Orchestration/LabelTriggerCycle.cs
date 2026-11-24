@@ -16,7 +16,9 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// - the item is open and its workflow is not failed/closed;
 /// - the type's own conditions: Plan — the item's current board column IS the Clarifying state
 ///   ("everything must converge": Clarifying without the label and the label outside Clarifying
-///   both do nothing); Implement — a successful plan artifact to approve; Review — an open
+///   both do nothing); Implement — a successful plan artifact to approve AND the card in the
+///   auto_code target column (STATUS + LABEL — the same invariant the trigger and the manual
+///   /code gate enforce); Review — an open
 ///   non-draft PR with no initial review yet and no explicit `/review` (the label IS the request);
 ///   TestDesign — not implemented (no routing rule), so it silently never fires;
 /// - the profile version is `ready` (else the tick silently skips — retried next tick);
@@ -137,6 +139,30 @@ public sealed class LabelTriggerCycle(
                         repository.FullName, item.Number);
                     return;
                 }
+                // The same invariant as the auto_code trigger and the manual /code gate —
+                // STATUS + LABEL: the automation runs only when the card sits in the trigger's
+                // target column (Ready). A label without the column is nothing.
+                var codeTrigger = configurationState.ProjectBoardTriggers
+                    .FirstOrDefault(t => t.TaskType == OrchestrationTaskTypes.Implement);
+                if (codeTrigger is not null)
+                {
+                    var codeColumn = await db.ProjectItems.AsNoTracking()
+                        .Join(db.ProjectSyncs.AsNoTracking(),
+                            i => i.ProjectSyncId, s => s.Id,
+                            (i, s) => new { i.RepositoryId, i.Number, i.FieldValues, s.Owner, s.ProjectNumber })
+                        .Where(x => x.RepositoryId == item.RepositoryId && x.Number == (int)item.Number
+                            && x.Owner == codeTrigger.Owner && x.ProjectNumber == codeTrigger.Number)
+                        .Select(x => x.FieldValues)
+                        .SingleOrDefaultAsync(cancellationToken);
+                    var codeStatus = codeColumn is null ? null : CurrentFieldValue(codeColumn, codeTrigger.StatusField);
+                    if (!string.Equals(codeStatus, codeTrigger.To, StringComparison.Ordinal))
+                    {
+                        logger.LogInformation(
+                            "label trigger: implement on {repo}#{number} skipped — the item's current board column is '{status}', not the auto_code target '{to}' (status + label must converge)",
+                            repository.FullName, item.Number, codeStatus ?? "(not on a board)", codeTrigger.To);
+                        return;
+                    }
+                }
                 break;
             case OrchestrationTaskTypes.Review:
                 if (item.Type != WorkItemTypes.PullRequest || item.Draft == true)
@@ -237,7 +263,10 @@ public sealed class LabelTriggerCycle(
     }
 
     /// <summary>The item's current single-select board status from the synced field snapshot.</summary>
-    private static string? CurrentBoardStatus(string fieldValuesJson)
+    private static string? CurrentBoardStatus(string fieldValuesJson) =>
+        CurrentFieldValue(fieldValuesJson, BoardStatusField);
+
+    private static string? CurrentFieldValue(string fieldValuesJson, string fieldName)
     {
         try
         {
@@ -247,7 +276,7 @@ public sealed class LabelTriggerCycle(
             foreach (var field in document.RootElement.EnumerateArray())
                 if (field.ValueKind == JsonValueKind.Object
                     && field.TryGetProperty("name", out var name)
-                    && string.Equals(name.GetString(), BoardStatusField, StringComparison.Ordinal)
+                    && string.Equals(name.GetString(), fieldName, StringComparison.Ordinal)
                     && field.TryGetProperty("value", out var value)
                     && value.ValueKind == JsonValueKind.String)
                     return value.GetString();
