@@ -58,7 +58,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         var reloaded = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id);
         Assert.Equal(OrchestrationTaskStatuses.Cancelled, reloaded.Status);
         Assert.Equal(AgentCommandRejectionReasons.StopRequested, reloaded.FailureReason); // /stop's reason kept
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync()); // no spurious claim-cancellation notice
+        Assert.Empty(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync()); // no spurious claim-cancellation notice
         await db.DisposeAsync();
     }
 
@@ -100,7 +100,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
 
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.GithubCommentId == comment.GithubCommentId);
         Assert.Equal(AgentCommandStatuses.Processed, command.Status);
-        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment)).Payload;
         Assert.Contains("nothing to stop", payload, StringComparison.Ordinal);
         // nothing is closed or deleted; a Workflow is not even created
         Assert.Empty(await db.Workflows.AsNoTracking().ToListAsync());
@@ -123,7 +123,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
 
         await RunAsync(db, harness);
 
-        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment)).Payload;
         Assert.Contains("nothing to stop", payload, StringComparison.Ordinal);
         // a finished (succeeded) Task is not stopped; the Workflow is not closed or deleted
         Assert.Equal(OrchestrationTaskStatuses.Succeeded,
@@ -168,7 +168,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal(WorkflowStatuses.WaitingForHuman, workflow.Status);
         Assert.Null(workflow.CurrentTaskId);
         // exactly one Outbox notification covering the cancellation; never the runtime API
-        var notice = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        var notice = (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment)).Payload;
         Assert.Contains("/stop: cancellation processed.", notice, StringComparison.Ordinal);
         Assert.Contains("Queued tasks cancelled with their jobs: 1", notice, StringComparison.Ordinal);
         Assert.Contains("Storage (session files, logs, workspace) is retained", notice, StringComparison.Ordinal);
@@ -235,7 +235,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
         Assert.Equal(WorkflowStatuses.Active, workflow.Status);
         Assert.Equal(prepared.Task.Id, workflow.CurrentTaskId);
         // exactly one notification covering the active cancellation
-        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync()).Payload;
+        var payload = (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment)).Payload;
         Assert.Contains("Active task /plan (attempt #2", payload, StringComparison.Ordinal);
         Assert.Contains("graceful stop dispatched", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("Queued tasks cancelled", payload, StringComparison.Ordinal);
@@ -261,7 +261,7 @@ public class StopCommandTests(PostgresFixture postgres) : IClassFixture<Postgres
 
         // the failure rolls the whole /stop back: no cancellations, no notification, and the whole
         // command row (created inside the same transaction) released with the event for the retry
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        Assert.Empty(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == prepared.Task.Id);
         Assert.Equal(OrchestrationTaskStatuses.Running, task.Status);
         Assert.Empty(await db.AgentCommands.AsNoTracking().Where(c => c.GithubCommentId == comment.GithubCommentId).ToListAsync());

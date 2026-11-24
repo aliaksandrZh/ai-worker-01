@@ -138,6 +138,9 @@ services:
       - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
       - ../deploy/config/repositories.yaml:/etc/pi-agent/config/repositories.yaml:ro
       - ../deploy/config/routing.yaml:/etc/pi-agent/config/routing.yaml:ro
+      # Board triggers (projects.yaml auto_plan): the project-event cycle reads them from the
+      # synchronized configuration state (the Poller mounts the whole config dir; per-file here).
+      - ../deploy/config/projects.yaml:/etc/pi-agent/config/projects.yaml:ro
       # Agent assets (../agents): profile definitions (../agents/<name>/) + shared runtime
       # implementation (../agents/_runtime/bridge). Mounted INSIDE the config root so the container
       # tree keeps the pinned shape the parser and DB rows expect: {configRoot}/agents/<name>/.

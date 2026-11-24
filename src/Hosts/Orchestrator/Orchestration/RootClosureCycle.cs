@@ -100,6 +100,9 @@ public sealed class RootClosureCycle(IServiceScopeFactory scopeFactory, RuntimeA
 
         workflow.CurrentTaskId = null;
         await db.SaveChangesAsync(cancellationToken);
+        // root closure is not a failure either: the AI labels go away with the workflow
+        await AiStateLabels.ClearAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
+            null, cancellationToken);
         using var cleanup = await runtimeApi.CleanupWorkflowAsync(workflow.Id, cancellationToken);
         cleanup.EnsureSuccessStatusCode();
         workItem.CleanupStatus = "completed";

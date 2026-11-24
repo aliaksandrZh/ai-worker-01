@@ -230,7 +230,7 @@ public class ReviewTriggerTests(PostgresFixture postgres) : IClassFixture<Postgr
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync();
         Assert.Equal(OrchestrationTaskStatuses.Cancelled, task.Status);
         Assert.Equal(AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution, task.FailureReason);
-        var notice = await db.OutboxActions.AsNoTracking().SingleAsync();
+        var notice = await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment);
         Assert.Contains("review request", notice.Payload);
     }
 
@@ -257,7 +257,7 @@ public class ReviewTriggerTests(PostgresFixture postgres) : IClassFixture<Postgr
         Assert.Equal(OrchestrationTaskStatuses.Cancelled, task.Status);
         Assert.Equal(AgentCommandRejectionReasons.ReviewHeadChanged, task.FailureReason);
         Assert.Equal("head-1", task.TargetHeadSha); // the pinned SHA is never rewritten
-        var notice = await db.OutboxActions.AsNoTracking().SingleAsync();
+        var notice = await db.OutboxActions.AsNoTracking().SingleAsync(a => a.ActionType == OutboxActionTypes.Comment);
         Assert.Contains("run /review again", notice.Payload);
     }
 

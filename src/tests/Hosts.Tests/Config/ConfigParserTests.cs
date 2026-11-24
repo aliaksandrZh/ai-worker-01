@@ -70,6 +70,7 @@ public class ConfigParserTests : IDisposable
         Assert.Empty(config.Repositories);
         Assert.Empty(config.RoutingRules);
         Assert.Empty(config.Profiles);
+        Assert.Empty(config.ProjectPlanTriggers);
     }
 
     [Fact]
@@ -450,6 +451,118 @@ public class ConfigParserTests : IDisposable
         Assert.Contains("planner", exception.Message);
     }
 
+    // --- projects.yaml (Orchestrator-side board triggers) ---
+
+    private void WriteAllWithProjects(string projectsYaml)
+    {
+        Write("system.yaml", MinimalSystem);
+        Write("repositories.yaml", MinimalRepositories);
+        Write("routing.yaml", MinimalRouting);
+        Directory.CreateDirectory(Path.Combine(_root, "agents"));
+        Write("projects.yaml", projectsYaml);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoPlan_TriggerParsed()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                auto_plan:
+                  status_field: Status
+                  from: Backlog
+                  to: Clarifying
+            """);
+        var config = ConfigParser.Parse(_root);
+        var trigger = Assert.Single(config.ProjectPlanTriggers);
+        Assert.Equal("aliaksandrZh", trigger.Owner);
+        Assert.Equal(7, trigger.Number);
+        Assert.Equal("aliaksandrZh/7", trigger.Board);
+        Assert.Equal("Status", trigger.StatusField);
+        Assert.Equal("Backlog", trigger.From);
+        Assert.Equal("Clarifying", trigger.To);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoPlan_StatusFieldDefaultsToStatus()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                auto_plan:
+                  from: Todo
+                  to: Planning
+            """);
+        var trigger = Assert.Single(ConfigParser.Parse(_root).ProjectPlanTriggers);
+        Assert.Equal("Status", trigger.StatusField);
+    }
+
+    [Fact]
+    public void ProjectsYaml_WithoutAutoPlan_NoTriggers()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+            """);
+        Assert.Empty(ConfigParser.Parse(_root).ProjectPlanTriggers);
+    }
+
+    [Fact]
+    public void ProjectsYaml_Missing_EmptyTriggers()
+    {
+        Write("system.yaml", MinimalSystem);
+        Write("repositories.yaml", MinimalRepositories);
+        Write("routing.yaml", MinimalRouting);
+        Directory.CreateDirectory(Path.Combine(_root, "agents"));
+        Assert.Empty(ConfigParser.Parse(_root).ProjectPlanTriggers);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoPlan_MissingFromOrTo_FailsNamingFile()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                auto_plan:
+                  from: Todo
+            """);
+        var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
+        Assert.Contains("projects.yaml", exception.Message);
+        Assert.Contains("auto_plan", exception.Message);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoPlan_FromEqualsTo_Fails()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                auto_plan:
+                  from: Same
+                  to: Same
+            """);
+        var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
+        Assert.Contains("projects.yaml", exception.Message);
+        Assert.Contains("must differ", exception.Message);
+    }
+
+    [Fact]
+    public void ProjectsYaml_EntryMissingOwner_Fails()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - number: 3
+            """);
+        var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
+        Assert.Contains("projects.yaml", exception.Message);
+        Assert.Contains("owner", exception.Message);
+    }
+
     /// <summary>Shipped configuration integrity: the real shipped tree (deploy/config yamls
     /// + repo-root agents/ profiles) must parse under the strict schema — a dropped key in a
     /// profile.yaml aborts the Orchestrator at startup otherwise, which CI should catch, not the next
@@ -510,6 +623,8 @@ public class ConfigParserTests : IDisposable
                     Directory.CreateDirectory(merged);
                     foreach (var yaml in new[] { "system.yaml", "repositories.yaml", "routing.yaml" })
                         File.Copy(Path.Combine(yamlRoot, yaml), Path.Combine(merged, yaml));
+                    if (File.Exists(Path.Combine(yamlRoot, "projects.yaml"))) // Orchestrator-side triggers live here too
+                        File.Copy(Path.Combine(yamlRoot, "projects.yaml"), Path.Combine(merged, "projects.yaml"));
                     Directory.CreateSymbolicLink(Path.Combine(merged, "agents"), agentsRoot);
                     return merged;
                 }

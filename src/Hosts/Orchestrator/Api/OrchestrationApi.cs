@@ -272,6 +272,11 @@ public static class OrchestrationApi
                 // of the same transactional path.
                 await ControlCommandHandler.HandleAsync(db, command, workItem, repository, runtimeApi, metrics, cancellationToken);
             }
+
+            if (command.Status == AgentCommandStatuses.Queued)
+                // admitted task-producing command → the AI-lifecycle label starts at Scheduled
+                await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+                    null, AiStateLabels.Scheduled, cancellationToken);
         }
 
         await db.SaveChangesAsync(cancellationToken);

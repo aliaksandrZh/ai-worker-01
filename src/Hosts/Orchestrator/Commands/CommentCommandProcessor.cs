@@ -212,6 +212,12 @@ public sealed class CommentCommandProcessor(
                 await ControlCommandHandler.HandleAsync(db, command, workItem, repository,
                     scope.ServiceProvider.GetService<RuntimeApiClient>(), metrics, cancellationToken);
 
+            if (command.Status == AgentCommandStatuses.Queued)
+                // admitted task-producing command: the AI-lifecycle label starts at Scheduled —
+                // same transaction as the admission writes (durable, retried by the Outbox).
+                await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+                    null, AiStateLabels.Scheduled, cancellationToken);
+
             MarkProcessed(githubEvent);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);

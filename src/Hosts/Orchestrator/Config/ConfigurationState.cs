@@ -17,6 +17,9 @@ public sealed class ConfigurationState
     public DateTime? SynchronizedAtUtc { get; private set; }
     /// <summary>Exact-case bot login from system.yaml (`github.bot_login`); set when synchronization succeeds.</summary>
     public string? BotLogin { get; private set; }
+    /// <summary>Board → auto-plan triggers from projects.yaml (`auto_plan`); startup-only, no hot
+    /// reload — set by the Config Loader before the synchronization gate opens.</summary>
+    public IReadOnlyList<ProjectPlanTrigger> ProjectPlanTriggers { get; private set; } = [];
     /// <summary>First failure message (diagnosable configuration error); also surfaced via /readyz.</summary>
     public string? Error { get; private set; }
 
@@ -28,6 +31,9 @@ public sealed class ConfigurationState
         MaxConcurrentRuns = maxConcurrentRuns;
         Error = null;
     }
+
+    public void SetProjectPlanTriggers(IReadOnlyList<ProjectPlanTrigger> triggers) =>
+        ProjectPlanTriggers = triggers;
 
     public void MarkFailed(string error)
     {

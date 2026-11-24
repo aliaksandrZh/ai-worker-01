@@ -14,14 +14,15 @@ namespace PiAgent.Hosts.Tests.Poller;
 /// <summary>
 /// The Projects v2 pass over real postgres with a stubbed GitHub: list-diff detection
 /// (added / field-changed / removed), repository + work-item resolution on the emitted events,
-/// the 304 short-circuit, dedupe idempotence, and sync-only treatment of unmappable content
-/// (DraftIssue, untracked repository).
+/// cursor pagination, dedupe idempotence, and sync-only treatment of unmappable content
+/// (DraftIssue, untracked repository). The listing is GraphQL — the REST items endpoint does not
+/// return field values, so column states (Status included) are only readable there.
 /// </summary>
 public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<PostgresFixture>
 {
     private static readonly ProjectRef Project = new("octo-user", 6);
     private const string Board = "octo-user/6";
-    private const string BoardPath = "/users/octo-user/projectsV2/6/items?per_page=100";
+    private const string GraphQlPath = "/graphql";
 
     private async Task<(AppDbContext Db, Repository Repo, WorkItem Issue)> NewDbAndRepoAsync()
     {
@@ -42,30 +43,46 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
         return result;
     }
 
+    private static string GraphQlEnvelope(string nodesJson, bool hasNextPage = false, string? endCursor = null) =>
+        "{\"data\":{\"user\":{\"projectV2\":{\"items\":{\"pageInfo\":{\"hasNextPage\":" +
+        (hasNextPage ? "true" : "false") + ",\"endCursor\":" +
+        (endCursor is null ? "null" : $"\"{endCursor}\"") +
+        "},\"nodes\":" + nodesJson + "}}}}}";
+
+    private static string Page(params string[] itemNodes) =>
+        GraphQlEnvelope("[" + string.Join(",", itemNodes) + "]");
+
     private static string ItemJson(long itemId, string updated, string status) => $$$"""
         {
-          "id": {{{itemId}}}, "node_id": "PVTI_{{{itemId}}}", "content_type": "Issue",
-          "content": {
-            "id": 555, "node_id": "ISSUE_3", "number": 3, "title": "Issue three", "state": "open",
-            "url": "https://api.github.com/repos/octo-org/example/issues/3"
+          "databaseId": {{{itemId}}},
+          "id": "PVTI_{{{itemId}}}",
+          "type": "ISSUE",
+          "createdAt": "2026-11-19T16:00:00Z",
+          "updatedAt": "{{{updated}}}",
+          "fieldValues": {
+            "nodes": [
+              {"__typename": "ProjectV2ItemFieldTextValue", "text": "Issue three", "field": {"id": "PVTF_title", "name": "Title"}},
+              {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "{{{status}}}", "field": {"id": "PVTF_status", "name": "Status"}}
+            ]
           },
-          "created_at": "2026-11-19T16:00:00Z", "updated_at": "{{{updated}}}", "archived_at": null,
-          "fields": [
-            {"id": 1, "name": "Title", "value": "Issue three"},
-            {"id": 2, "name": "Status", "value": {"id": "98236657", "name": "{{{status}}}"}}
-          ]
+          "content": {"__typename": "Issue", "number": 3, "title": "Issue three", "repository": {"nameWithOwner": "octo-Org/Example"}}
         }
         """;
 
     private static string DraftItemJson(long itemId, string updated) => $$$"""
         {
-          "id": {{{itemId}}}, "node_id": "PVTI_DRAFT_{{{itemId}}}", "content_type": "DraftIssue",
-          "content": {
-            "id": 900, "node_id": "PVDI_{{{itemId}}}", "title": "Draft note", "body": null,
-            "created_at": "2026-11-19T16:00:00Z", "updated_at": "{{{updated}}}"
+          "databaseId": {{{itemId}}},
+          "id": "PVTI_DRAFT_{{{itemId}}}",
+          "type": "DRAFT_ISSUE",
+          "createdAt": "2026-11-19T16:00:00Z",
+          "updatedAt": "{{{updated}}}",
+          "fieldValues": {
+            "nodes": [
+              {"__typename": "ProjectV2ItemFieldTextValue", "text": "Draft note", "field": {"id": "PVTF_title", "name": "Title"}},
+              {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "No status", "field": {"id": "PVTF_status", "name": "Status"}}
+            ]
           },
-          "created_at": "2026-11-19T16:00:00Z", "updated_at": "{{{updated}}}", "archived_at": null,
-          "fields": [{"id": 2, "name": "Status", "value": {"id": "1", "name": "No status"}}]
+          "content": {"__typename": "DraftIssue", "title": "Draft note"}
         }
         """;
 
@@ -74,12 +91,12 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     {
         var (db, repo, issue) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
 
         var first = await Sync(db, handler);
         Assert.Null(first.Error); // surfaces the stream failure verbatim on regression
         Assert.Equal(StreamResultKind.Completed, first.Kind);
-        Assert.Single(handler.Requests, r => r == BoardPath);
+        Assert.Single(handler.Requests, r => r == GraphQlPath);
 
         var added = await db.GitHubEvents.SingleAsync(e => e.EventType == GitHubEventTypes.ProjectItemAdded);
         Assert.Equal(GitHubEventSources.ProjectItemsSync, added.Source);
@@ -90,7 +107,8 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
         Assert.Contains("\"project\":\"octo-user/6\"", added.Payload);
 
         var row = await db.ProjectItems.SingleAsync(i => i.ItemId == 101);
-        Assert.Equal("octo-org/example", row.RepositoryFullName);
+        // the snapshot keeps GitHub's real casing; matching against repository rows is case-insensitive
+        Assert.Equal("octo-Org/Example", row.RepositoryFullName);
         Assert.Equal(3, row.Number);
         Assert.Equal(repo.Id, row.RepositoryId);
         Assert.Contains("Backlog", row.FieldValues);
@@ -98,13 +116,12 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
         var state = await db.ProjectSyncs.SingleAsync();
         Assert.Equal("octo-user", state.Owner);
         Assert.Equal(6, state.ProjectNumber);
-        Assert.Equal("board-etag-1", state.Etag);
         Assert.Null(state.LastError);
 
         // Relist of the identical board emits nothing: added events dedupe on their stable key
         db.ChangeTracker.Clear();
         handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
         Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
         Assert.Equal(1, await db.GitHubEvents.CountAsync(e => e.EventType == GitHubEventTypes.ProjectItemAdded));
     }
@@ -114,12 +131,12 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     {
         var (db, repo, issue) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
         await Sync(db, handler);
 
         db.ChangeTracker.Clear();
         handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T17:30:00Z", "In Progress")), etag: "board-etag-2");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T17:30:00Z", "In Progress")));
         Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
 
         var updated = await db.GitHubEvents.SingleAsync(e => e.EventType == GitHubEventTypes.ProjectItemUpdated);
@@ -131,7 +148,6 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
 
         var row = await db.ProjectItems.SingleAsync(i => i.ItemId == 101);
         Assert.Contains("In Progress", row.FieldValues);
-        Assert.Equal("board-etag-2", (await db.ProjectSyncs.SingleAsync()).Etag);
     }
 
     [Fact]
@@ -139,12 +155,12 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     {
         var (db, repo, _) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
         await Sync(db, handler);
 
         db.ChangeTracker.Clear();
         handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(), etag: "board-etag-2");
+        handler.Enqueue(Page());
         Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
 
         var removed = await db.GitHubEvents.SingleAsync(e => e.EventType == GitHubEventTypes.ProjectItemRemoved);
@@ -155,19 +171,40 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     }
 
     [Fact]
-    public async Task NotModified_ShortCircuits_WithStoredEtag()
+    public async Task Pagination_MergesCursorPages()
     {
         var (db, _, _) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(GraphQlEnvelope($"[{ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")}]",
+            hasNextPage: true, endCursor: "cursor-1"));
+        handler.Enqueue(GraphQlEnvelope($"[{ItemJson(202, "2026-11-19T16:00:00Z", "Backlog")}]"));
+
+        Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
+        Assert.Equal(2, handler.Requests.Count(r => r == GraphQlPath));
+        Assert.Equal(2, await db.ProjectItems.CountAsync());
+        Assert.Equal(2, await db.GitHubEvents.CountAsync());
+    }
+
+    [Fact]
+    public async Task AlreadyCurrentRow_WithNullRepositoryLink_HealsCoordinatesWithoutEvents()
+    {
+        var (db, repo, _) = await NewDbAndRepoAsync();
+        // a row written by a pass whose repository lookup failed: content current, link null
+        var handler = new PollerTestSupport.StubHandler();
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
         await Sync(db, handler);
+        await db.ProjectItems.Where(i => i.ItemId == 101)
+            .ExecuteUpdateAsync(u => u.SetProperty(i => i.RepositoryId, (Guid?)null));
+        db.ChangeTracker.Clear();
+
+        handler = new PollerTestSupport.StubHandler();
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
+        Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
 
         db.ChangeTracker.Clear();
-        handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue304("board-etag-1");
-        Assert.Equal(StreamResultKind.NotModified, (await Sync(db, handler)).Kind);
-        Assert.Single(handler.Requests, r => r == BoardPath);
-        Assert.Contains(handler.IfNoneMatch, tag => tag == "\"board-etag-1\"");
+        var row = await db.ProjectItems.SingleAsync(i => i.ItemId == 101);
+        Assert.Equal(repo.Id, row.RepositoryId); // the link healed, no churn
+        // no new event: the healing pass emitted nothing beyond the original `added`
         Assert.Equal(1, await db.GitHubEvents.CountAsync());
     }
 
@@ -176,9 +213,9 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     {
         var (db, _, _) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(
+        handler.Enqueue(Page(
             ItemJson(101, "2026-11-19T16:00:00Z", "Backlog"),
-            DraftItemJson(202, "2026-11-19T16:00:00Z")), etag: "board-etag-1");
+            DraftItemJson(202, "2026-11-19T16:00:00Z")));
 
         Assert.Equal(StreamResultKind.Completed, (await Sync(db, handler)).Kind);
         Assert.Equal(2, await db.ProjectItems.CountAsync());
@@ -195,11 +232,11 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
     }
 
     [Fact]
-    public async Task Failure_KeepsEtag_AndRecordsLastError()
+    public async Task Failure_RecordsLastError_AndKeepsRows()
     {
         var (db, _, _) = await NewDbAndRepoAsync();
         var handler = new PollerTestSupport.StubHandler();
-        handler.Enqueue(PollerTestSupport.ArrayJson(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")), etag: "board-etag-1");
+        handler.Enqueue(Page(ItemJson(101, "2026-11-19T16:00:00Z", "Backlog")));
         await Sync(db, handler);
 
         db.ChangeTracker.Clear();
@@ -209,10 +246,20 @@ public class ProjectItemsSyncTests(PostgresFixture postgres) : IClassFixture<Pos
         Assert.Equal(StreamResultKind.Failed, result.Kind);
 
         var state = await db.ProjectSyncs.SingleAsync();
-        Assert.Equal("board-etag-1", state.Etag); // the failure never drops the last good ETag
         Assert.NotNull(state.LastError);
         Assert.NotNull(state.LastAttemptAt);
         // rows stay intact; the next pass re-detects
         Assert.Single(await db.ProjectItems.ToListAsync());
+    }
+
+    [Fact]
+    public async Task GraphQlErrorsWithoutData_FailTheStream()
+    {
+        var (db, _, _) = await NewDbAndRepoAsync();
+        var handler = new PollerTestSupport.StubHandler();
+        handler.Enqueue("""{"errors":[{"message":"Could not resolve to a ProjectV2 node"}]}""");
+        var result = await Sync(db, handler);
+        Assert.Equal(StreamResultKind.Failed, result.Kind);
+        Assert.Contains("Could not resolve", (await db.ProjectSyncs.SingleAsync()).LastError);
     }
 }

@@ -7,6 +7,20 @@ public sealed class ParsedConfig
     public required List<RepositoryEntry> Repositories { get; init; }
     public required List<RoutingRuleEntry> RoutingRules { get; init; }
     public required List<ProfileConfig> Profiles { get; init; }
+    /// <summary>Board triggers from projects.yaml (`auto_plan`); empty when the file is absent or
+    /// no board declares one. Consumed by the project-event cycle (system-owned plan Tasks).</summary>
+    public required List<ProjectPlanTrigger> ProjectPlanTriggers { get; init; } = [];
+}
+
+/// <summary>
+/// One Projects v2 board trigger (projects.yaml `auto_plan`): when the Poller reports an item's
+/// `status_field` moving `from → to` on the `owner/number` board, the project-event cycle admits a
+/// system-owned plan Task on the item's work item — the board move IS the human signal, no comment
+/// needed. Values compare ordinal (GitHub column names are exact-case).
+/// </summary>
+public sealed record ProjectPlanTrigger(string Owner, int Number, string StatusField, string From, string To)
+{
+    public string Board => $"{Owner}/{Number}";
 }
 
 public sealed class SystemConfig

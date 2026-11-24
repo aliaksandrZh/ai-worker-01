@@ -13,10 +13,14 @@ public static class OutboxStatuses
     public const string Cancelled = "cancelled";
 }
 
-/// <summary>Outbox delivers orchestration-owned comments only (agent GitHub writes go through GitHub MCP).</summary>
+/// <summary>Outbox delivers orchestration-owned GitHub writes: system comments (the agent's own
+/// writes go through GitHub MCP) and the AI-lifecycle label transitions.</summary>
 public static class OutboxActionTypes
 {
     public const string Comment = "comment";
+    /// <summary>Payload { issue_number, label } — `label = null` clears all four AI labels.
+    /// Applied as DELETE (the other three; 404 = fine) + POST (the target).</summary>
+    public const string AiLabel = "ai_label";
 }
 
 /// <summary>
