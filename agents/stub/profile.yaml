@@ -18,7 +18,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.5.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.5.0 = the review-verdict mandate
+  version: "1.6.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.6.0 = the review-verdict + run-outcome mandates
   heartbeat_interval: 15s
   event_cadence: 5s
   behavior: succeed   # stub-only scenario lever: succeed | fail | hang | never_start | permission_denied | mcp_failed

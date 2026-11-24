@@ -8,6 +8,11 @@
         "GITHUB_PERSONAL_ACCESS_TOKEN": "!cat /run/secrets/github-write-pat.txt",
         "GITHUB_TOOLS": "issue_read,add_issue_comment,pull_request_read,search_pull_requests,create_pull_request,update_pull_request"
       }
+    },
+    "outcome": {
+      "command": "node",
+      "args": ["/opt/pi-agent/profile/run-outcome.mjs"],
+      "exposure": "direct"
     }
   }
 }

@@ -246,9 +246,16 @@ public static class StartRunHandler
         if (!string.IsNullOrEmpty(workItemRepository))
             Env("GIT_CLONE_REPO", workItemRepository);
         // a fix-round coder's workspace IS the pull request branch: the entry clones it directly
-        // (GIT_CLONE_BRANCH) so the agent never assembles the checkout from the default branch
+        // (GIT_CLONE_BRANCH) so the agent never assembles the checkout from the default branch.
+        // The fix round's MANDATE changes with it: the pull request already exists — the mandatory
+        // publications are the summary comment (and the push, verified by git facts), NOT a
+        // create_pull_request (which would never be observed and fails the run publication_missing).
+        // The override beats the image-baked default only for this run.
         if (!string.IsNullOrEmpty(gitCloneBranch))
+        {
             Env("GIT_CLONE_BRANCH", gitCloneBranch);
+            Env("PI_REQUIRED_PUBLICATION_KINDS", "issue_comment");
+        }
         // a review Task's workspace is formed from the PINNED revisions — the
         // reviewer entry checks out `target_head_sha` and forms the diff locally from `target_base_sha`.
         if (task.Type == OrchestrationTaskTypes.Review)

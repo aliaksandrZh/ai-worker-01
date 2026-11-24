@@ -23,7 +23,7 @@ import { EventMapper, isSuccessfulToolEnd } from "./events.mjs"; // the mapper o
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
-import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
+import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, outcomeNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -52,6 +52,12 @@ const changesTool = env.PI_REVIEW_OUTCOME_TOOL || "";
 // submission (or silence) is nudged back at most PI_PUBLICATION_NUDGES times, then fails the run
 // with `verdict_missing`. The args of `tool_execution_start` make the submit's event observable.
 const verdictRequired = env.PI_REQUIRED_REVIEW_VERDICT === "1";
+// the run-outcome MANDATE (the coder image only): the agent MUST call the completion tool
+// (PI_OUTCOME_TOOL) before the run can settle — the observed call is the "work is done" signal the
+// control plane turns into the task's terminal state. A settle without the call is nudged back at
+// most PI_PUBLICATION_NUDGES times, then fails the run with `outcome_missing` (the task ends Failed).
+const outcomeTool = env.PI_OUTCOME_TOOL || "";
+const outcomeRequired = env.PI_REQUIRED_OUTCOME === "1";
 // how many times a settle with unconfirmed mandated publications is nudged back to the agent
 // (a follow-up prompt in the same session) before the run fails with `publication_missing`
 const publicationNudges = (() => {
@@ -499,12 +505,14 @@ async function main() {
     if (!settled) break; // the agent exited without settling — judged below
     const check = checkPublications(requiredPublicationKinds, completedToolNames, mapper.deniedToolNames);
     const verdict = verdictRequired ? reviewVerdict(mapper.completedToolCalls, changesTool) : { decided: true, changesRequested: false };
-    if (check.ok && verdict.decided) {
+    const outcomeDone = !outcomeRequired
+      || completedToolNames.has(normalizeToolName(outcomeTool));
+    if (check.ok && verdict.decided && outcomeDone) {
       confirmed = true;
       reviewOutcome = verdict.changesRequested ? "changes_requested" : undefined;
       break;
     }
-    if (check.ok && !verdict.decided) {
+    if (check.ok && outcomeDone && !verdict.decided) {
       // the verdict mandate: the changes tool denied by policy cannot be nudged away either
       if (changesTool && mapper.deniedToolNames.has(changesTool))
         return await failNow("required_permission_denied",
@@ -526,6 +534,31 @@ async function main() {
         ]);
       } catch (error) {
         return await failNow("runtime_failure", `verdict nudge failed — ${error.message}`);
+      }
+      continue;
+    }
+    if (check.ok && verdict.decided && !outcomeDone) {
+      // the run-outcome mandate: the completion tool cannot be nudged into existence when denied
+      if (outcomeTool && mapper.deniedToolNames.has(outcomeTool))
+        return await failNow("required_permission_denied",
+          `the run-outcome tool was denied by the run's permission policy: ${outcomeTool}`);
+      if (agentExited || nudgesLeft <= 0)
+        return await failNow("outcome_missing",
+          `the completion tool was never confirmed: ${outcomeTool} — the work is not reported done`);
+      nudgesLeft -= 1;
+      log(`run-outcome tool missing (${outcomeTool}) — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
+      settled = false;
+      mapper.settled = false;
+      mapper.flushAggregated();
+      try {
+        await Promise.race([
+          correlator.command("prompt", { message: outcomeNudgePrompt(outcomeTool) }),
+          onAgentExit.then((code) => {
+            throw new Error(`agent exited during nudge acceptance (code ${code})`);
+          }),
+        ]);
+      } catch (error) {
+        return await failNow("runtime_failure", `outcome nudge failed — ${error.message}`);
       }
       continue;
     }

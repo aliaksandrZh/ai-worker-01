@@ -296,6 +296,26 @@ test("review-outcome server answers initialize, lists the tool and records the c
   assert.equal(silent.length, 0);
 });
 
+// ---- run-outcome MCP server: the coder's completion marker ----
+
+test("run-outcome server answers initialize, lists the tool and records the call", async () => {
+  const server = fileURLToPath(new URL("../../coder/run-outcome.mjs", import.meta.url));
+  const send = (input) => spawnSync("node", [server], { input, encoding: "utf8" }).stdout
+    .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+
+  const initialized = send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }));
+  assert.equal(initialized[0].result.serverInfo.name, "run-outcome");
+
+  const listed = send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+  assert.ok(listed[0].result.tools.some((t) => t.name === "work_completed"));
+
+  const called = send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "work_completed", arguments: { summary: "fixes pushed" } } }));
+  assert.match(called[0].result.content[0].text, /work is complete/);
+
+  const invalid = send(JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "work_completed", arguments: {} } }));
+  assert.equal(invalid[0].error.code, -32602);
+});
+
 // ---- spool: durable append, coalescing, redelivery ----
 
 test("spool appends durably, delivers in order, removes on completion", async () => {
