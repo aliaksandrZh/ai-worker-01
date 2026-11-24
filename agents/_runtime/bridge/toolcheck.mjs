@@ -15,7 +15,7 @@ const MAX_ARTIFACT_BYTES = 256 * 1024; // max_artifact_size, hard limit
 /** Mandated publication kind → the GitHub MCP tool(s) whose successful execution confirms it. */
 export const PUBLICATION_TOOLS = {
   issue_comment: ["add_issue_comment"],
-  pull_request: ["pull_request_write"],
+  pull_request: ["create_pull_request"],
   review: ["pull_request_review_write"],
 };
 

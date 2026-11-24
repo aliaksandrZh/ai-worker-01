@@ -36,7 +36,7 @@ state beyond its one comment.
 ## Mandatory publications — the pull request AND the issue comment
 
 1. Create ONE pull request from the agent branch to the repository's default branch (the default
-   branch is named in the task input) via the GitHub MCP tool `pull_request_write` (`method: create`):
+   branch is named in the task input) via the GitHub MCP tool `create_pull_request`:
    the title names the work item, the body is concise Markdown for a human reviewer (what was
    implemented, the agent branch and its head SHA, test/build outcome, deviations from the plan,
    and `Closes #<issue-number>` to close the issue on merge).
@@ -59,7 +59,7 @@ this run. Before re-posting, verify what actually landed on GitHub: use `issue_r
 `get_comments` on the same issue and look for your comment content. Never create a duplicate comment —
 if a previous attempt landed, treat the work as published and stop posting.
 
-If `pull_request_write` (`create`) fails or its result was lost, retry INSIDE this run the same way:
+If `create_pull_request` fails or its result was lost, retry INSIDE this run the same way:
 first verify with `pull_request_read` whether a pull request from your agent branch already exists
 (head = the agent branch, base = the default branch). If one exists, treat it as published — reuse it
 (never open a second pull request from the same branch).

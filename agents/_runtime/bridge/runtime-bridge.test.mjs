@@ -170,7 +170,7 @@ test("checkPublications confirms mandated kinds from observed tool names", () =>
   assert.equal(checkPublications(["issue_comment"], new Set(["add_issue_comment"])).ok, true);
   // real pi reports the server-prefixed MCP name — the normalization strips the `mcp__<server>__`
   assert.equal(checkPublications(["issue_comment"], new Set(["mcp__github__add_issue_comment"])).ok, true);
-  assert.equal(checkPublications(["pull_request"], new Set(["mcp__github__pull_request_write"])).ok, true);
+  assert.equal(checkPublications(["pull_request"], new Set(["mcp__github__create_pull_request"])).ok, true);
   assert.equal(checkPublications(["review"], new Set(["mcp__github__pull_request_review_write"])).ok, true);
   const missing = checkPublications(["issue_comment", "pull_request"], new Set(["add_issue_comment"]));
   assert.deepEqual(missing, { ok: false, missing: ["pull_request"], denied: [] });
