@@ -178,13 +178,18 @@ public sealed class ProjectEventLogCycle(
                 taskType, githubEvent.Id, Label(workItem, repository), reason, detail);
             return false;
         }
+        Guid? planArtifactId = null;
         if (taskType == OrchestrationTaskTypes.Implement)
         {
-            // the coder implements an APPROVED plan: a successful plan artifact must exist
+            // the coder implements an APPROVED plan: a successful plan artifact must exist —
+            // and it rides on the task as the ApprovedPlan input (the claim-time recheck and
+            // the coder's context both read it from here, same as the /code admission)
             var workflowForArtifact = await db.Workflows.AsNoTracking()
                 .SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
-            if (workflowForArtifact is null
-                || await CommandAdmission.LatestPlanArtifactIdAsync(db, workflowForArtifact.Id, cancellationToken) is null)
+            planArtifactId = workflowForArtifact is null
+                ? null
+                : await CommandAdmission.LatestPlanArtifactIdAsync(db, workflowForArtifact.Id, cancellationToken);
+            if (planArtifactId is null)
             {
                 logger.LogInformation("implement trigger: event {eventId} consumed — no successful plan artifact to approve (run the plan first) for work item {label}",
                     githubEvent.Id, Label(workItem, repository));
@@ -251,6 +256,17 @@ public sealed class ProjectEventLogCycle(
             RetryPolicy = RetryPolicies.Effective(resolved.Version.RetryPolicy),
         };
         db.OrchestrationTasks.Add(task);
+        if (planArtifactId is { } artifactId)
+        {
+            db.TaskArtifactInputs.Add(new TaskArtifactInput
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                ArtifactId = artifactId,
+                Purpose = ArtifactInputPurposes.ApprovedPlan,
+                CreatedAt = now,
+            });
+        }
         db.OrchestrationJobs.Add(new OrchestrationJob
         {
             Id = Guid.NewGuid(),

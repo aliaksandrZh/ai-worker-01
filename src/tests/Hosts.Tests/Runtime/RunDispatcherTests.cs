@@ -297,7 +297,10 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
         var job = await db.OrchestrationJobs.AsNoTracking().SingleAsync();
         Assert.Equal(OrchestrationJobStatuses.Cancelled, job.Status);
         Assert.False(await db.Runs.AsNoTracking().AnyAsync());
-        Assert.Equal(1, await db.OutboxActions.AsNoTracking().CountAsync()); // the claim-cancel notice
+        Assert.Equal(1, await db.OutboxActions.AsNoTracking()
+            .CountAsync(a => a.ActionType == OutboxActionTypes.Comment)); // the claim-cancel notice
+        Assert.Equal(1, await db.OutboxActions.AsNoTracking()
+            .CountAsync(a => a.ActionType == OutboxActionTypes.AiLabel)); // the work ended unsuccessfully → AI Failed
     }
 
     private static HttpResponseMessage AdminPermission() => new(HttpStatusCode.OK)

@@ -447,6 +447,10 @@ public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<P
         Assert.Null(task.TriggerCommandId);
         Assert.Equal(first.Id, task.TriggerGithubEventId);
         Assert.Equal(WorkflowStatuses.Active, workflow.Status);
+        // the approved plan rides on the task — without this input the claim-time recheck
+        // cancels the task (plan_not_available) and the item hangs on a stale AI Scheduled
+        var input = await db.TaskArtifactInputs.AsNoTracking().SingleAsync(i => i.TaskId == task.Id);
+        Assert.Equal(ArtifactInputPurposes.ApprovedPlan, input.Purpose);
         // the lifecycle label rides the same transition: AI Scheduled enqueued through the outbox
         Assert.Equal(OutboxActionTypes.AiLabel,
             (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.TaskId == task.Id)).ActionType);

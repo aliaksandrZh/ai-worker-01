@@ -473,8 +473,14 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id);
         Assert.Equal(AgentCommandRejectionReasons.ReviewHeadChanged, task.FailureReason);
         Assert.Equal("old-sha", task.TargetHeadSha); // the pinned SHA is never rewritten
-        var notice = await db.OutboxActions.AsNoTracking().SingleAsync();
+        var notice = Assert.Single(await db.OutboxActions.AsNoTracking()
+            .Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync()); // the claim-cancel notice
         Assert.Contains("run /review again", notice.Payload);
+        // the queued review finally died — the AI-state labels follow (AI Failed, stop/closure excluded)
+        var label = Assert.Single(await db.OutboxActions.AsNoTracking()
+            .Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync());
+        using var labelPayload = System.Text.Json.JsonDocument.Parse(label.Payload);
+        Assert.Equal(AiStateLabels.Failed, labelPayload.RootElement.GetProperty("label").GetString());
     }
 
     [Fact]
@@ -498,6 +504,12 @@ public class JobQueueWorkerTests(PostgresFixture postgres) : IClassFixture<Postg
         Assert.Equal(OrchestrationTaskStatuses.Cancelled, task.Status);
         Assert.Equal(AgentCommandRejectionReasons.AgentImageNotReady, task.FailureReason);
         Assert.Empty(await db.Runs.AsNoTracking().ToListAsync());
+        // the queued task finally died without running — the labels must not hang on AI Scheduled:
+        // a claim-time cancellation (stop/closure excluded) is the work ending unsuccessfully
+        var label = Assert.Single(await db.OutboxActions.AsNoTracking()
+            .Where(a => a.ActionType == OutboxActionTypes.AiLabel).ToListAsync());
+        using var labelPayload = System.Text.Json.JsonDocument.Parse(label.Payload);
+        Assert.Equal(AiStateLabels.Failed, labelPayload.RootElement.GetProperty("label").GetString());
     }
 
     [Fact]
