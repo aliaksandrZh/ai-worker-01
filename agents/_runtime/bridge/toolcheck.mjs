@@ -86,6 +86,15 @@ export function verdictNudgePrompt(changesTool) {
   ].join("\n");
 }
 
+/** The follow-up prompt the Bridge sends after a settle that left the run-outcome tool unconfirmed. */
+export function outcomeNudgePrompt(outcomeTool) {
+  return [
+    "Your run cannot be completed yet: the completion marker was not confirmed.",
+    `Call the ${outcomeTool} tool ONCE (with a one-sentence summary) right before finishing — it is the`,
+    "machine-readable \"work is done\" signal. It publishes nothing; never call it for work you did not finish.",
+  ].join("\n");
+}
+
 /** The follow-up prompt the Bridge sends after a settle that left a mandated publication unconfirmed. */
 export function nudgePrompt(missing) {
   return [

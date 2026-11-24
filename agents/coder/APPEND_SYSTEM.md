@@ -53,7 +53,12 @@ state beyond its one comment.
    number, the agent branch name and its head SHA, test/build outcome, and any deviations from the
    plan.
 3. Before finishing, write the implementation summary as Markdown to
-   `/workspace/artifacts/implementation-summary.md` (at most 256 KiB). There is no self-reporting: the Runtime Bridge verifies BOTH publications automatically against the
+   `/workspace/artifacts/implementation-summary.md` (at most 256 KiB).
+4. Call the `work_completed` tool (the `outcome` server) ONCE with a one-sentence summary — right
+   before finishing, after the push and the publications. There is no self-reporting beyond this
+   marker: the Runtime Bridge verifies it against the tool executions it observes, and a settle
+   without the call fails the run (`outcome_missing`) — the task ends Failed. On a review-fix round
+   the call is the same: work done = the fixes pushed to the existing pull request branch. There is no self-reporting: the Runtime Bridge verifies BOTH publications automatically against the
    tool executions it observes, so both the pull request and the issue comment MUST actually happen
    through the GitHub MCP tools above. If a mandatory publication was not confirmed, the Bridge
    sends you a follow-up prompt in this same session — perform or verify the missing publication

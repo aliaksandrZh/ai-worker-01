@@ -962,9 +962,11 @@ public class StartContainerPlanTests
             out var error, workItemRepository: "aliaksandrZh/04", gitCloneBranch: "agent/42-fix");
         Assert.Null(error);
         Assert.Contains("GIT_CLONE_BRANCH=agent/42-fix", plan!.Env);
+        Assert.Contains("PI_REQUIRED_PUBLICATION_KINDS=issue_comment", plan.Env); // no create_pull_request mandate on a fix round
         // the default round carries no branch — the entry clones the default branch
         var bare = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
             out _, gitCloneBranch: null);
         Assert.DoesNotContain("GIT_CLONE_BRANCH", bare!.Env ?? []);
+        Assert.DoesNotContain("PI_REQUIRED_PUBLICATION_KINDS", bare.Env ?? []); // the image-baked mandate applies
     }
 }

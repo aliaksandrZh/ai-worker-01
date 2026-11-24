@@ -53,7 +53,7 @@ WORKDIR /workspace
 # the FILES remain image-baked (the image is the sole source; nothing mounts over them), the
 # ownership only lets pi write its own state files (mcp.log et al.) inside the ephemeral container
 # layer.
-COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json /opt/pi-agent/profile/
+COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json run-outcome.mjs /opt/pi-agent/profile/
 COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
 COPY entry /usr/local/bin/agent-entry
 COPY git-credential-pat-file /usr/local/bin/git-credential-pat-file
@@ -68,6 +68,8 @@ ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
 ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=issue_comment,pull_request \
+    PI_OUTCOME_TOOL=work_completed \
+    PI_REQUIRED_OUTCOME=1 \
     PI_PUBLICATION_NUDGES=2 \
     GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
 
