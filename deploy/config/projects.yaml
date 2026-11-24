@@ -51,18 +51,18 @@ projects:
       to: Ready
     auto_fix:
       status_field: Status
-      from: In Review
-      to: In Progress
+      from: In review
+      to: In progress
     auto_review:
       status_field: Status
-      from: In Progress
-      to: In Review
+      from: In progress
+      to: In review
     ai_statuses:
       status_field: Status
-      processing: In Progress
-      review: In Review
+      processing: In progress
+      review: In review
       testing: Testing
-      code_statuses: [Ready, In Progress]
-      review_statuses: [In Review]
+      code_statuses: [Ready, In progress]
+      review_statuses: [In review]
     review_loop:
       max_rounds: 3
