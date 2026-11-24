@@ -19,11 +19,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openSpool } from "./spool.mjs";
-import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
+import { EventMapper, isSuccessfulToolEnd } from "./events.mjs"; // the mapper owns the observed-tool-call stream
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
-import { renderPrompt, gitFacts, checkPublications, nudgePrompt, collectArtifacts, completedTerminal, normalizeToolName } from "./toolcheck.mjs";
+import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -46,7 +46,12 @@ const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
 // the review-verdict tool (the reviewer image only): an OBSERVED error-free execution of this tool
 // turns the terminal `completed` into `outcome: "changes_requested"` — the review demanded fixes;
 // its absence means the review passed. A verdict, not a publication: never nudged, never mandated.
-const outcomeTool = env.PI_REVIEW_OUTCOME_TOOL || "";
+const changesTool = env.PI_REVIEW_OUTCOME_TOOL || "";
+// the review-verdict MANDATE (the reviewer image only): a definite verdict must be OBSERVED —
+// the `request_changes` call or a submit with event APPROVE / REQUEST_CHANGES; a COMMENT-only
+// submission (or silence) is nudged back at most PI_PUBLICATION_NUDGES times, then fails the run
+// with `verdict_missing`. The args of `tool_execution_start` make the submit's event observable.
+const verdictRequired = env.PI_REQUIRED_REVIEW_VERDICT === "1";
 // how many times a settle with unconfirmed mandated publications is nudged back to the agent
 // (a follow-up prompt in the same session) before the run fails with `publication_missing`
 const publicationNudges = (() => {
@@ -231,6 +236,7 @@ const observedCompletedToolCalls = new Set(); // error-free completed tool ids
 const completedToolNames = new Set(); // tool names with an error-free completed end (the toolcheck)
 const toolNameByCallId = new Map(); // tool_started fallback: ends whose payload omits the name
 let lastAssistantText = null; // the last aggregated assistant_output — the run's result summary
+let reviewOutcome = undefined; // the review verdict carried in the terminal completed callback
 let sessionFilePath = null; // the actual session path, discovered via `get_state`
 let mcpProbe = null; // active while the /mcp status probe is in flight: { lines, waiters }
 let settled = false;
@@ -492,7 +498,37 @@ async function main() {
     if (stopSignal) break; // the stop path owns the terminal
     if (!settled) break; // the agent exited without settling — judged below
     const check = checkPublications(requiredPublicationKinds, completedToolNames, mapper.deniedToolNames);
-    if (check.ok) { confirmed = true; break; }
+    const verdict = verdictRequired ? reviewVerdict(mapper.completedToolCalls, changesTool) : { decided: true, changesRequested: false };
+    if (check.ok && verdict.decided) {
+      confirmed = true;
+      reviewOutcome = verdict.changesRequested ? "changes_requested" : undefined;
+      break;
+    }
+    if (check.ok && !verdict.decided) {
+      // the verdict mandate: the changes tool denied by policy cannot be nudged away either
+      if (changesTool && mapper.deniedToolNames.has(changesTool))
+        return await failNow("required_permission_denied",
+          `the review verdict tool was denied by the run's permission policy: ${changesTool}`);
+      if (agentExited || nudgesLeft <= 0)
+        return await failNow("verdict_missing",
+          "the review verdict was never confirmed: no request_changes call and no APPROVE/REQUEST_CHANGES submit");
+      nudgesLeft -= 1;
+      log(`review verdict undetermined — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
+      settled = false; // the nudge restarts the turn: heartbeats and the settle wait resume
+      mapper.settled = false;
+      mapper.flushAggregated();
+      try {
+        await Promise.race([
+          correlator.command("prompt", { message: verdictNudgePrompt(changesTool || "request_changes") }),
+          onAgentExit.then((code) => {
+            throw new Error(`agent exited during nudge acceptance (code ${code})`);
+          }),
+        ]);
+      } catch (error) {
+        return await failNow("runtime_failure", `verdict nudge failed — ${error.message}`);
+      }
+      continue;
+    }
     if (check.denied.length > 0) {
       return await failNow("required_permission_denied",
         `mandatory publication kind(s) denied by the run's permission policy: ${check.denied.join(", ")}`);
@@ -557,8 +593,7 @@ async function main() {
       `agent process exited (code ${agentExitCode}) after settling — reported by the Runtime Bridge`);
   }
 
-  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace),
-    outcomeTool && completedToolNames.has(normalizeToolName(outcomeTool)) ? "changes_requested" : undefined));
+  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace), reviewOutcome));
   await finishWait();
 }
 

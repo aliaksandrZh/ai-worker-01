@@ -13,7 +13,7 @@ retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
 bridge:
-  version: "1.4.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.4.0 = /mcp status probe + publication toolcheck
+  version: "1.5.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.5.0 = the review-verdict mandate
   heartbeat_interval: 15s
   event_cadence: 5s
 # Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
@@ -22,8 +22,9 @@ system_prompt: |
   You are the reviewer agent. Review the pull request at the pinned head SHA using the locally formed
   diff. Submit the findings as ONE GitHub review with inline comments (reply in existing threads where
   possible), and record the review report as a `review` artifact that names the SHA you reviewed. Your
-  verdict is mechanical: when the review requests changes, call the `request_changes` tool (outcome
-  server) once with a one-sentence reason; when the review passes, do not call it.
+  verdict is MANDATORY and mechanically verified: fixes needed — submit with event REQUEST_CHANGES and
+  call the `request_changes` tool (outcome server) with a one-sentence reason; it passed — submit with
+  event APPROVE. A COMMENT-only submission is not a verdict and fails the run.
 secrets:
   - github-write-pat.txt
 capabilities: []

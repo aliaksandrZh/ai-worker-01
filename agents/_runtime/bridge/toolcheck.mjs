@@ -49,6 +49,43 @@ export function checkPublications(requiredKinds, completedToolNames = new Set(),
     : { ok: false, missing, denied };
 }
 
+/**
+ * The review verdict check: the reviewer MUST leave a definite verdict the Bridge can OBSERVE —
+ * the `request_changes` tool call (the review-outcome server) OR a `pull_request_review_write`
+ * submit with event APPROVE / REQUEST_CHANGES (the observed tool_execution_start args). A COMMENT
+ * submission without either is NOT a verdict — the agent is nudged; exhausted nudges fail the run
+ * with `verdict_missing`. Returns { decided, changesRequested }.
+ */
+export function reviewVerdict(completedToolCalls = [], changesTool) {
+  const calls = completedToolCalls.map((call) => ({
+    tool: normalizeToolName(call.toolName),
+    args: call.args ?? {},
+  }));
+  if (typeof changesTool === "string" && changesTool.length > 0
+      && calls.some((call) => call.tool === normalizeToolName(changesTool)))
+    return { decided: true, changesRequested: true };
+  for (const call of calls) {
+    if (call.tool !== "pull_request_review_write") continue;
+    // the submit call carries the verdict event; a create/inline-comment call is not a submission
+    if (call.args?.method !== undefined && call.args.method !== "submit_pending") continue;
+    const event = String(call.args?.event ?? "").toUpperCase();
+    if (event === "REQUEST_CHANGES") return { decided: true, changesRequested: true };
+    if (event === "APPROVE") return { decided: true, changesRequested: false };
+  }
+  return { decided: false, changesRequested: false };
+}
+
+/** The follow-up prompt the Bridge sends after a settle that left the review verdict undetermined. */
+export function verdictNudgePrompt(changesTool) {
+  return [
+    "Your run cannot be completed yet: the review VERDICT was not confirmed.",
+    `The Bridge observed no decision — call the ${changesTool} tool (fixes are needed) or submit`,
+    "the review with event APPROVE (it passed). A COMMENT-only submission is not a verdict:",
+    "decide now — first CHECK on GitHub (pull_request_read) what already landed, never duplicate",
+    "a review; if the pending review exists, submit it with the event, otherwise create it fresh.",
+  ].join("\n");
+}
+
 /** The follow-up prompt the Bridge sends after a settle that left a mandated publication unconfirmed. */
 export function nudgePrompt(missing) {
   return [
