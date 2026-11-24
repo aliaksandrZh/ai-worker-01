@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -6,6 +7,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Runtime;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Commands;
 using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Orchestration;
 using Xunit;
@@ -392,6 +394,61 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
         db.AgentCommands.Add(command);
         await db.SaveChangesAsync();
         return command;
+    }
+
+    // ---- the claim-time plan recheck: the fix round needs no plan artifact ----
+
+    [Fact]
+    public async Task FixRoundTask_Claims_WithoutPlanArtifact()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        version.ContainerImage = "agent-coder:v8";
+        await db.SaveChangesAsync();
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version,
+            commandName: AgentCommandNames.Code, withCommand: false, withRun: false);
+        // reshape into the auto_fix task the board trigger creates: system-owned (event, no command)
+        var triggerEvent = await AddTransitionEventAsync(db, workItem, "In review", "In progress");
+        await db.OrchestrationTasks.Where(t => t.Id == seeded.Task.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.TriggerCommandId, (Guid?)null)
+                .SetProperty(t => t.TriggerGithubEventId, triggerEvent.Id));
+        db.ChangeTracker.Clear();
+        var harness = OrchestrationTestSupport.NewWorker(postgres);
+        harness.Handler.EnqueueResponse(new(HttpStatusCode.OK)
+        { Content = new StringContent("""{"permission": "admin", "role_name": "admin"}""") });
+
+        await harness.Worker.RunCycleAsync(default);
+
+        db.ChangeTracker.Clear();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id);
+        Assert.NotEqual(OrchestrationTaskStatuses.Cancelled, task.Status); // claimed, not cancelled
+        Assert.Null(task.FailureReason);
+    }
+
+    [Fact]
+    public async Task ManualCodeTask_WithoutPlanArtifact_StillCancelsAtClaim()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (repo, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        version.ContainerImage = "agent-coder:v8";
+        await db.SaveChangesAsync();
+        // a manual /code (command-created) with NO plan artifact input — the old guard keeps it
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, workItem, version,
+            commandName: AgentCommandNames.Code, withCommand: true, withRun: false);
+        db.ChangeTracker.Clear();
+        var harness = OrchestrationTestSupport.NewWorker(postgres);
+
+        await harness.Worker.RunCycleAsync(default);
+
+        db.ChangeTracker.Clear();
+        var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == seeded.Task.Id);
+        Assert.Equal(OrchestrationTaskStatuses.Cancelled, task.Status);
+        Assert.Equal(AgentCommandRejectionReasons.PlanNotAvailable, task.FailureReason);
     }
 
     private async Task<OrchestrationTask> ReloadTaskAsync(Guid taskId)

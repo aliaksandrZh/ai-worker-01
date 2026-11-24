@@ -280,11 +280,14 @@ public sealed class JobQueueWorker(
             return;
         }
         if (task.Type == OrchestrationTaskTypes.Implement
+            && task.TriggerCommandId is not null // a MANUAL /code: the approved plan must still be there
             && !await db.TaskArtifactInputs.AnyAsync(i => i.TaskId == task.Id, cancellationToken))
         {
             await CancelAsync(AgentCommandRejectionReasons.PlanNotAvailable); // approved plan required
             return;
         }
+        // a system-created implement task WITHOUT a plan input is the review→fix round (auto_fix):
+        // it continues the pull request branch from the review findings — no plan ever linked
         if (task.Type == OrchestrationTaskTypes.Review && task.TriggerGithubEventId is not null
             && (task.FailureReason == AgentCommandRejectionReasons.ReviewRequestRemovedBeforeExecution
                 || !RequestedReviewerPresent(workItem, configurationState.BotLogin)))
