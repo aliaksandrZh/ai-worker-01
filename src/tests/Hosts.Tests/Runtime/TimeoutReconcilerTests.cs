@@ -8,6 +8,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.RuntimeApi;
 using Xunit;
@@ -423,7 +424,8 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Id == run.TaskId);
         var consumer = new PiAgent.Orchestrator.Orchestration.RunTerminalConsumer(
             new ServiceCollection().AddDbContext<AppDbContext>(options => options
-                .UseNpgsql(postgres.ConnectionString).UseSnakeCaseNamingConvention()).BuildServiceProvider()
+                .UseNpgsql(postgres.ConnectionString).UseSnakeCaseNamingConvention())
+            .AddSingleton(new ConfigurationState()).BuildServiceProvider()
             .GetRequiredService<IServiceScopeFactory>(),
             NullLogger<PiAgent.Orchestrator.Orchestration.RunTerminalConsumer>.Instance);
         try

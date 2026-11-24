@@ -1,3 +1,4 @@
+using PiAgent.Infrastructure.Persistence;
 using PiAgent.Platform.Config;
 using YamlDotNet.Serialization;
 
@@ -22,7 +23,7 @@ public static class ConfigParser
         var repositories = ParseRepositories(Path.Combine(configRoot, "repositories.yaml"));
         var routing = ParseRouting(Path.Combine(configRoot, "routing.yaml"));
         var profiles = ParseProfiles(Path.Combine(configRoot, "agents"));
-        var projectPlanTriggers = ParseProjects(Path.Combine(configRoot, "projects.yaml"));
+        var (boardTriggers, statusConfigs) = ParseProjects(Path.Combine(configRoot, "projects.yaml"));
 
         return new ParsedConfig
         {
@@ -30,7 +31,8 @@ public static class ConfigParser
             Repositories = repositories,
             RoutingRules = routing,
             Profiles = profiles,
-            ProjectPlanTriggers = projectPlanTriggers,
+            ProjectBoardTriggers = boardTriggers,
+            ProjectStatusConfigs = statusConfigs,
         };
     }
 
@@ -254,6 +256,8 @@ public static class ConfigParser
         [YamlMember(Alias = "owner")] public string? Owner { get; set; }
         [YamlMember(Alias = "number")] public int? Number { get; set; }
         [YamlMember(Alias = "auto_plan")] public AutoPlanDto? AutoPlan { get; set; }
+        [YamlMember(Alias = "auto_code")] public AutoPlanDto? AutoCode { get; set; }
+        [YamlMember(Alias = "ai_statuses")] public AiStatusesDto? AiStatuses { get; set; }
     }
 
     private sealed class AutoPlanDto
@@ -263,33 +267,63 @@ public static class ConfigParser
         [YamlMember(Alias = "to")] public string? To { get; set; }
     }
 
-    private static List<ProjectPlanTrigger> ParseProjects(string path)
+    private sealed class AiStatusesDto
+    {
+        [YamlMember(Alias = "status_field")] public string? StatusField { get; set; }
+        [YamlMember(Alias = "processing")] public string? Processing { get; set; }
+        [YamlMember(Alias = "review")] public string? Review { get; set; }
+        [YamlMember(Alias = "code_lock_statuses")] public List<string>? CodeLockStatuses { get; set; }
+    }
+
+    private static (List<ProjectBoardTrigger> Triggers, List<ProjectStatusConfig> StatusConfigs) ParseProjects(string path)
     {
         const string name = "projects.yaml";
         if (!File.Exists(path))
-            return [];
+            return ([], []);
 
         var dto = Load<ProjectsDto>(path, name);
-        var triggers = new List<ProjectPlanTrigger>();
+        var triggers = new List<ProjectBoardTrigger>();
+        var statusConfigs = new List<ProjectStatusConfig>();
         foreach (var item in dto.Projects ?? [])
         {
             if (string.IsNullOrWhiteSpace(item.Owner))
                 throw new ConfigException($"{name}: project entry is missing `owner`");
             if (item.Number is not { } number || number <= 0)
                 throw new ConfigException($"{name}: project entry '{item.Owner}' must have a positive `number`");
-            if (item.AutoPlan is not { } autoPlan)
-                continue;
-            if (string.IsNullOrWhiteSpace(autoPlan.From) || string.IsNullOrWhiteSpace(autoPlan.To))
-                throw new ConfigException(
-                    $"{name}: auto_plan for project '{item.Owner}/{number}' requires non-empty `from` and `to`");
-            if (string.Equals(autoPlan.From, autoPlan.To, StringComparison.Ordinal))
-                throw new ConfigException(
-                    $"{name}: auto_plan for project '{item.Owner}/{number}': `from` and `to` must differ");
-            triggers.Add(new ProjectPlanTrigger(item.Owner.Trim(), number,
-                string.IsNullOrWhiteSpace(autoPlan.StatusField) ? "Status" : autoPlan.StatusField.Trim(),
-                autoPlan.From.Trim(), autoPlan.To.Trim()));
+
+            foreach (var (triggerDto, key, taskType) in new[]
+                     {
+                     (item.AutoPlan, "auto_plan", OrchestrationTaskTypes.Plan),
+                     (item.AutoCode, "auto_code", OrchestrationTaskTypes.Implement),
+                     })
+            {
+                if (triggerDto is not { } block)
+                    continue;
+                if (string.IsNullOrWhiteSpace(block.From) || string.IsNullOrWhiteSpace(block.To))
+                    throw new ConfigException(
+                        $"{name}: {key} for project '{item.Owner}/{number}' requires non-empty `from` and `to`");
+                if (string.Equals(block.From, block.To, StringComparison.Ordinal))
+                    throw new ConfigException(
+                        $"{name}: {key} for project '{item.Owner}/{number}': `from` and `to` must differ");
+                triggers.Add(new ProjectBoardTrigger(item.Owner.Trim(), number,
+                    string.IsNullOrWhiteSpace(block.StatusField) ? "Status" : block.StatusField.Trim(),
+                    block.From.Trim(), block.To.Trim(), taskType));
+            }
+
+            if (item.AiStatuses is { } statuses)
+            {
+                if (string.IsNullOrWhiteSpace(statuses.Processing) && string.IsNullOrWhiteSpace(statuses.Review))
+                    throw new ConfigException(
+                        $"{name}: ai_statuses for project '{item.Owner}/{number}' requires `processing` and/or `review`");
+                statusConfigs.Add(new ProjectStatusConfig(item.Owner.Trim(), number,
+                    string.IsNullOrWhiteSpace(statuses.StatusField) ? "Status" : statuses.StatusField.Trim(),
+                    string.IsNullOrWhiteSpace(statuses.Processing) ? null : statuses.Processing.Trim(),
+                    string.IsNullOrWhiteSpace(statuses.Review) ? null : statuses.Review.Trim(),
+                    (statuses.CodeLockStatuses ?? [])
+                        .Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList()));
+            }
         }
-        return triggers;
+        return (triggers, statusConfigs);
     }
 
     private sealed class ProfileDto

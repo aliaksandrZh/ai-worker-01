@@ -11,17 +11,17 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// Consumes the Poller's `project_item_*` events. Two behaviors:
 /// (1) observational logging of every event (the "sync + logs" scope — the Poller may emit content
 /// that maps to no tracked work item, and events without a trigger still settle `processed`);
-/// (2) the board trigger (projects.yaml `auto_plan`): a `project_item_updated` whose status field
-/// moved `from → to` on a configured board admits a system-owned plan Task on the item's work item —
-/// the board move IS the human signal, no comment needed. Same shape as the automatic initial
+/// (2) board triggers (projects.yaml `auto_plan` / `auto_code`): a `project_item_updated` whose
+/// status field moved `from → to` on a configured board admits a system-owned Task of the trigger's
+/// task type (plan for auto_plan, implement for auto_code) on the item's work item — the board move
+/// IS the human signal, no comment needed. Same shape as the automatic initial
 /// review (ReviewTriggerCycle): get-or-create Workflow, one Task per triggering event
 /// (`TriggerGithubEventId` dedupes crash replays), durable OrchestrationJob, Workflow → active,
-/// profile pinned via ProfileGate. Shared invariants over the comment path: no second unfinished
+/// profile pinned via ProfileGate. The scope label (AI:Plan / AI:Code) must be on the item, and the
+/// implement trigger additionally requires a successful plan artifact (the coder implements an
+/// approved plan). Shared invariants over the comment path: no second unfinished
 /// Task per Workflow and closed Workflows/work items never admit. Deferral: while the Workflow
 /// holds an unfinished Task the event is released back to `pending` and re-tried after it settles;
-/// failed/closed Workflows, closed work items, a plan that already ran after the transition, and a
-/// missing ready planner profile, and a stale transition (the item's CURRENT column state is no
-/// longer the target one — replayed/deferred events, or the human moved the card back) consume the
 /// event silently (logged). Single instance: claim +
 /// orphan recovery rely on the Orchestrator being one process. Cold-start gate: nothing is claimed
 /// until configuration synchronization completes (the triggers travel with it).
@@ -71,7 +71,7 @@ public sealed class ProjectEventLogCycle(
                 if (deferred)
                 {
                     githubEvent.ProcessingStatus = GitHubEventStatuses.Pending;
-                    githubEvent.ProcessingError = "plan trigger deferred: the workflow holds an unfinished task";
+                    githubEvent.ProcessingError = "board trigger deferred: the workflow holds an unfinished task";
                 }
                 else
                 {
@@ -106,43 +106,45 @@ public sealed class ProjectEventLogCycle(
         if (board is null || changes is null)
             return false; // unreadable payload: logging-only, never retries on a data bug
 
-        var trigger = configurationState.ProjectPlanTriggers
-            .FirstOrDefault(t => string.Equals(t.Board, board, StringComparison.Ordinal));
-        if (trigger is null)
-            return false; // board not configured for the trigger
-        if (!changes.TryGetValue(trigger.StatusField, out var change))
-            return false;
+        foreach (var trigger in configurationState.ProjectBoardTriggers)
+        {
+            if (!string.Equals(trigger.Board, board, StringComparison.Ordinal)
+                || !changes.TryGetValue(trigger.StatusField, out var change))
+                continue; // board or field not configured for this trigger
 
-        // The Poller formats field changes as "old -> new" (ProjectItemsSync.FieldChanges).
-        var separator = change.IndexOf(" -> ", StringComparison.Ordinal);
-        if (separator < 0)
-            return false;
-        var from = change[..separator].Trim();
-        var to = change[(separator + 4)..].Trim();
-        if (!string.Equals(from, trigger.From, StringComparison.Ordinal)
-            || !string.Equals(to, trigger.To, StringComparison.Ordinal))
-            return false; // not the configured transition
+            // The Poller formats field changes as "old -> new" (ProjectItemsSync.FieldChanges).
+            var separator = change.IndexOf(" -> ", StringComparison.Ordinal);
+            if (separator < 0)
+                continue;
+            var from = change[..separator].Trim();
+            var to = change[(separator + 4)..].Trim();
+            if (!string.Equals(from, trigger.From, StringComparison.Ordinal)
+                || !string.Equals(to, trigger.To, StringComparison.Ordinal))
+                continue; // not this trigger's transition
 
-        return await TriggerPlanAsync(db, githubEvent, workItemId, itemId, board, trigger, from, to, cancellationToken);
+            return await TriggerTaskAsync(db, githubEvent, workItemId, itemId, board, trigger, from, to, cancellationToken);
+        }
+        return false; // no configured trigger matches this event's transition
     }
 
-    private async Task<bool> TriggerPlanAsync(
+    private async Task<bool> TriggerTaskAsync(
         AppDbContext db, GitHubEvent githubEvent, Guid workItemId, long? itemId, string board,
-        ProjectPlanTrigger trigger, string from, string to, CancellationToken cancellationToken)
+        ProjectBoardTrigger trigger, string from, string to, CancellationToken cancellationToken)
     {
+        var taskType = trigger.TaskType;
         var workItem = await db.WorkItems.AsNoTracking()
             .SingleOrDefaultAsync(w => w.Id == workItemId, cancellationToken);
         if (workItem is null)
         {
-            logger.LogInformation("plan trigger: event {eventId} consumed — work item row missing (referential integrity bug)",
-                githubEvent.Id);
+            logger.LogInformation("{taskType} trigger: event {eventId} consumed — work item row missing (referential integrity bug)",
+                taskType, githubEvent.Id);
             return false;
         }
-        if (!AiScopeLabels.HasScope(workItem, OrchestrationTaskTypes.Plan))
+        if (!AiScopeLabels.HasScope(workItem, taskType))
         {
-            // scope gate: everything must converge — the transition without the AI:Plan label is nothing
-            logger.LogInformation("plan trigger: event {eventId} consumed — {label} is not on {workItem} (scope gate)",
-                githubEvent.Id, AiScopeLabels.Plan, Label(workItem, await db.Repositories.AsNoTracking()
+            // scope gate: everything must converge — the transition without the scope label is nothing
+            logger.LogInformation("{taskType} trigger: event {eventId} consumed — {label} is not on {workItem} (scope gate)",
+                taskType, githubEvent.Id, AiScopeLabels.LabelForTaskType[taskType], Label(workItem, await db.Repositories.AsNoTracking()
                     .SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken)));
             return false;
         }
@@ -156,25 +158,38 @@ public sealed class ProjectEventLogCycle(
             && ReadField(row.FieldValues, trigger.StatusField) is { } current
             && !string.Equals(current, trigger.To, StringComparison.Ordinal))
         {
-            logger.LogInformation("plan trigger: event {eventId} consumed — the item's current {field} is '{current}', not '{to}' (stale transition)",
-                githubEvent.Id, trigger.StatusField, current, trigger.To);
+            logger.LogInformation("{taskType} trigger: event {eventId} consumed — the item's current {field} is '{current}', not '{to}' (stale transition)",
+                taskType, githubEvent.Id, trigger.StatusField, current, trigger.To);
             return false;
         }
         var repository = await db.Repositories.AsNoTracking()
             .SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
         if (workItem.State != "open")
         {
-            logger.LogInformation("plan trigger: event {eventId} consumed — work item {label} is closed",
-                githubEvent.Id, Label(workItem, repository));
+            logger.LogInformation("{taskType} trigger: event {eventId} consumed — work item {label} is closed",
+                taskType, githubEvent.Id, Label(workItem, repository));
             return false;
         }
         var (resolved, reason, detail) = await ProfileGate.ResolveAsync(
-            db, repository, OrchestrationTaskTypes.Plan, cancellationToken);
+            db, repository, taskType, cancellationToken);
         if (resolved is null)
         {
-            logger.LogInformation("plan trigger: event {eventId} consumed — no ready planner profile for work item {label} ({reason}: {detail})",
-                githubEvent.Id, Label(workItem, repository), reason, detail);
+            logger.LogInformation("{taskType} trigger: event {eventId} consumed — no ready profile for work item {label} ({reason}: {detail})",
+                taskType, githubEvent.Id, Label(workItem, repository), reason, detail);
             return false;
+        }
+        if (taskType == OrchestrationTaskTypes.Implement)
+        {
+            // the coder implements an APPROVED plan: a successful plan artifact must exist
+            var workflowForArtifact = await db.Workflows.AsNoTracking()
+                .SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
+            if (workflowForArtifact is null
+                || await CommandAdmission.LatestPlanArtifactIdAsync(db, workflowForArtifact.Id, cancellationToken) is null)
+            {
+                logger.LogInformation("implement trigger: event {eventId} consumed — no successful plan artifact to approve (run the plan first) for work item {label}",
+                    githubEvent.Id, Label(workItem, repository));
+                return false;
+            }
         }
 
         var now = DateTime.UtcNow;
@@ -196,20 +211,20 @@ public sealed class ProjectEventLogCycle(
         {
             if (workflow.Status is WorkflowStatuses.Failed or WorkflowStatuses.Closed)
             {
-                logger.LogInformation("plan trigger: event {eventId} consumed — workflow is {status} for work item {label}",
-                    githubEvent.Id, workflow.Status, Label(workItem, repository));
+                logger.LogInformation("{taskType} trigger: event {eventId} consumed — workflow is {status} for work item {label}",
+                    taskType, githubEvent.Id, workflow.Status, Label(workItem, repository));
                 return false;
             }
             if (await db.OrchestrationTasks.AnyAsync(
                     t => t.WorkflowId == workflow.Id && t.TriggerGithubEventId == githubEvent.Id, cancellationToken))
                 return false; // crash replay: this event already produced its Task
             if (await db.OrchestrationTasks.AnyAsync(
-                    t => t.WorkflowId == workflow.Id && t.Type == OrchestrationTaskTypes.Plan
+                    t => t.WorkflowId == workflow.Id && t.Type == taskType
                         && t.TriggerAtGithub > occurredAt, cancellationToken))
             {
-                // An explicit /plan (or a later trigger) already covered this transition.
-                logger.LogInformation("plan trigger: event {eventId} consumed — a plan already ran after the transition for work item {label}",
-                    githubEvent.Id, Label(workItem, repository));
+                // An explicit command (or a later trigger) of this type already covered this transition.
+                logger.LogInformation("{taskType} trigger: event {eventId} consumed — a {taskType} task already ran after the transition for work item {label}",
+                    taskType, githubEvent.Id, taskType, Label(workItem, repository));
                 return false;
             }
             if (await db.OrchestrationTasks.AnyAsync(
@@ -226,7 +241,7 @@ public sealed class ProjectEventLogCycle(
             Id = Guid.NewGuid(),
             WorkflowId = workflow.Id,
             Sequence = maxSequence + 1,
-            Type = OrchestrationTaskTypes.Plan,
+            Type = taskType,
             AgentProfileVersionId = resolved.Version.Id,
             Status = OrchestrationTaskStatuses.Queued,
             TriggerGithubEventId = githubEvent.Id,
@@ -256,8 +271,8 @@ public sealed class ProjectEventLogCycle(
         await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
         logger.LogInformation(
-            "plan trigger: automatic plan task {taskId} created for work item {label} (event {eventId}, board {board}, status {from} -> {to}, profile version {versionId})",
-            task.Id, Label(workItem, repository), githubEvent.Id, board, from, to, resolved.Version.Id);
+            "{taskType} trigger: automatic {taskType} task {taskId} created for work item {label} (event {eventId}, board {board}, status {from} -> {to}, profile version {versionId})",
+            taskType, taskType, task.Id, Label(workItem, repository), githubEvent.Id, board, from, to, resolved.Version.Id);
         return false;
     }
 

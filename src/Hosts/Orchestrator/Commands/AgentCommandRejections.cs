@@ -50,6 +50,9 @@ public static class AgentCommandRejectionReasons
     /// <summary>Admission gate: the same task-producing command repeated
     /// with no new human signal since its previous same-type Task succeeded.</summary>
     public const string NoNewInput = "no_new_input";
+    /// <summary>Manual /code rejected — the item's board column is one of the locked ones
+    /// (`ai_statuses.code_lock_statuses`, e.g. In Progress / Ready where the automation owns the card).</summary>
+    public const string CodeLockedByBoard = "code_locked_by_board";
 }
 
 public static class AgentCommandRejectionReplies
@@ -107,6 +110,9 @@ public static class AgentCommandRejectionReplies
         AgentCommandRejectionReasons.NoNewInput =>
             "Command rejected: this command already ran to completion and nothing new has happened since "
             + "(no new comments, edits, or commits). Comment what should be different, then post the command again.",
+        AgentCommandRejectionReasons.CodeLockedByBoard =>
+            $"Command rejected: /code is locked while the card is in '{detail}' — the automation owns the card "
+            + "in the locked columns. Move the card out of them (Backlog, Clarifying, In Review, Testing), then post /code again.",
         _ => "Command rejected.",
     };
 

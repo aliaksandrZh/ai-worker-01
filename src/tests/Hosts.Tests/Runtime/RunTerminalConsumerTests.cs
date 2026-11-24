@@ -10,6 +10,7 @@ using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator.Commands;
+using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Orchestration;
 using Xunit;
 
@@ -30,6 +31,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
             .AddDbContext<AppDbContext>(options => options
                 .UseNpgsql(connectionString)
                 .UseSnakeCaseNamingConvention())
+            .AddSingleton(new ConfigurationState())
             .BuildServiceProvider()
             .GetRequiredService<IServiceScopeFactory>(),
             NullLogger<RunTerminalConsumer>.Instance);

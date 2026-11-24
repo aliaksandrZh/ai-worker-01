@@ -195,6 +195,51 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
     }
 
     [Fact]
+    public async Task CodeInLockedColumn_RejectedBeforeEverythingElse()
+    {
+        var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+
+        var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
+            botLogin: null, default, boardStatus: "In Progress", codeLockStatuses: ["In Progress", "Ready"]);
+        await db.SaveChangesAsync();
+
+        Assert.NotNull(outcome);
+        Assert.Equal(AgentCommandRejectionReasons.CodeLockedByBoard, outcome!.Reason);
+        Assert.False(outcome.Silent); // the human gets a reply explaining the lock
+        Assert.False(await db.Workflows.AsNoTracking().AnyAsync());
+    }
+
+    [Fact]
+    public async Task CodeInUnlockedColumn_TheBoardGateDoesNotFire()
+    {
+        var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+
+        // Backlog is unlocked: the flow continues to the NEXT gate (no plan) — not the board lock
+        foreach (var column in new[] { "Backlog", "Clarifying", "In Review", "Testing" })
+        {
+            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
+                botLogin: null, default, boardStatus: column, codeLockStatuses: ["In Progress", "Ready"]);
+            Assert.NotNull(outcome);
+            Assert.Equal(AgentCommandRejectionReasons.PlanNotAvailable, outcome!.Reason);
+        }
+    }
+
+    [Fact]
+    public async Task CodeOffBoard_NoBoardGate()
+    {
+        var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+
+        // boardStatus null = the item is not on a board — fail open, the next gate answers
+        var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, db.Repositories.AsNoTracking().Single(),
+            botLogin: null, default, boardStatus: null, codeLockStatuses: ["In Progress", "Ready"]);
+        Assert.NotNull(outcome);
+        Assert.Equal(AgentCommandRejectionReasons.PlanNotAvailable, outcome!.Reason);
+    }
+
+    [Fact]
     public async Task CodeWithPlanArtifact_LinksApprovedPlanInput()
     {
         var (db, _, workItem, command) = await NewAuthorizedAsync(AgentCommandNames.Code);

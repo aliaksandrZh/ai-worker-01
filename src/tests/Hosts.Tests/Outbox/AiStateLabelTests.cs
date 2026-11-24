@@ -294,6 +294,7 @@ public class AiStateLabelTests(PostgresFixture postgres) : IClassFixture<Postgre
                 .AddDbContext<AppDbContext>(options => options
                     .UseNpgsql(postgres.ConnectionString)
                     .UseSnakeCaseNamingConvention())
+                .AddSingleton(new ConfigurationState())
                 .BuildServiceProvider()
                 .GetRequiredService<IServiceScopeFactory>(),
             NullLogger<RunTerminalConsumer>.Instance);

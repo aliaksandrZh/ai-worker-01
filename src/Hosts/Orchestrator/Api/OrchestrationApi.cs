@@ -254,7 +254,9 @@ public static class OrchestrationApi
 
         if (command.Status == AgentCommandStatuses.Authorized)
         {
-            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, repository, botLogin, cancellationToken);
+            // the same admission as the comment path — the board gate (code_lock_statuses) resolves inside
+            var outcome = await CommandAdmission.AdmitAsync(db, command, workItem, repository, botLogin, cancellationToken,
+                configurationState: configurationState);
             if (outcome is { } rejection)
             {
                 command.Status = AgentCommandStatuses.Rejected;

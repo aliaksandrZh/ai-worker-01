@@ -17,9 +17,12 @@ public sealed class ConfigurationState
     public DateTime? SynchronizedAtUtc { get; private set; }
     /// <summary>Exact-case bot login from system.yaml (`github.bot_login`); set when synchronization succeeds.</summary>
     public string? BotLogin { get; private set; }
-    /// <summary>Board → auto-plan triggers from projects.yaml (`auto_plan`); startup-only, no hot
+    /// <summary>Board triggers from projects.yaml (`auto_plan` / `auto_code`); startup-only, no hot
     /// reload — set by the Config Loader before the synchronization gate opens.</summary>
-    public IReadOnlyList<ProjectPlanTrigger> ProjectPlanTriggers { get; private set; } = [];
+    public IReadOnlyList<ProjectBoardTrigger> ProjectBoardTriggers { get; private set; } = [];
+    /// <summary>Board status configs from projects.yaml (`ai_statuses`); startup-only, no hot reload.
+    /// Drives the AI Processing → In Progress and implement-success → In Review board moves.</summary>
+    public IReadOnlyList<ProjectStatusConfig> ProjectStatusConfigs { get; private set; } = [];
     /// <summary>First failure message (diagnosable configuration error); also surfaced via /readyz.</summary>
     public string? Error { get; private set; }
 
@@ -32,8 +35,11 @@ public sealed class ConfigurationState
         Error = null;
     }
 
-    public void SetProjectPlanTriggers(IReadOnlyList<ProjectPlanTrigger> triggers) =>
-        ProjectPlanTriggers = triggers;
+    public void SetProjectBoardTriggers(IReadOnlyList<ProjectBoardTrigger> triggers) =>
+        ProjectBoardTriggers = triggers;
+
+    public void SetProjectStatusConfigs(IReadOnlyList<ProjectStatusConfig> configs) =>
+        ProjectStatusConfigs = configs;
 
     public void MarkFailed(string error)
     {

@@ -14,14 +14,28 @@ public static class OutboxStatuses
 }
 
 /// <summary>Outbox delivers orchestration-owned GitHub writes: system comments (the agent's own
-/// writes go through GitHub MCP) and the AI-lifecycle label transitions.</summary>
+/// writes go through GitHub MCP), the AI-lifecycle label transitions, and the AI-driven board
+/// status moves (Projects v2 GraphQL).</summary>
 public static class OutboxActionTypes
 {
     public const string Comment = "comment";
     /// <summary>Payload { issue_number, label } — `label = null` clears all four AI labels.
     /// Applied as DELETE (the other three; 404 = fine) + POST (the target).</summary>
     public const string AiLabel = "ai_label";
+    /// <summary>Payload { owner, project_number, item_id, field, status } — sets the board's
+    /// single-select `field` to the `status` option on project item `item_id` (GraphQL
+    /// updateProjectV2ItemFieldValue; the option id resolves by name at delivery time). Idempotent
+    /// by construction: setting the same value twice converges.</summary>
+    public const string ProjectStatus = "project_status";
 }
+
+/// <summary>One AI-driven board status move: the `owner/number` board's item `itemId` gets its
+/// single-select field `field` set to option `status` (exact-case name). The Orchestrator resolves
+/// everything except the option id (which only GitHub knows for the field schema) at enqueue time;
+/// the Outbox Worker resolves the field/option ids via GraphQL at delivery time.</summary>
+public sealed record ProjectStatusEnqueueRequest(
+    Guid RepositoryId, Guid WorkItemId, Guid? TaskId, long IssueNumber,
+    string Owner, int ProjectNumber, long ItemId, string Field, string Status);
 
 /// <summary>
 /// Reliable external write queue for orchestration-owned comments. WorkItemId/TaskId are

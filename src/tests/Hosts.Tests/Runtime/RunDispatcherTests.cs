@@ -9,6 +9,7 @@ using PiAgent.Hosts.Tests.Commands;
 using PiAgent.Hosts.Tests.Config;
 using PiAgent.Hosts.Tests.Orchestration;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Context;
 using PiAgent.Orchestrator.Orchestration;
 using PiAgent.Orchestrator.Commands;
@@ -46,6 +47,7 @@ public class RunDispatcherTests(PostgresFixture postgres) : IClassFixture<Postgr
 
     private static RuntimeApiRunDispatcher NewDispatcher(DirectHttpStub stub) => new(
         new RuntimeApiClient(new HttpClient(stub) { BaseAddress = new Uri("http://runtime-api.test") }, Options()),
+        new ConfigurationState(),
         NullLogger<RuntimeApiRunDispatcher>.Instance);
 
     private static Microsoft.Extensions.Options.IOptions<RuntimeApiOptions> Options() =>
@@ -347,6 +349,7 @@ public class DispatchWriteBackRaceTests(PostgresFixture postgres) : IClassFixtur
         var dispatcher = new RuntimeApiRunDispatcher(
             new RuntimeApiClient(new HttpClient(stub) { BaseAddress = new Uri("http://runtime-api.test") },
                 Microsoft.Extensions.Options.Options.Create(new RuntimeApiOptions { ServiceToken = "tok-orch" })),
+            new ConfigurationState(),
             NullLogger<RuntimeApiRunDispatcher>.Instance);
         var outcome = await dispatcher.DispatchAsync(api.Db, preparation, default);
         Assert.Equal(DispatchOutcome.HandedOff, outcome);

@@ -31,6 +31,7 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var configurationState = scope.ServiceProvider.GetRequiredService<ConfigurationState>();
 
         var candidates = await db.OrchestrationTasks
             .Where(t => t.Status == OrchestrationTaskStatuses.Starting || t.Status == OrchestrationTaskStatuses.Running)
@@ -41,13 +42,14 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
         foreach (var task in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await TransitionAsync(db, task, cancellationToken))
+            if (await TransitionAsync(db, configurationState, task, cancellationToken))
                 continue;
         }
     }
 
     /// <summary>Applies one Run-driven transition; false when the task's Run still runs (nothing to do).</summary>
-    private async Task<bool> TransitionAsync(AppDbContext db, OrchestrationTask task, CancellationToken cancellationToken)
+    private async Task<bool> TransitionAsync(AppDbContext db, ConfigurationState configurationState,
+        OrchestrationTask task, CancellationToken cancellationToken)
     {
         var run = await db.Runs
             .Where(r => r.TaskId == task.Id)
@@ -99,6 +101,11 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                 // included: the agent did finish its turn); the human's answer is a new task
                 await AiStateLabels.MarkAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
                     task.Id, AiStateLabels.Finished, cancellationToken);
+                // an implement Task succeeding means the pull request is up — the board moves to the
+                // review column (projects.yaml `ai_statuses.review`); best-effort, outbox-delivered
+                if (task.Type == OrchestrationTaskTypes.Implement)
+                    await BoardStatusOutbox.MoveAsync(db, configurationState, workItem.RepositoryId, workItem.Id,
+                        workItem.Number, task.Id, BoardStatusOutbox.State.Review, cancellationToken);
                 break;
 
             case RunStatuses.Failed:
