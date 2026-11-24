@@ -140,7 +140,11 @@ public static class CommandAdmission
         // The AI-scope gate: a task-producing command runs only on an item that carries the type's
         // exact label (AI:Plan/AI:Code/AI:Review/AI:Test); everything else is silently ignored —
         // the owner adds the label and the scope-label scanner starts the run when conditions converge.
-        if (!AiScopeLabels.HasScope(workItem, taskType))
+        // A review command on a PR accepts the loop card's label too (the scope labels live on the
+        // board card; the review targets the PR).
+        if (taskType == OrchestrationTaskTypes.Review
+            ? !await AiScopeLabels.HasReviewScopeAsync(db, repository.Id, workItem, cancellationToken)
+            : !AiScopeLabels.HasScope(workItem, taskType))
             return new AdmissionOutcome(AgentCommandRejectionReasons.LabelScopeMissing,
                 $"'{AiScopeLabels.LabelForTaskType[taskType]}' is required on this item", Silent: true);
 

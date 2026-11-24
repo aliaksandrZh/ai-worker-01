@@ -59,7 +59,10 @@ public sealed class LabelTriggerCycle(
         {
             foreach (var taskType in AiScopeLabels.LabelForTaskType.Keys)
             {
-                if (!AiScopeLabels.HasScope(item.Labels, taskType))
+                // a PR without the label may still be in scope — the user's scope labels live on
+                // the loop card (the linked issue); the review path re-derives flow-aware
+                if (!AiScopeLabels.HasScope(item.Labels, taskType)
+                    && !(taskType == OrchestrationTaskTypes.Review && item.Type == WorkItemTypes.PullRequest))
                     continue;
                 try
                 {
@@ -173,6 +176,10 @@ public sealed class LabelTriggerCycle(
             case OrchestrationTaskTypes.Review:
                 if (item.Type != WorkItemTypes.PullRequest || item.Draft == true)
                     return; // the label is a standing review request: open non-draft PRs only
+                // the label on the PR or its loop card (the linked issue) — the user's scope
+                // labels live on the board card; the review targets the PR
+                if (!await AiScopeLabels.HasReviewScopeAsync(db, repository.Id, workItem, cancellationToken))
+                    return;
                 if (workflow is { } existing
                     && (existing.InitialReviewCreatedAt is not null
                         || await db.OrchestrationTasks.AnyAsync(

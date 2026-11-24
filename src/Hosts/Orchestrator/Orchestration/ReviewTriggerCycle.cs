@@ -111,11 +111,12 @@ public sealed class ReviewTriggerCycle(
         // Condition 1: the bot request is still active (read from the synced snapshot).
         if (!RequestedReviewers(workItem).Contains(botLogin, StringComparer.OrdinalIgnoreCase))
             return;
-        // Scope gate: no task-producing signal runs without the item's exact AI-scope label.
-        if (!AiScopeLabels.HasScope(workItem, OrchestrationTaskTypes.Review))
-            return;
 
         var repository = await db.Repositories.SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
+        // Scope gate: the PR or its loop card (the linked issue — the user's scope labels live there)
+        // must carry the exact AI:Review label; without it the request is silently ignored.
+        if (!await AiScopeLabels.HasReviewScopeAsync(db, repository.Id, workItem, cancellationToken))
+            return;
         // STATUS + LABEL: the request alone is nothing — the loop card (the linked issue, else the
         // PR) must sit in one of `ai_statuses.review_statuses`; unverifiable cards fail open.
         if (!await ReviewFlow.StatusAllowedAsync(db, configurationState, repository.Id, workItem, cancellationToken))
