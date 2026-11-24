@@ -104,6 +104,15 @@ public static class TaskLifecycle
         await new OutboxActionStore(db).EnqueueAsync(
             new OutboxEnqueueRequest(repository.Id, workItem.Id, null, workItem.Number,
                 ClaimCancellationNotices.Text(reason), Guid.NewGuid()), cancellationToken);
+        // the queued task finally died — the AI-state labels must not hang on a stale value
+        // (the observed hang: AI Scheduled long after the task was cancelled at claim).
+        // Ownership of the label state stays with the paths that mean it: a stop (StopRequested)
+        // and a root closure (WorkItemClosed) are NOT failures and clear the labels themselves;
+        // every other claim-time cancellation is the work ending unsuccessfully → AI Failed
+        // (the cancellation notice comment above explains why, /retry or re-run follows).
+        if (reason is not (AgentCommandRejectionReasons.StopRequested or AgentCommandRejectionReasons.WorkItemClosed))
+            await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+                task.Id, AiStateLabels.Failed, cancellationToken);
         metrics.RecordClaimCancellation();
     }
 
@@ -153,6 +162,10 @@ public static class TaskLifecycle
             workflow.Status = WorkflowStatuses.WaitingForHuman;
 
         await db.SaveChangesAsync(cancellationToken);
+        // final claim-time failure (context_too_large never retries) — the AI-state labels
+        // follow the same rule as every final failure: AI Failed
+        await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+            task.Id, AiStateLabels.Failed, cancellationToken);
         metrics.RecordClaimContextTooLarge();
     }
 }
