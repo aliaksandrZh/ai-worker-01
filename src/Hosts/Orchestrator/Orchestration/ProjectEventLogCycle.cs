@@ -342,7 +342,12 @@ public sealed class ProjectEventLogCycle(
         workflow.StartedAt ??= now;
         workflow.UpdatedAt = now;
         if (taskType == OrchestrationTaskTypes.Review)
+        {
             workflow.InitialReviewCreatedAt ??= now; // the PR-requested path checks this guard — keep the invariant one-way
+            // a review start clears the fix-required marker on the PR and its card
+            await ReviewFlow.SetChangesRequiredAsync(db, repository.Id, targetItem.Id, targetItem.Number,
+                task.Id, add: false, cancellationToken);
+        }
         await AiStateLabels.MarkAsync(db, repository.Id, targetItem.Id, targetItem.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
         logger.LogInformation(

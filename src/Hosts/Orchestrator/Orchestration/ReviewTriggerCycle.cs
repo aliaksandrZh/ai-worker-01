@@ -214,6 +214,9 @@ public sealed class ReviewTriggerCycle(
         workflow.UpdatedAt = now;
         await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
+        // a review start clears the fix-required marker (the findings were addressed or re-reviewed)
+        await ReviewFlow.SetChangesRequiredAsync(db, repository.Id, workItem.Id, workItem.Number,
+            task.Id, add: false, cancellationToken);
         logger.LogInformation(
             "review trigger: automatic review task {taskId} created for work item {workItemId} (event {eventId}, profile version {versionId})",
             task.Id, workItem.Id, githubEvent.Id, version.Id);

@@ -59,3 +59,8 @@ public static class AiStateLabels
 /// <summary>`Label = null` is the clear-all action; otherwise it must be one of <see cref="AiStateLabels.All"/>.</summary>
 public sealed record AiLabelEnqueueRequest(
     Guid RepositoryId, Guid WorkItemId, Guid? TaskId, long IssueNumber, string? Label);
+
+/// <summary>One named label add/remove (not one of the four AI state labels — those go through
+/// <see cref="AiLabelEnqueueRequest"/>).</summary>
+public sealed record LabelEnqueueRequest(
+    Guid RepositoryId, Guid WorkItemId, Guid? TaskId, long IssueNumber, string Label, bool Add);

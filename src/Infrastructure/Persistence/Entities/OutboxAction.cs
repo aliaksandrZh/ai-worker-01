@@ -22,6 +22,10 @@ public static class OutboxActionTypes
     /// <summary>Payload { issue_number, label } — `label = null` clears all four AI labels.
     /// Applied as DELETE (the other three; 404 = fine) + POST (the target).</summary>
     public const string AiLabel = "ai_label";
+    /// <summary>Payload { issue_number, label, add } — add/remove ONE named label (the review
+    /// loop's `Code changes are Required`). Idempotent by construction: POST on a present label
+    /// converges, DELETE on an absent one answers 404 = fine.</summary>
+    public const string Label = "label";
     /// <summary>Payload { owner, project_number, item_id, field, status } — sets the board's
     /// single-select `field` to the `status` option on project item `item_id` (GraphQL
     /// updateProjectV2ItemFieldValue; the option id resolves by name at delivery time). Idempotent
@@ -35,7 +39,7 @@ public static class OutboxActionTypes
 /// the Outbox Worker resolves the field/option ids via GraphQL at delivery time.</summary>
 public sealed record ProjectStatusEnqueueRequest(
     Guid RepositoryId, Guid WorkItemId, Guid? TaskId, long IssueNumber,
-    string Owner, int ProjectNumber, long ItemId, string Field, string Status);
+    string Owner, int ProjectNumber, long ItemId, string? ItemNodeId, string Field, string Status);
 
 /// <summary>
 /// Reliable external write queue for orchestration-owned comments. WorkItemId/TaskId are

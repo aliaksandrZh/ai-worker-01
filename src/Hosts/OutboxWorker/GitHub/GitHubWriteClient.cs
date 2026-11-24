@@ -100,13 +100,24 @@ public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
             await AddIssueLabelAsync(owner, name, issueNumber, target, cancellationToken);
     }
 
+    /// <summary>One named label add/remove (the review loop's fix-required marker). Idempotent by
+    /// construction: POST on a present label converges, DELETE on an absent one answers 404 = fine.</summary>
+    public async Task SetIssueLabelAsync(string owner, string name, long issueNumber, string label, bool add,
+        CancellationToken cancellationToken)
+    {
+        if (add)
+            await AddIssueLabelAsync(owner, name, issueNumber, label, cancellationToken);
+        else
+            await DeleteIssueLabelAsync(owner, name, issueNumber, label, cancellationToken);
+    }
+
     /// <summary>The AI-driven board status move: resolves the single-select field's id and the
     /// target option's id by exact-case name (a fresh GraphQL query per delivery — the schema may
     /// have changed since the enqueue), then applies updateProjectV2ItemFieldValue. Idempotent by
     /// construction: setting the same value twice converges. A missing field/option is a payload
     /// reality mismatch (the column was renamed or removed) — a permanent failure.
     /// </summary>
-    public async Task SetProjectItemStatusAsync(string owner, int projectNumber, long itemId,
+    public async Task SetProjectItemStatusAsync(string owner, int projectNumber, string itemNodeId,
         string fieldName, string status, CancellationToken cancellationToken)
     {
         var (projectId, fieldId, optionId) = await ResolveStatusIdsAsync(owner, projectNumber, fieldName, status,
@@ -120,7 +131,7 @@ public sealed class GitHubWriteClient(HttpClient httpClient, string pat)
             """;
         var variables = new Dictionary<string, object?>
         {
-            ["project"] = projectId, ["item"] = itemId, ["field"] = fieldId, ["option"] = optionId,
+            ["project"] = projectId, ["item"] = itemNodeId, ["field"] = fieldId, ["option"] = optionId,
         };
         await GraphQLAsync(mutation, variables, expectDataPath: "updateProjectV2ItemFieldValue", cancellationToken);
     }
