@@ -1662,6 +1662,10 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("github_node_id");
 
+                    b.Property<string>("HeadRef")
+                        .HasColumnType("text")
+                        .HasColumnName("head_ref");
+
                     b.Property<string>("HeadSha")
                         .HasColumnType("text")
                         .HasColumnName("head_sha");
@@ -1690,6 +1694,12 @@ namespace PiAgent.Infrastructure.Persistence.Migrations
                     b.Property<string>("RequestedReviewers")
                         .HasColumnType("jsonb")
                         .HasColumnName("requested_reviewers");
+
+                    b.Property<int>("ReviewFixRounds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("review_fix_rounds");
 
                     b.Property<string>("State")
                         .IsRequired()

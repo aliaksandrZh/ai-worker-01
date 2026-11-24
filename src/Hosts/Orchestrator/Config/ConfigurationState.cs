@@ -23,6 +23,9 @@ public sealed class ConfigurationState
     /// <summary>Board status configs from projects.yaml (`ai_statuses`); startup-only, no hot reload.
     /// Drives the AI Processing → In Progress and implement-success → In Review board moves.</summary>
     public IReadOnlyList<ProjectStatusConfig> ProjectStatusConfigs { get; private set; } = [];
+    /// <summary>Review-loop configs from projects.yaml (`review_loop`); startup-only, no hot reload.
+    /// Caps the automatic review→fix rounds per board; boards without the config use the default (3).</summary>
+    public IReadOnlyList<ReviewLoopConfig> ReviewLoopConfigs { get; private set; } = [];
     /// <summary>First failure message (diagnosable configuration error); also surfaced via /readyz.</summary>
     public string? Error { get; private set; }
 
@@ -40,6 +43,9 @@ public sealed class ConfigurationState
 
     public void SetProjectStatusConfigs(IReadOnlyList<ProjectStatusConfig> configs) =>
         ProjectStatusConfigs = configs;
+
+    public void SetReviewLoopConfigs(IReadOnlyList<ReviewLoopConfig> configs) =>
+        ReviewLoopConfigs = configs;
 
     public void MarkFailed(string error)
     {

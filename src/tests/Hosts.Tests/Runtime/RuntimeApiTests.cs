@@ -903,10 +903,10 @@ public class StartContainerPlanTests
 
     private static ContainerPlan? StartContainerPlan(
         AgentProfileVersion version, RuntimeStorageService storage, out string? error,
-        string? workItemRepository = "aliaksandrZh/04") =>
+        string? workItemRepository = "aliaksandrZh/04", string? gitCloneBranch = null) =>
         StartRunHandler.TryBuildContainerPlan(Run(), Task(), version, storage,
             new ContainerProvisionerOptions(), "/tmp/host/workspace", "/tmp/host/runs", workItemRepository, reviewPullRequestNumber: null,
-            out var plan, out error) ? plan : null;
+            gitCloneBranch, out var plan, out error) ? plan : null;
 
     [Fact]
     public void RepositoryFullName_TravelsAsGitCloneRepo() // workspace clone provisioning input
@@ -935,7 +935,7 @@ public class StartContainerPlanTests
         };
         var plan = StartRunHandler.TryBuildContainerPlan(Run(), review, Version(null, """{"cpu":1.0,"memory":"512MiB"}"""),
             Storage(secretsDir, "/etc/pi-agent/secrets"), new ContainerProvisionerOptions(), "/tmp/host/workspace", "/tmp/host/runs",
-            "aliaksandrZh/04", reviewPullRequestNumber: 13, out var built, out var error) ? built : null;
+            "aliaksandrZh/04", reviewPullRequestNumber: 13, gitCloneBranch: null, out var built, out var error) ? built : null;
         Assert.Null(error);
         Assert.Contains("REVIEW_HEAD_SHA=head-sha-1", plan!.Env);
         Assert.Contains("REVIEW_BASE_SHA=base-sha-1", plan.Env);
@@ -951,5 +951,20 @@ public class StartContainerPlanTests
             out _, workItemRepository: "aliaksandrZh/04");
         Assert.DoesNotContain("REVIEW_HEAD_SHA", plan!.Env ?? []);
         Assert.DoesNotContain("REVIEW_PR_NUMBER", plan.Env ?? []);
+    }
+
+    [Fact]
+    public void FixRoundWorkspace_TravelsThePrBranch() // the fix coder's checkout IS the pull request branch
+    {
+        var secretsDir = Path.Combine(Path.GetTempPath(), "fix-secrets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(secretsDir);
+        var plan = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
+            out var error, workItemRepository: "aliaksandrZh/04", gitCloneBranch: "agent/42-fix");
+        Assert.Null(error);
+        Assert.Contains("GIT_CLONE_BRANCH=agent/42-fix", plan!.Env);
+        // the default round carries no branch — the entry clones the default branch
+        var bare = StartContainerPlan(Version(null, """{"cpu":1.0,"memory":"512MiB"}"""), Storage(secretsDir, "/etc/pi-agent/secrets"),
+            out _, gitCloneBranch: null);
+        Assert.DoesNotContain("GIT_CLONE_BRANCH", bare!.Env ?? []);
     }
 }

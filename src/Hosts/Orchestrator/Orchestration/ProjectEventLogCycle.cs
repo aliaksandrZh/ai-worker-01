@@ -11,20 +11,27 @@ namespace PiAgent.Orchestrator.Orchestration;
 /// Consumes the Poller's `project_item_*` events. Two behaviors:
 /// (1) observational logging of every event (the "sync + logs" scope — the Poller may emit content
 /// that maps to no tracked work item, and events without a trigger still settle `processed`);
-/// (2) board triggers (projects.yaml `auto_plan` / `auto_code`): a `project_item_updated` whose
-/// status field moved `from → to` on a configured board admits a system-owned Task of the trigger's
-/// task type (plan for auto_plan, implement for auto_code) on the item's work item — the board move
-/// IS the human signal, no comment needed. Same shape as the automatic initial
+/// (2) board triggers (projects.yaml `auto_plan` / `auto_code` / `auto_fix` / `auto_review`): a
+/// `project_item_updated` whose status field moved `from → to` on a configured board admits a
+/// system-owned Task of the trigger's task type on the item's work item — the board move IS the
+/// human signal, no comment needed. Same shape as the automatic initial
 /// review (ReviewTriggerCycle): get-or-create Workflow, one Task per triggering event
 /// (`TriggerGithubEventId` dedupes crash replays), durable OrchestrationJob, Workflow → active,
-/// profile pinned via ProfileGate. The scope label (AI:Plan / AI:Code) must be on the item, and the
-/// implement trigger additionally requires a successful plan artifact (the coder implements an
-/// approved plan). Shared invariants over the comment path: no second unfinished
-/// Task per Workflow and closed Workflows/work items never admit. Deferral: while the Workflow
-/// holds an unfinished Task the event is released back to `pending` and re-tried after it settles;
-/// event silently (logged). Single instance: claim +
+/// profile pinned via ProfileGate. The scope label (AI:Plan / AI:Code / AI:Review) must be on the
+/// item, and the plan-following implement trigger (`auto_code`) additionally requires a successful
+/// plan artifact (the coder implements an approved plan). Shared invariants over the comment path:
+/// no second unfinished Task per Workflow and closed Workflows/work items never admit. Deferral:
+/// while the Workflow holds an unfinished Task the event is released back to `pending` and re-tried
+/// after it settles; event silently (logged). Single instance: claim +
 /// orphan recovery rely on the Orchestrator being one process. Cold-start gate: nothing is claimed
 /// until configuration synchronization completes (the triggers travel with it).
+///
+/// Review-loop specifics (the card is the issue; the review and its fix rounds run around it):
+/// `auto_review` admits the review on the card's LINKED open pull request (WorkItemLink; the PR's
+/// Workflow, pinned head/base SHAs) — each card transition to the review column is a new event, so
+/// every loop round gets its own review. `auto_fix` admits the fix-round coder on the card with the
+/// linked PR's head branch PINNED (the fix Workspace is pre-created with `branch_name` so the
+/// frozen input carries `git.branch`) — no plan artifact, the review findings are the input.
 /// </summary>
 public sealed class ProjectEventLogCycle(
     IServiceScopeFactory scopeFactory,
@@ -179,33 +186,65 @@ public sealed class ProjectEventLogCycle(
             return false;
         }
         Guid? planArtifactId = null;
-        if (taskType == OrchestrationTaskTypes.Implement)
+        string? pinBranch = null;
+        WorkItem targetItem = workItem;
+        switch (taskType)
         {
-            // the coder implements an APPROVED plan: a successful plan artifact must exist —
-            // and it rides on the task as the ApprovedPlan input (the claim-time recheck and
-            // the coder's context both read it from here, same as the /code admission)
-            var workflowForArtifact = await db.Workflows.AsNoTracking()
-                .SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
-            planArtifactId = workflowForArtifact is null
-                ? null
-                : await CommandAdmission.LatestPlanArtifactIdAsync(db, workflowForArtifact.Id, cancellationToken);
-            if (planArtifactId is null)
-            {
-                logger.LogInformation("implement trigger: event {eventId} consumed — no successful plan artifact to approve (run the plan first) for work item {label}",
-                    githubEvent.Id, Label(workItem, repository));
-                return false;
-            }
+            case OrchestrationTaskTypes.Review:
+                // the review runs on the card's LINKED open pull request (the review context —
+                // diff, reviews, threads — lives on the PR, never on the issue)
+                var reviewPr = await ReviewFlow.LinkedOpenPullRequestAsync(db, workItem.Id, cancellationToken);
+                if (reviewPr is null)
+                {
+                    logger.LogInformation("review trigger: event {eventId} consumed — no open pull request linked to work item {label}",
+                        githubEvent.Id, Label(workItem, repository));
+                    return false;
+                }
+                targetItem = reviewPr;
+                break;
+
+            case OrchestrationTaskTypes.Implement when trigger.RequiresPlanArtifact:
+                // the coder implements an APPROVED plan: a successful plan artifact must exist —
+                // and it rides on the task as the ApprovedPlan input (the claim-time recheck and
+                // the coder's context both read it from here, same as the /code admission)
+                var workflowForArtifact = await db.Workflows.AsNoTracking()
+                    .SingleOrDefaultAsync(w => w.WorkItemId == workItem.Id, cancellationToken);
+                planArtifactId = workflowForArtifact is null
+                    ? null
+                    : await CommandAdmission.LatestPlanArtifactIdAsync(db, workflowForArtifact.Id, cancellationToken);
+                if (planArtifactId is null)
+                {
+                    logger.LogInformation("implement trigger: event {eventId} consumed — no successful plan artifact to approve (run the plan first) for work item {label}",
+                        githubEvent.Id, Label(workItem, repository));
+                    return false;
+                }
+                break;
+
+            case OrchestrationTaskTypes.Implement:
+                // the review→fix round: the coder continues the EXISTING pull request branch from
+                // the review findings — no plan artifact. The PR's head branch must be known.
+                var fixPr = await ReviewFlow.LinkedOpenPullRequestAsync(db, workItem.Id, cancellationToken);
+                if (fixPr?.HeadRef is null)
+                {
+                    logger.LogInformation("fix trigger: event {eventId} consumed — no open pull request with a known head branch linked to work item {label}",
+                        githubEvent.Id, Label(workItem, repository));
+                    return false;
+                }
+                pinBranch = fixPr.HeadRef;
+                break;
         }
 
         var now = DateTime.UtcNow;
         var occurredAt = githubEvent.OccurredAtGithub ?? githubEvent.ReceivedAt;
-        var workflow = await LockWorkflowAsync(db, workItem.Id, cancellationToken);
+        // the Task runs on the TARGET work item (the linked PR for reviews, the card otherwise) —
+        // the single-slot invariant applies to the Workflow it will occupy
+        var workflow = await LockWorkflowAsync(db, targetItem.Id, cancellationToken);
         if (workflow is null)
         {
             workflow = new Workflow
             {
                 Id = Guid.NewGuid(),
-                WorkItemId = workItem.Id,
+                WorkItemId = targetItem.Id,
                 Status = WorkflowStatuses.WaitingForHuman, // accepted trigger → task queued → active below
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -252,10 +291,28 @@ public sealed class ProjectEventLogCycle(
             TriggerGithubEventId = githubEvent.Id,
             // the triggering event's GitHub time anchors the no-new-input gate on this Task
             TriggerAtGithub = occurredAt,
+            TargetHeadSha = targetItem.HeadSha,
+            TargetBaseSha = targetItem.BaseSha,
             CreatedAt = now,
             RetryPolicy = RetryPolicies.Effective(resolved.Version.RetryPolicy),
         };
         db.OrchestrationTasks.Add(task);
+        if (pinBranch is { } branch)
+        {
+            // the fix-round coder continues the EXISTING pull request branch: pre-create the Task's
+            // Workspace with the pinned branch so the frozen input carries git.branch (RunPrepare
+            // reuses the row; the assembler reads its BranchName)
+            db.Workspaces.Add(new Workspace
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                WorkItemId = targetItem.Id,
+                RepositoryId = targetItem.RepositoryId,
+                BranchName = branch,
+                Status = WorkspaceStatuses.Provisioning,
+                CreatedAt = now,
+            });
+        }
         if (planArtifactId is { } artifactId)
         {
             db.TaskArtifactInputs.Add(new TaskArtifactInput
@@ -284,11 +341,13 @@ public sealed class ProjectEventLogCycle(
         workflow.CurrentTaskId = task.Id;
         workflow.StartedAt ??= now;
         workflow.UpdatedAt = now;
-        await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+        if (taskType == OrchestrationTaskTypes.Review)
+            workflow.InitialReviewCreatedAt ??= now; // the PR-requested path checks this guard — keep the invariant one-way
+        await AiStateLabels.MarkAsync(db, repository.Id, targetItem.Id, targetItem.Number,
             task.Id, AiStateLabels.Scheduled, cancellationToken);
         logger.LogInformation(
             "{taskType} trigger: automatic {taskType} task {taskId} created for work item {label} (event {eventId}, board {board}, status {from} -> {to}, profile version {versionId})",
-            taskType, taskType, task.Id, Label(workItem, repository), githubEvent.Id, board, from, to, resolved.Version.Id);
+            taskType, taskType, task.Id, Label(targetItem, repository), githubEvent.Id, board, from, to, resolved.Version.Id);
         return false;
     }
 

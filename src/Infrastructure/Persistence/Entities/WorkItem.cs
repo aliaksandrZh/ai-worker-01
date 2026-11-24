@@ -35,6 +35,9 @@ public class WorkItem
     public DateTime? ClosedAtGithub { get; set; }
     // ---- PR-only (nulls for Issues) ----
     public string? HeadSha { get; set; }
+    /// <summary>The head branch name (e.g. `agent/12-fix-login`) — PRs only; lets a fix-round
+    /// coder continue the existing pull request branch instead of opening a second PR.</summary>
+    public string? HeadRef { get; set; }
     public string? BaseSha { get; set; }
     public bool? Draft { get; set; }
     /// <summary>Kept for history; merged PR still gets `work_item_closed` with `close_reason = merged`.</summary>
@@ -46,4 +49,8 @@ public class WorkItem
     public string? CleanupStatus { get; set; }
     /// <summary>First observation of closure by this system; stays after reopen (history).</summary>
     public DateTime? ClosedAtLocal { get; set; }
+    /// <summary>Consumed review-fix rounds on this item's board card (the review→fix loop):
+    /// incremented when a review demanded changes and the card moved back to In Progress. Reset by a
+    /// manual task-producing command. The `review_loop.max_rounds` config caps it.</summary>
+    public int ReviewFixRounds { get; set; }
 }

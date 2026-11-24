@@ -239,6 +239,36 @@ test("completedTerminal carries summary, artifacts, session path and git facts",
   rmSync(workspace, { recursive: true, force: true });
 });
 
+test("completedTerminal carries the review verdict as outcome; absent verdict means no outcome key", () => {
+  const verdict = completedTerminal("run-1", null, "s", [], {}, "changes_requested");
+  assert.equal(verdict.body.outcome, "changes_requested");
+  const silent = completedTerminal("run-1", null, "s", [], {}, undefined);
+  assert.equal("outcome" in silent.body, false); // a passing review adds nothing
+});
+
+// ---- review-outcome MCP server: the review→fix loop's verdict marker ----
+
+test("review-outcome server answers initialize, lists the tool and records the call", async () => {
+  const server = fileURLToPath(new URL("../../reviewer/review-outcome.mjs", import.meta.url));
+  const send = (input) => spawnSync("node", [server], { input, encoding: "utf8" }).stdout
+    .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+
+  const initialized = send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }));
+  assert.equal(initialized[0].result.serverInfo.name, "review-outcome");
+
+  const listed = send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+  assert.equal(listed[0].result.tools[0].name, "request_changes");
+
+  const called = send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_changes", arguments: { reason: "the loop leaks" } } }));
+  assert.match(called[0].result.content[0].text, /requests changes/);
+
+  // a call without a reason is a protocol error; notifications are never answered
+  const invalid = send(JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "request_changes", arguments: {} } }));
+  assert.equal(invalid[0].error.code, -32602);
+  const silent = send(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }));
+  assert.equal(silent.length, 0);
+});
+
 // ---- spool: durable append, coalescing, redelivery ----
 
 test("spool appends durably, delivers in order, removes on completion", async () => {

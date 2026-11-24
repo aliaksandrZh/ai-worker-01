@@ -19,6 +19,7 @@ public static class GitHubMappers
         return snapshot with
         {
             HeadSha = String(pull, "head", "sha"),
+            HeadRef = String(pull, "head", "ref"),
             BaseSha = String(pull, "base", "sha"),
             Draft = pull.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True,
             MergedAt = Timestamp(pull, "merged_at"),

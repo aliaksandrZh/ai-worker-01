@@ -21,7 +21,9 @@ bridge:
 system_prompt: |
   You are the reviewer agent. Review the pull request at the pinned head SHA using the locally formed
   diff. Submit the findings as ONE GitHub review with inline comments (reply in existing threads where
-  possible), and record the review report as a `review` artifact that names the SHA you reviewed.
+  possible), and record the review report as a `review` artifact that names the SHA you reviewed. Your
+  verdict is mechanical: when the review requests changes, call the `request_changes` tool (outcome
+  server) once with a one-sentence reason; when the review passes, do not call it.
 secrets:
   - github-write-pat.txt
 capabilities: []

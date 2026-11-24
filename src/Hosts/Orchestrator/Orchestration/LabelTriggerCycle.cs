@@ -63,7 +63,13 @@ public sealed class LabelTriggerCycle(
                     continue;
                 try
                 {
-                    await TryStartAsync(db, item, taskType, cancellationToken);
+                    // the review-loop card path: an ISSUE with the AI:Review label whose card sits in
+                    // the review column starts the review on its LINKED pull request (the label was
+                    // added after the card arrived — the transition trigger's event is already gone)
+                    if (taskType == OrchestrationTaskTypes.Review && item.Type == WorkItemTypes.Issue)
+                        await TryStartIssueReviewAsync(db, item, cancellationToken);
+                    else
+                        await TryStartAsync(db, item, taskType, cancellationToken);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -172,6 +178,10 @@ public sealed class LabelTriggerCycle(
                         || await db.OrchestrationTasks.AnyAsync(
                             t => t.WorkflowId == existing.Id && t.Type == OrchestrationTaskTypes.Review && t.TriggerCommandId != null, cancellationToken)))
                     return; // once per Workflow lifetime; an explicit /review already covered it
+                // STATUS + LABEL: the standing label alone is nothing — the loop card (the linked
+                // issue, else the PR) must sit in one of `ai_statuses.review_statuses`
+                if (!await ReviewFlow.StatusAllowedAsync(db, configurationState, repository.Id, workItem, cancellationToken))
+                    return;
                 break;
         }
 
@@ -260,6 +270,123 @@ public sealed class LabelTriggerCycle(
             .FromSqlInterpolated($"SELECT * FROM workflow WHERE work_item_id = {workItemId} FOR UPDATE")
             .ToListAsync(cancellationToken);
         return locked.Count > 0 ? locked[0] : null;
+    }
+
+    /// <summary>
+    /// The review-loop card path: an ISSUE carrying the AI:Review label whose card sits in a
+    /// `review_statuses` column (exact convergence — the column IS the config's list) starts the
+    /// review on its LINKED open non-draft pull request. Scanner-created like every label-trigger
+    /// Task (no command, no event), and the same once-per-PR-Workflow guards the PR label path
+    /// enforces: no initial review yet and no explicit `/review`. The card without a linked open PR,
+    /// off the review column, or with a busy PR Workflow silently waits for the next tick.
+    /// </summary>
+    private async Task TryStartIssueReviewAsync(AppDbContext db, Candidate item,
+        CancellationToken cancellationToken)
+    {
+        var repository = await db.Repositories.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Id == item.RepositoryId, cancellationToken);
+        if (repository is null)
+            return;
+
+        // STATUS + LABEL, exact convergence: the card's current column must be in `review_statuses`.
+        // Without a board (or a board without the key) the issue path cannot converge — skip.
+        if (configurationState.ProjectStatusConfigs.Count == 0
+            || await BoardStatusOutbox.TryGetBoardStatusAsync(db, configurationState,
+                item.RepositoryId, item.Number, cancellationToken) is not { } board
+            || board.Config.ReviewStatuses is not { Count: > 0 } allowed
+            || !allowed.Contains(board.Status, StringComparer.Ordinal))
+            return;
+
+        var pr = await ReviewFlow.LinkedOpenPullRequestAsync(db, item.Id, cancellationToken);
+        if (pr is null || pr.Draft == true)
+            return; // the review needs an open non-draft pull request
+
+        var existing = await db.Workflows.AsNoTracking()
+            .SingleOrDefaultAsync(w => w.WorkItemId == pr.Id, cancellationToken);
+        if (existing is { Status: WorkflowStatuses.Failed or WorkflowStatuses.Closed })
+            return;
+        if (existing is { InitialReviewCreatedAt: not null }
+            || (existing is not null && await db.OrchestrationTasks.AsNoTracking().AnyAsync(
+                t => t.WorkflowId == existing.Id
+                    && t.Type == OrchestrationTaskTypes.Review && t.TriggerCommandId != null, cancellationToken)))
+            return; // once per PR-Workflow lifetime; an explicit /review already covered it
+        if (existing is not null && await db.OrchestrationTasks.AsNoTracking().AnyAsync(
+                t => t.WorkflowId == existing.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
+            return; // the PR's single slot is occupied
+
+        var (resolved, reason, detail) = await ProfileGate.ResolveAsync(db, repository, OrchestrationTaskTypes.Review, cancellationToken);
+        if (resolved is null)
+        {
+            logger.LogInformation("label trigger: review on {repo}#{number} skipped — no ready profile ({reason}: {detail})",
+                repository.FullName, item.Number, reason, detail);
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var locked = await LockWorkflowAsync(db, pr.Id, cancellationToken);
+        if (locked is null)
+        {
+            locked = new Workflow
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = pr.Id,
+                Status = WorkflowStatuses.WaitingForHuman,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.Workflows.Add(locked);
+        }
+        else if (locked.Status is WorkflowStatuses.Failed or WorkflowStatuses.Closed
+            || locked.InitialReviewCreatedAt is not null
+            || await db.OrchestrationTasks.AnyAsync(
+                t => t.WorkflowId == locked.Id && OrchestrationTaskStatuses.Unfinished.Contains(t.Status), cancellationToken))
+            return; // re-check under the lock: the state may have moved while the profile resolved
+
+        var maxSequence = await db.OrchestrationTasks
+            .Where(t => t.WorkflowId == locked.Id)
+            .MaxAsync(t => (int?)t.Sequence, cancellationToken) ?? 0;
+
+        var task = new OrchestrationTask
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = locked.Id,
+            Sequence = maxSequence + 1,
+            Type = OrchestrationTaskTypes.Review,
+            AgentProfileVersionId = resolved.Version.Id,
+            Status = OrchestrationTaskStatuses.Queued,
+            // scanner-created: no command row, no producing event (the relaxed trigger check)
+            TriggerAtGithub = now,
+            TargetHeadSha = pr.HeadSha,
+            TargetBaseSha = pr.BaseSha,
+            CreatedAt = now,
+            RetryPolicy = RetryPolicies.Effective(resolved.Version.RetryPolicy),
+        };
+        db.OrchestrationTasks.Add(task);
+        db.OrchestrationJobs.Add(new OrchestrationJob
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            JobType = OrchestrationJobTypes.RunTask,
+            Status = OrchestrationJobStatuses.Pending,
+            Priority = 0,
+            Attempts = 0,
+            AvailableAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        locked.Status = WorkflowStatuses.Active;
+        locked.CurrentTaskId = task.Id;
+        locked.StartedAt ??= now;
+        locked.UpdatedAt = now;
+        locked.InitialReviewCreatedAt ??= now; // the same once-per-lifetime marker every review path uses
+        await db.SaveChangesAsync(cancellationToken);
+        await AiStateLabels.MarkAsync(db, repository.Id, pr.Id, pr.Number,
+            task.Id, AiStateLabels.Scheduled, cancellationToken);
+        logger.LogInformation(
+            "label trigger: review task {taskId} started on linked PR {repo}#{prNumber} for card {repo}#{number} (label {label}, profile version {versionId})",
+            task.Id, repository.FullName, pr.Number, repository.FullName, item.Number,
+            AiScopeLabels.LabelForTaskType[OrchestrationTaskTypes.Review], resolved.Version.Id);
     }
 
     /// <summary>The item's current single-select board status from the synced field snapshot.</summary>

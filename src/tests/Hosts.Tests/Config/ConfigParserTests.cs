@@ -628,6 +628,82 @@ public class ConfigParserTests : IDisposable
     }
 
     [Fact]
+    public void ProjectsYaml_ReviewLoopKeys_Parsed()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                auto_fix:
+                  status_field: Status
+                  from: In Review
+                  to: In Progress
+                auto_review:
+                  status_field: Status
+                  from: In Progress
+                  to: In Review
+                ai_statuses:
+                  status_field: Status
+                  processing: In Progress
+                  review: In Review
+                  testing: Testing
+                  code_statuses: [Ready, In Progress]
+                  review_statuses: [In Review]
+                review_loop:
+                  max_rounds: 3
+            """);
+        var config = ConfigParser.Parse(_root);
+        // the four triggers keep their task types and plan-artifact requirements
+        var triggers = config.ProjectBoardTriggers;
+        Assert.Equal(2, triggers.Count);
+        var fix = Assert.Single(triggers, t => t.TaskType == OrchestrationTaskTypes.Implement);
+        Assert.Equal("In Review", fix.From);
+        Assert.Equal("In Progress", fix.To);
+        Assert.False(fix.RequiresPlanArtifact); // the fix round continues the PR branch
+        var review = Assert.Single(triggers, t => t.TaskType == OrchestrationTaskTypes.Review);
+        Assert.Equal("In Progress", review.From);
+        Assert.Equal("In Review", review.To);
+        // the status config carries the testing column + the review launch columns
+        var statuses = Assert.Single(config.ProjectStatusConfigs);
+        Assert.Equal("Testing", statuses.Testing);
+        Assert.Equal(["In Review"], statuses.ReviewStatuses);
+        // the round cap
+        var loop = Assert.Single(config.ReviewLoopConfigs);
+        Assert.Equal("aliaksandrZh", loop.Owner);
+        Assert.Equal(7, loop.Number);
+        Assert.Equal(3, loop.MaxRounds);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoCode_ParsesWithThePlanArtifactRequirement()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                auto_code:
+                  from: Clarifying
+                  to: Ready
+            """);
+        var trigger = Assert.Single(ConfigParser.Parse(_root).ProjectBoardTriggers);
+        Assert.True(trigger.RequiresPlanArtifact); // auto_code implements an APPROVED plan
+    }
+
+    [Fact]
+    public void ProjectsYaml_ReviewLoop_NonPositiveMaxRounds_Fails()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                review_loop:
+                  max_rounds: 0
+            """);
+        var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
+        Assert.Contains("max_rounds", exception.Message);
+    }
+
+    [Fact]
     public void ProjectsYaml_AiStatuses_Empty_Fails()
     {
         WriteAllWithProjects("""

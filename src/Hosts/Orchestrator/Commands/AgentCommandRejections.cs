@@ -53,6 +53,10 @@ public static class AgentCommandRejectionReasons
     /// <summary>Manual /code rejected — the item's board column is not one of the allowed ones
     /// (`ai_statuses.code_statuses`, Ready / In Progress): STATUS + LABEL holds for the manual command too.</summary>
     public const string CodeBoardStatusNotAllowed = "code_board_status_not_allowed";
+
+    /// <summary>The manual-/review board gate: STATUS + LABEL holds for the review too —
+    /// the card must sit in one of `ai_statuses.review_statuses` (projects.yaml).</summary>
+    public const string ReviewBoardStatusNotAllowed = "review_board_status_not_allowed";
 }
 
 public static class AgentCommandRejectionReplies
@@ -113,6 +117,10 @@ public static class AgentCommandRejectionReplies
         AgentCommandRejectionReasons.CodeBoardStatusNotAllowed =>
             $"Command rejected: /code runs only while the card is in Ready or In Progress — the card is "
             + $"currently in '{detail}'. Move the card, then post /code again.",
+        AgentCommandRejectionReasons.ReviewBoardStatusNotAllowed =>
+            $"Command rejected: /review runs only while the card is in the review column "
+            + $"(projects.yaml ai_statuses.review_statuses) — the card is currently in '{detail}'. "
+            + "Move the card, then post /review again.",
         _ => "Command rejected.",
     };
 

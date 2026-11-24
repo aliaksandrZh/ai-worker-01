@@ -10,7 +10,7 @@ public sealed record WorkItemSnapshot(
     string? AuthorLogin,
     IReadOnlyList<string> Assignees, IReadOnlyList<string> Labels, IReadOnlyList<string> RequestedReviewers,
     string? HeadSha, string? BaseSha, bool? Draft, DateTime? ClosedAt, DateTime? MergedAt, DateTime UpdatedAt,
-    DateTime CreatedAtGithub);
+    DateTime CreatedAtGithub, string? HeadRef = null);
 
 /// <summary>A parsed comment; `Kind` set by the mapping call (issue_comment vs review_comment);
 /// `IssueNumber` is the owning issue/PR number parsed from the API URL.</summary>

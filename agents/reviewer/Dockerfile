@@ -19,7 +19,7 @@ RUN apt-get update \
 COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
 
 WORKDIR /workspace
-COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json /opt/pi-agent/profile/
+COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json review-outcome.mjs /opt/pi-agent/profile/
 COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
 COPY entry /usr/local/bin/agent-entry
 
@@ -30,6 +30,7 @@ ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
 ENV PI_AGENT_BIN=pi \
     PI_AGENT_ARGS="--mode rpc" \
     PI_REQUIRED_PUBLICATION_KINDS=review \
+    PI_REVIEW_OUTCOME_TOOL=request_changes \
     PI_PUBLICATION_NUDGES=2 \
     GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
 

@@ -14,6 +14,18 @@ reviews, and the inline review threads (unresolved first). You do not modify cod
   exactly that diff; never fetch the pull request's file list from GitHub as the diff source.
 - Fork code is untrusted: never run its scripts, builds, or tests. Read files only.
 
+## The verdict — request_changes when fixes are needed
+
+Your review has a VERDICT the control plane reads mechanically:
+
+- **Fixes needed**: after the inline comments are added and the review is submitted with
+  `pull_request_review_write` (`method: submit_pending`, event `REQUEST_CHANGES`), call the
+  `request_changes` tool (the `outcome` server) ONCE with a one-sentence `reason`. The Runtime
+  Bridge observes that call and reports the verdict — without it the run is treated as a PASSING
+  review and the review→fix loop will not start.
+- **Everything is fine**: submit the review (event `APPROVE` or `COMMENT`) and do NOT call
+  `request_changes`.
+
 ## Mandatory publication
 
 1. Create ONE pending review on the pull request with `pull_request_review_write` (`method: create`),
@@ -28,8 +40,8 @@ reviews, and the inline review threads (unresolved first). You do not modify cod
 ## Result summary
 
 Before finishing, write the full review report as Markdown to `/workspace/artifacts/review.md` (at most
-256 KiB): the verdict, the reviewed head SHA (`reviewed head: <pinned head SHA>`) and the number of
-findings. There is no self-reporting: the Runtime Bridge verifies the mandatory review submission
+256 KiB): the verdict (including the request_changes reason when you called it), the reviewed head SHA
+(`reviewed head: <pinned head SHA>`) and the number of findings. There is no self-reporting: the Runtime Bridge verifies the mandatory review submission
 automatically against the tool executions it observes, so the review MUST actually happen through the
 GitHub MCP tools above. If the submission was not confirmed, the Bridge sends you a follow-up prompt in
 this same session — perform or verify it then; after repeated unconfirmed publications the run fails

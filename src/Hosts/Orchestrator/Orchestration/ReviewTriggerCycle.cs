@@ -116,6 +116,10 @@ public sealed class ReviewTriggerCycle(
             return;
 
         var repository = await db.Repositories.SingleAsync(r => r.Id == workItem.RepositoryId, cancellationToken);
+        // STATUS + LABEL: the request alone is nothing — the loop card (the linked issue, else the
+        // PR) must sit in one of `ai_statuses.review_statuses`; unverifiable cards fail open.
+        if (!await ReviewFlow.StatusAllowedAsync(db, configurationState, repository.Id, workItem, cancellationToken))
+            return;
         var now = DateTime.UtcNow;
 
         var workflow = await LockWorkflowAsync(db, workItem.Id, cancellationToken);
