@@ -38,8 +38,9 @@ One comment travels like this:
    signals (commands and system triggers) run only on items carrying the exact AI-scope label
    (`AI:Plan`/`AI:Code`/`AI:Review`/`AI:Test`, read from the synced labels); anything else is
    silently ignored, and the `LabelTriggerCycle` scanner starts the mapped task type when the
-   label appears and all conditions converge (no previous run → run; previous run with no new
-   human signal → no-new-input).
+   label appears and all conditions converge — only if that task type never ran on the item
+   before; re-runs need an explicit command (a standing label plus a fresh human comment is not
+   a re-run trigger).
 2. **Admission** — the Orchestrator consumes events, parses bot-mention slash commands
    (`/plan`, `/implement`, `/test-cases`, …), checks permissions, routing rules, and Workflow
    state, then creates a Workflow (one per root work item), a Task, and a first Run.
