@@ -57,7 +57,8 @@ function settleWork() {
     "# Pipeline stub result\n\nThe stub agent completed the pipeline with the received prompt.\n");
   execFileSync("git", ["add", "."], { cwd: workspace, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Stub Agent", "-c", "user.email=stub@invalid",
-    "commit", "-m", "stub agent work"], { cwd: workspace, stdio: "ignore" });
+    // --allow-empty: a retry-reused workspace may carry no new changes — the settle still completes
+    "commit", "--allow-empty", "-m", "stub agent work"], { cwd: workspace, stdio: "ignore" });
 }
 
 function answerPrompt() {
@@ -103,12 +104,24 @@ function answerPrompt() {
   emit({ id: "e4", type: "tool_execution_start", data: { toolCallId, toolName: "stub_publish" } });
   emit({ id: "e5", type: "tool_execution_update", data: { toolCallId, step: "writing artifacts" } });
   emit({ id: "e6", type: "tool_execution_end", data: { toolCallId, status: "completed" } });
+  // the run-outcome mandate's happy path: when the completion tool is configured, the stub calls it
+  // (the Bridge's toolcheck observes the name + the tool_execution_start args)
+  const outcomeTool = process.env.STUB_OUTCOME_TOOL;
+  if (outcomeTool) {
+    emit({ id: "e6b", type: "tool_execution_start", data: { toolCallId: "call-2", toolName: `mcp__outcome__${outcomeTool}`, args: { summary: "stub work completed" } } });
+    emit({ id: "e6c", type: "tool_execution_end", data: { toolCallId: "call-2", toolName: `mcp__outcome__${outcomeTool}`, status: "completed" } });
+  }
   emit({ id: "e7", type: "turn_end" });
   settleWork();
   emit({ id: "e8", type: "agent_settled", data: { sessionId } });
   // one-shot sessions: after settling the agent is done with this run — exit regardless
-  // of stdin state (the Bridge closes stdin after settle either way)
-  setTimeout(() => process.exit(0), 200);
+  // of stdin state (the Bridge closes stdin after settle either way). STUB_STAY_ALIVE keeps the
+  // process alive instead (exit on stdin EOF) so nudge-loop tests are deterministic — the agent
+  // answers the Bridge's follow-up prompts the same way.
+  if (process.env.STUB_STAY_ALIVE)
+    process.stdin.on("end", () => process.exit(0));
+  else
+    setTimeout(() => process.exit(0), 200);
 }
 
 let buffer = "";

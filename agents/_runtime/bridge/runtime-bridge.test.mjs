@@ -547,7 +547,9 @@ function fakeRuntimeApi(stopReason) {
       }
       if (request.method === "GET" && request.url.endsWith("/stop-request")) {
         stopPolls += 1;
-        const requested = stopPolls > 2; // requested only after a couple of 2 s polls
+        // "never" = the stop signal never fires (the outcome-mandate e2e tests); otherwise the stop
+        // is requested only after a couple of 2 s polls
+        const requested = stopReason !== "never" && stopPolls > 2;
         respond(200, { requested, reason: requested ? stopReason : null });
         return;
       }
@@ -633,6 +635,114 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   rmSync(spoolDir, { recursive: true, force: true });
   rmSync(dirname(tokenFile), { recursive: true, force: true });
 });
+
+// ---- the run-outcome mandate (end-to-end: the previously-undetected branch lives here) ----
+
+test("bridge end-to-end outcome mandate: the observed completion tool completes the run", async () => {
+  const runId = "outcome-e2e-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi("never");
+  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
+  const port = fake.server.address().port;
+
+  const bridge = spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
+    env: {
+      ...process.env,
+      PI_RUN_ID: runId,
+      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
+      PI_CALLBACK_TOKEN_FILE: dirs.tokenFile,
+      PI_WORKSPACE: dirs.workspace,
+      PI_SESSION_DIR: dirs.sessionDir,
+      PI_LOGS_DIR: dirs.logsDir,
+      PI_SPOOL_DIR: dirs.spoolDir,
+      PI_AGENT_BIN: process.execPath,
+      PI_AGENT_ARGS: AGENT,
+      STUB_BEHAVIOR: "succeed",
+      STUB_STAY_ALIVE: "1", // answer the Bridge's nudges deterministically
+      STUB_OUTCOME_TOOL: "work_completed", // the stub calls the completion tool
+      PI_REQUIRED_OUTCOME: "1", // ... and the Bridge MANDATES the observed call
+      PI_OUTCOME_TOOL: "work_completed",
+      PI_REQUIRED_PUBLICATION_KINDS: "",
+      PI_HEARTBEAT_SECONDS: "300",
+      PI_EVENT_CADENCE_SECONDS: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let bridgeStderr = "";
+  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
+
+  const exitCode = await Promise.race([
+    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
+  ]);
+  fake.server.close();
+
+  assert.equal(exitCode, 0, bridgeStderr); // a ReferenceError here would crash the bridge before any terminal
+  assert.equal(fake.completedBodies.length, 1); // completed, not failed
+  assert.deepEqual(fake.failedBodies, []);
+  assert.equal("outcome" in fake.completedBodies[0], false); // the coder's marker is not a review verdict
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end outcome mandate: a settle without the completion tool fails the run", async () => {
+  const runId = "outcome-missing-e2e-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi("never");
+  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
+  const port = fake.server.address().port;
+
+  const bridge = spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
+    env: {
+      ...process.env,
+      PI_RUN_ID: runId,
+      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
+      PI_CALLBACK_TOKEN_FILE: dirs.tokenFile,
+      PI_WORKSPACE: dirs.workspace,
+      PI_SESSION_DIR: dirs.sessionDir,
+      PI_LOGS_DIR: dirs.logsDir,
+      PI_SPOOL_DIR: dirs.spoolDir,
+      PI_AGENT_BIN: process.execPath,
+      PI_AGENT_ARGS: AGENT,
+      STUB_BEHAVIOR: "succeed", // settles WITHOUT the outcome call (STUB_OUTCOME_TOOL unset)
+      STUB_STAY_ALIVE: "1",
+      PI_REQUIRED_OUTCOME: "1",
+      PI_OUTCOME_TOOL: "work_completed",
+      PI_REQUIRED_PUBLICATION_KINDS: "",
+      PI_HEARTBEAT_SECONDS: "300",
+      PI_EVENT_CADENCE_SECONDS: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let bridgeStderr = "";
+  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
+
+  const exitCode = await Promise.race([
+    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
+  ]);
+  fake.server.close();
+
+  assert.equal(exitCode, 0, bridgeStderr);
+  assert.equal(fake.failedBodies.length, 1); // the nudges are exhausted — the run fails
+  assert.deepEqual(fake.completedBodies, []);
+  assert.equal(fake.failedBodies[0].error.code, "outcome_missing"); // the completion tool never confirmed
+  e2eCleanup(dirs);
+});
+
+function e2eDirs() {
+  const workspace = tempDir("ws-outcome-");
+  const sessionDir = tempDir("session-outcome-");
+  const logsDir = tempDir("logs-outcome-");
+  const spoolDir = tempDir("spool-outcome-");
+  const tokenFile = join(tempDir("tok-outcome-"), "callback-token");
+  writeFileSync(tokenFile, "per-run-callback-token");
+  return { workspace, sessionDir, logsDir, spoolDir, tokenFile };
+}
+
+function e2eCleanup(dirs) {
+  for (const dir of [dirs.workspace, dirs.sessionDir, dirs.logsDir, dirs.spoolDir, dirname(dirs.tokenFile)])
+    rmSync(dir, { recursive: true, force: true });
+}
 
 // ---- /mcp status probe (mcp_unavailable) ----
 
