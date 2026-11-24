@@ -12,9 +12,9 @@ using Xunit;
 namespace PiAgent.Hosts.Tests.Orchestration;
 
 /// <summary>
-/// The Projects v2 board → auto-plan trigger (projects.yaml `auto_plan`, consumed by the
+/// The Projects v2 board → trigger tests (projects.yaml `auto_plan` / `auto_code`, consumed by the
 /// project-event cycle): a `project_item_updated` carrying the configured status transition admits
-/// the system-owned plan Task. Covers trigger creation + replay dedupe, deferral while the
+/// the system-owned Task of the trigger's type. Covers trigger creation + replay dedupe, deferral while the
 /// Workflow is busy, the silent-consume guards (failed Workflow, explicit /plan after the
 /// transition, non-matching transition, unconfigured board, no ready planner profile), and the
 /// cold-start gate.
@@ -26,16 +26,16 @@ public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<P
     /// <summary>Postgres timestamptz stores microseconds; a raw UtcNow carries 100ns ticks that
     /// get truncated on the write-back — seed timestamps pre-truncated so strict equality holds.</summary>
     private static DateTime Micros(DateTime value) => new(value.Ticks / 10 * 10, DateTimeKind.Utc);
-    private static readonly ProjectPlanTrigger Trigger = new("aliaksandrZh", 7, "Status", "Backlog", "Clarifying");
+    private static readonly ProjectBoardTrigger Trigger = new("aliaksandrZh", 7, "Status", "Backlog", "Clarifying", OrchestrationTaskTypes.Plan);
     private static CancellationToken TestToken => default;
 
     private static ProjectEventLogCycle NewCycle(PostgresFixture fixture, bool synchronized = true,
-        IReadOnlyList<ProjectPlanTrigger>? triggers = null)
+        IReadOnlyList<ProjectBoardTrigger>? triggers = null)
     {
         var configuration = new ConfigurationState();
         if (synchronized)
         {
-            configuration.SetProjectPlanTriggers(triggers ?? [Trigger]);
+            configuration.SetProjectBoardTriggers(triggers ?? [Trigger]);
             configuration.MarkSynchronized("jsxhuz", 10);
         }
         var services = new ServiceCollection();
@@ -376,5 +376,119 @@ public class ProjectPlanTriggerTests(PostgresFixture postgres) : IClassFixture<P
         Assert.Equal(1, await db.OrchestrationTasks.CountAsync());
         Assert.Equal(GitHubEventStatuses.Processed,
             (await db.GitHubEvents.AsNoTracking().SingleAsync(e => e.Id == orphan.Id)).ProcessingStatus);
+    }
+
+    // ---- auto_code (Clarifying → Ready + AI:Code → the system-owned implement Task) ----
+
+    private static readonly ProjectBoardTrigger CodeTrigger =
+        new("aliaksandrZh", 7, "Status", "Clarifying", "Ready", OrchestrationTaskTypes.Implement);
+
+    /// <summary>The coder's convergence seed: AI:Code on the item, a Workflow holding a SUCCEEDED
+    /// plan Task with its plan artifact (the coder implements an approved plan), the coder profile ready.</summary>
+    private static async Task<WorkItem> SeedCodeConvergenceAsync(AppDbContext db)
+    {
+        var (_, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+        await db.WorkItems.Where(w => w.Id == workItem.Id)
+            .ExecuteUpdateAsync(u => u.SetProperty(w => w.Labels, "[\"AI:Code\"]"));
+        var workflow = new Workflow
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItem.Id,
+            Status = WorkflowStatuses.WaitingForHuman,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        db.Workflows.Add(workflow);
+        var (_, version, _) = await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Plan);
+        var planTask = new OrchestrationTask
+        {
+            Id = Guid.NewGuid(),
+            WorkflowId = workflow.Id,
+            Sequence = 1,
+            Type = OrchestrationTaskTypes.Plan,
+            AgentProfileVersionId = version.Id,
+            Status = OrchestrationTaskStatuses.Succeeded,
+            TriggerAtGithub = DateTime.UtcNow.AddMinutes(-30),
+            CreatedAt = DateTime.UtcNow,
+            RetryPolicy = "{}",
+        };
+        db.OrchestrationTasks.Add(planTask);
+        db.Artifacts.Add(new Artifact
+        {
+            Id = Guid.NewGuid(),
+            TaskId = planTask.Id,
+            WorkflowId = workflow.Id,
+            Type = ArtifactTypes.Plan,
+            Format = ArtifactFormats.Markdown,
+            Content = "# Plan",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        return workItem;
+    }
+
+    [Fact]
+    public async Task CodeTransition_CreatesSystemImplementTask()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var workItem = await SeedCodeConvergenceAsync(db);
+        var first = await AddTransitionEventAsync(db, workItem, from: "Clarifying", to: "Ready");
+
+        await NewCycle(postgres, triggers: [CodeTrigger]).RunCycleAsync(TestToken);
+
+        db.ChangeTracker.Clear();
+        var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.WorkItemId == workItem.Id);
+        var task = await db.OrchestrationTasks.AsNoTracking()
+            .SingleAsync(t => t.Type == OrchestrationTaskTypes.Implement);
+        Assert.Equal(OrchestrationTaskStatuses.Queued, task.Status);
+        Assert.Null(task.TriggerCommandId);
+        Assert.Equal(first.Id, task.TriggerGithubEventId);
+        Assert.Equal(WorkflowStatuses.Active, workflow.Status);
+        // the lifecycle label rides the same transition: AI Scheduled enqueued through the outbox
+        Assert.Equal(OutboxActionTypes.AiLabel,
+            (await db.OutboxActions.AsNoTracking().SingleAsync(a => a.TaskId == task.Id)).ActionType);
+    }
+
+    [Fact]
+    public async Task CodeTransition_WithoutPlanArtifact_ConsumesSilently()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var (_, workItem, _) = await CommandTestSupport.SeedAsync(db);
+        await CommandTestSupport.SeedProfileAsync(db, OrchestrationTaskTypes.Implement);
+        await db.WorkItems.Where(w => w.Id == workItem.Id)
+            .ExecuteUpdateAsync(u => u.SetProperty(w => w.Labels, "[\"AI:Code\"]"));
+        var first = await AddTransitionEventAsync(db, workItem, from: "Clarifying", to: "Ready");
+        db.ChangeTracker.Clear();
+
+        await NewCycle(postgres, triggers: [CodeTrigger]).RunCycleAsync(TestToken);
+
+        db.ChangeTracker.Clear();
+        Assert.Equal(0, await db.OrchestrationTasks.CountAsync());
+        Assert.Equal(0, await db.Workflows.CountAsync());
+        Assert.Equal(GitHubEventStatuses.Processed,
+            (await db.GitHubEvents.AsNoTracking().SingleAsync(e => e.Id == first.Id)).ProcessingStatus);
+    }
+
+    [Fact]
+    public async Task CodeTransition_WithoutAiCodeLabel_ConsumesSilently()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var workItem = await SeedCodeConvergenceAsync(db);
+        await db.WorkItems.Where(w => w.Id == workItem.Id)
+            .ExecuteUpdateAsync(u => u.SetProperty(w => w.Labels, "[\"other-label\"]"));
+        var first = await AddTransitionEventAsync(db, workItem, from: "Clarifying", to: "Ready");
+        db.ChangeTracker.Clear();
+
+        await NewCycle(postgres, triggers: [CodeTrigger]).RunCycleAsync(TestToken);
+
+        db.ChangeTracker.Clear();
+        Assert.Equal(0, await db.OrchestrationTasks.CountAsync(t => t.Type == OrchestrationTaskTypes.Implement));
+        Assert.Equal(GitHubEventStatuses.Processed,
+            (await db.GitHubEvents.AsNoTracking().SingleAsync(e => e.Id == first.Id)).ProcessingStatus);
     }
 }

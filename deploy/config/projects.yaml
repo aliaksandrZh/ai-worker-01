@@ -9,6 +9,19 @@
 # item — equivalent to the human posting `/plan` at that moment (no comment, no reply). Guards: the
 # work item must be open, the workflow not failed/closed, and the planner profile version ready; if
 # another Task is running the trigger defers until the Workflow is idle. Values are exact-case.
+#
+# Board trigger (optional `auto_code`): same mechanics for the coder — the `from → to` move plus the
+# `AI:Code` label admits the system-owned implement Task (equivalent to `/code`). Guards: the plan
+# must have produced a successful plan artifact (the coder implements an approved plan), the item
+# open, the workflow not failed/closed, the coder profile version ready.
+#
+# Board status config (optional `ai_statuses`): the columns the Orchestrator itself moves on the
+# board — `processing` when a run is handed off to the Runtime API (the item is AI Processing),
+# `review` when an implement Task succeeds (the pull request is up). A null/absent key means "do
+# not move the board for that state". `code_lock_statuses` are the columns where the MANUAL /code
+# is rejected (the automation owns the card there: the auto_code trigger fired and the implement
+# task runs / just ran); everywhere else — Backlog, Clarifying, In Review, Testing — manual /code
+# works. An item not on the board is not locked. Values are exact-case single-select option names.
 projects:
   - owner: aliaksandrZh
     number: 7
@@ -16,3 +29,12 @@ projects:
       status_field: Status
       from: Backlog
       to: Clarifying
+    auto_code:
+      status_field: Status
+      from: Clarifying
+      to: Ready
+    ai_statuses:
+      status_field: Status
+      processing: In Progress
+      review: In Review
+      code_lock_statuses: [In Progress, Ready]

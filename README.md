@@ -34,7 +34,10 @@ One comment travels like this:
    (`/users/{owner}/projectsV2/{number}/items`, sync + logs scope) and emits `project_item_*`
    events for added/field-changed/removed items; a board with an `auto_plan` trigger in
    `deploy/config/projects.yaml` turns a matching status transition (e.g. Backlog → Clarifying)
-   into a system-owned `/plan` on the item's work item — no comment needed. Task-producing
+   into a system-owned `/plan` on the item's work item — no comment needed (an `auto_code` trigger
+   does the same for the coder: e.g. Clarifying → Ready + the `AI:Code` label → `/code`); a board
+   with `ai_statuses` gets its card moved by the Orchestrator itself — `processing` when a run is
+   handed off (AI Processing), `review` when an implement Task succeeds (the PR is up). Task-producing
    signals (commands and system triggers) run only on items carrying the exact AI-scope label
    (`AI:Plan`/`AI:Code`/`AI:Review`/`AI:Test`, read from the synced labels); anything else is
    silently ignored, and the `LabelTriggerCycle` scanner starts the mapped task type when the

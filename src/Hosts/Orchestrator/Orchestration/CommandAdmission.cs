@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator.Commands;
+using PiAgent.Orchestrator.Config;
 
 namespace PiAgent.Orchestrator.Orchestration;
 
@@ -102,10 +103,16 @@ public static class CommandAdmission
 
     /// <summary>`botLogin` anchors the no-new-input gate's bot-author filtering (the agent's own
     /// comments and reviews never count as new signal); null disables the filtering — test convenience
-    /// only, the production path (CommentCommandProcessor) always passes it.</summary>
+    /// only, the production path (CommentCommandProcessor) always passes it. Every caller that admits
+    /// a MANUAL command passes `configurationState` — the manual-/code board gate
+    /// (`ai_statuses.code_lock_statuses`) resolves inside this method, so both entrances
+    /// (CommentCommandProcessor, OrchestrationApi) behave identically. Tests may skip the
+    /// configurationState and pass `boardStatus`/`codeLockStatuses` explicitly instead.</summary>
     public static async Task<AdmissionOutcome?> AdmitAsync(
         AppDbContext db, AgentCommand command, WorkItem workItem, Repository repository,
-        string? botLogin, CancellationToken cancellationToken, ILogger? logger = null)
+        string? botLogin, CancellationToken cancellationToken, ILogger? logger = null,
+        ConfigurationState? configurationState = null,
+        string? boardStatus = null, IReadOnlyList<string>? codeLockStatuses = null)
     {
         var name = command.CommandName;
 
@@ -151,6 +158,21 @@ public static class CommandAdmission
         Guid? planArtifactId = null;
         if (taskType == OrchestrationTaskTypes.Implement)
         {
+            // The board gate — resolved INSIDE the admission so every caller behaves identically:
+            // the automation owns the card in the locked columns (the auto_code trigger fired there
+            // and the implement task runs / just ran) — manual /code is for the unlocked columns
+            // only (Backlog, Clarifying, In Review, Testing) and for off-board items (fail open).
+            if (configurationState is not null
+                && await BoardStatusOutbox.TryGetBoardStatusAsync(db, configurationState,
+                    repository.Id, workItem.Number, cancellationToken) is { } board)
+            {
+                boardStatus = board.Status;
+                codeLockStatuses = board.Config.CodeLockStatuses;
+            }
+            if (codeLockStatuses is { Count: > 0 } && boardStatus is { } column
+                && codeLockStatuses.Contains(column))
+                return new AdmissionOutcome(AgentCommandRejectionReasons.CodeLockedByBoard, column);
+
             // /code approves the latest successful plan artifact — no implement-without-plan mode
             planArtifactId = await LatestPlanArtifactIdAsync(db, workflowId, cancellationToken);
             if (planArtifactId is null)

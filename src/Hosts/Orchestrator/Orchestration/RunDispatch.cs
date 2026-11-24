@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PiAgent.Infrastructure.Persistence;
+using PiAgent.Orchestrator.Config;
 using PiAgent.Orchestrator.Context;
 
 namespace PiAgent.Orchestrator.Orchestration;
@@ -113,7 +114,8 @@ public sealed record RunStartPayload(
 /// `POST /internal/runtime/runs/{runId}/start` with the same frozen content, then completes the claim
 /// on success.
 /// </summary>
-public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<RuntimeApiRunDispatcher> logger) : IRunDispatcher
+public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ConfigurationState configurationState,
+    ILogger<RuntimeApiRunDispatcher> logger) : IRunDispatcher
 {
     public async Task<DispatchOutcome> DispatchAsync(AppDbContext db, RunPreparation preparation, CancellationToken cancellationToken)
     {
@@ -230,7 +232,7 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
     /// terminal callback before this lands, and `starting` must never clobber a terminal Run state nor an
     /// event-driven `running`. Idempotent: re-running after a partial write-back converges.
     /// </summary>
-    private static async Task CompleteHandoffAsync(
+    private async Task CompleteHandoffAsync(
         AppDbContext db, Run run, OrchestrationTask task, OrchestrationJob? job, DateTime now, CancellationToken cancellationToken)
     {
         await db.Runs
@@ -257,5 +259,9 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
             .SingleAsync(w => w.Id == handoffWorkflow.WorkItemId, cancellationToken);
         await AiStateLabels.MarkAsync(db, handoffItem.RepositoryId, handoffItem.Id, handoffItem.Number,
             task.Id, AiStateLabels.Processing, cancellationToken);
+        // the AI Processing board move (projects.yaml `ai_statuses.processing`): best-effort, the
+        // outbox delivers it through the same per-work-item ordering as the label above
+        await BoardStatusOutbox.MoveAsync(db, configurationState, handoffItem.RepositoryId, handoffItem.Id,
+            handoffItem.Number, task.Id, BoardStatusOutbox.State.Processing, cancellationToken);
     }
 }

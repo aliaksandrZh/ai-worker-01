@@ -50,6 +50,11 @@ public sealed class OutboxDispatcher(
             await DeliverAiLabelAsync(store, db, action, cancellationToken);
             return;
         }
+        if (action.ActionType == OutboxActionTypes.ProjectStatus)
+        {
+            await DeliverProjectStatusAsync(store, db, action, cancellationToken);
+            return;
+        }
 
         var payload = ParsePayload(action.Payload);
         if (payload is null)
@@ -183,6 +188,106 @@ public sealed class OutboxDispatcher(
                 logger.LogWarning("outbox transient ai_label delivery failure {action_id} (attempt {attempts}) retry in {delay}: {error}",
                     action.Id, action.Attempts, delay, exception.Message);
             }
+        }
+    }
+
+    /// <summary>The board status move: idempotent by construction (setting the same single-select
+    /// value twice converges), so no marker/duplicate-suppression probe is needed. Error
+    /// classification is identical to labels: permanent statuses (including the client's own 422
+    /// for a renamed/removed column or option) dead-letter, transient ones retry with backoff.</summary>
+    private async Task DeliverProjectStatusAsync(OutboxActionStore store, AppDbContext db, OutboxAction action,
+        CancellationToken cancellationToken)
+    {
+        var payload = ParseProjectStatusPayload(action.Payload);
+        if (payload is null)
+        {
+            var reason = $"payload is not a valid project_status payload: {Summarize(action.Payload)}";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id} after {attempts} attempts: {error}",
+                action.Id, action.Attempts, reason);
+            return;
+        }
+
+        var repository = await db.Repositories.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.Id == action.RepositoryId, cancellationToken);
+        if (repository is null)
+        {
+            var reason = $"outbox action {action.Id}: repository {action.RepositoryId} no longer exists";
+            await store.MarkDeadLetterAsync(action.Id, _dispatcherId, reason, cancellationToken);
+            logger.LogWarning("outbox dead_letter {action_id}: {error}", action.Id, reason);
+            return;
+        }
+
+        var (owner, projectNumber, itemId, field, status) = payload.Value;
+        try
+        {
+            await client.SetProjectItemStatusAsync(owner, projectNumber, itemId, field, status, cancellationToken);
+            await store.MarkCompletedAsync(action.Id, _dispatcherId, cancellationToken);
+            logger.LogInformation(
+                "outbox project_status delivered {action_id} to board {owner}/{project_number} item {item_id}: {field} = {status} (attempts {attempts})",
+                action.Id, owner, projectNumber, itemId, field, status, action.Attempts);
+        }
+        catch (GitHubDeliveryException exception)
+        {
+            if (exception.Status is null)
+            {
+                var error = $"ambiguous: {exception.Message}";
+                await store.MarkTransientFailureAsync(action.Id, _dispatcherId, error, Backoff(action.Attempts), cancellationToken);
+                logger.LogWarning("outbox ambiguous project_status delivery {action_id} (attempt {attempts}): {error}",
+                    action.Id, action.Attempts, error);
+            }
+            else if (IsPermanent(exception))
+            {
+                await store.MarkDeadLetterAsync(action.Id, _dispatcherId, exception.Message, cancellationToken);
+                logger.LogWarning("outbox dead_letter {action_id} after {attempts} attempts: {error}",
+                    action.Id, action.Attempts, exception.Message);
+            }
+            else
+            {
+                var delay = Backoff(action.Attempts);
+                if (exception.RetryAfterSeconds is { } retryAfter)
+                    delay = TimeSpan.FromTicks(Math.Min(MaxInterval.Ticks, Math.Max(delay.Ticks, TimeSpan.FromSeconds(retryAfter).Ticks)));
+                await store.MarkTransientFailureAsync(action.Id, _dispatcherId, exception.Message, delay, cancellationToken);
+                logger.LogWarning("outbox transient project_status delivery failure {action_id} (attempt {attempts}) retry in {delay}: {error}",
+                    action.Id, action.Attempts, delay, exception.Message);
+            }
+        }
+    }
+
+    /// <summary>Payload contract: `{ "owner": string, "project_number": int, "item_id": long,
+    /// "field": string, "status": string }`.</summary>
+    private static (string Owner, int ProjectNumber, long ItemId, string Field, string Status)?
+        ParseProjectStatusPayload(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+            var owner = root.GetProperty("owner").GetString();
+            var projectNumber = root.GetProperty("project_number").GetInt32();
+            var itemId = root.GetProperty("item_id").GetInt64();
+            var field = root.GetProperty("field").GetString();
+            var status = root.GetProperty("status").GetString();
+            if (string.IsNullOrWhiteSpace(owner) || projectNumber <= 0 || itemId <= 0
+                || string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(status))
+                return null;
+            return (owner, projectNumber, itemId, field, status);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 

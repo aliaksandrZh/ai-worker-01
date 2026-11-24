@@ -75,7 +75,8 @@ public sealed class ConfigLoaderHostedService(
             var result = await new ConfigSyncService(db).SyncAsync(
                 new ConfigSynchronization(parsed, repositoryInfos, snapshots, options.Value.SourceCommitSha), cancellationToken);
 
-            state.SetProjectPlanTriggers(parsed.ProjectPlanTriggers);
+            state.SetProjectBoardTriggers(parsed.ProjectBoardTriggers);
+            state.SetProjectStatusConfigs(parsed.ProjectStatusConfigs);
             state.MarkSynchronized(parsed.System.BotLogin, parsed.System.MaxConcurrentRuns);
             logger.LogInformation(
                 "configuration synchronized from {root}: repositories created {created} (cursors {cursors}), {versions} new agent profile version(s), {rules} routing rule(s) upserted, {deleted} deleted",

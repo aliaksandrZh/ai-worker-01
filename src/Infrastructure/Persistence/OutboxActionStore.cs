@@ -97,6 +97,53 @@ public sealed class OutboxActionStore(AppDbContext db)
         return action;
     }
 
+    /// <summary>One AI-driven board status move (the single-select field set to the named option).
+    /// Idempotent at GitHub by construction (setting the same value twice converges), so a fresh
+    /// random idempotency key per transition is safe — replays after a crash re-apply the same state.</summary>
+    public async Task<OutboxAction> EnqueueProjectStatusAsync(ProjectStatusEnqueueRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.IssueNumber <= 0)
+            throw new ArgumentException($"issue_number must be positive, got {request.IssueNumber}", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Owner))
+            throw new ArgumentException("owner must be non-empty", nameof(request));
+        if (request.ProjectNumber <= 0)
+            throw new ArgumentException($"project_number must be positive, got {request.ProjectNumber}", nameof(request));
+        if (request.ItemId <= 0)
+            throw new ArgumentException($"item_id must be positive, got {request.ItemId}", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Field) || string.IsNullOrWhiteSpace(request.Status))
+            throw new ArgumentException("field and status must be non-empty", nameof(request));
+        if (!await db.Repositories.AnyAsync(r => r.Id == request.RepositoryId, cancellationToken))
+            throw new ArgumentException($"repository {request.RepositoryId} does not exist", nameof(request));
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            issue_number = request.IssueNumber,
+            owner = request.Owner,
+            project_number = request.ProjectNumber,
+            item_id = request.ItemId,
+            field = request.Field,
+            status = request.Status,
+        });
+        var now = DateTime.UtcNow;
+        var action = new OutboxAction
+        {
+            Id = Guid.NewGuid(),
+            RepositoryId = request.RepositoryId,
+            WorkItemId = request.WorkItemId,
+            TaskId = request.TaskId,
+            ActionType = OutboxActionTypes.ProjectStatus,
+            Payload = payload,
+            Status = OutboxStatuses.Pending,
+            AvailableAt = now,
+            IdempotencyKey = Guid.NewGuid().ToString(),
+            CreatedAt = now,
+        };
+        db.OutboxActions.Add(action);
+        await db.SaveChangesAsync(cancellationToken);
+        return action;
+    }
+
     public async Task<OutboxAction?> ClaimNextAsync(
         Guid dispatcherId, TimeSpan leaseDuration, TimeSpan retryWindow, CancellationToken cancellationToken)
     {

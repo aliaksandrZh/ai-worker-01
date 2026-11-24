@@ -198,9 +198,10 @@ public sealed class CommentCommandProcessor(
             // Admission (task 07): gate + Workflow/Task/Job creation for a command we just authorized,
             // in this same transaction; non-null outcome → existing rejection path (reason + Outbox reply).
             // Commands rejected by the authorization gate keep their reason — never re-admitted here.
+            // The board gate (code_lock_statuses) resolves INSIDE AdmitAsync — identical for every caller.
             var outcome = command.Status == AgentCommandStatuses.Authorized
                 ? await CommandAdmission.AdmitAsync(db, command, workItem, repository,
-                    configurationState.BotLogin, cancellationToken, logger)
+                    configurationState.BotLogin, cancellationToken, logger, configurationState)
                 : null;
             if (outcome is { } rejection)
             {

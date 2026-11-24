@@ -7,18 +7,39 @@ public sealed class ParsedConfig
     public required List<RepositoryEntry> Repositories { get; init; }
     public required List<RoutingRuleEntry> RoutingRules { get; init; }
     public required List<ProfileConfig> Profiles { get; init; }
-    /// <summary>Board triggers from projects.yaml (`auto_plan`); empty when the file is absent or
-    /// no board declares one. Consumed by the project-event cycle (system-owned plan Tasks).</summary>
-    public required List<ProjectPlanTrigger> ProjectPlanTriggers { get; init; } = [];
+    /// <summary>Board triggers from projects.yaml (`auto_plan` / `auto_code`); empty when the file
+    /// is absent or no board declares one. Consumed by the project-event cycle (system-owned Tasks
+    /// of the trigger's task type).</summary>
+    public required List<ProjectBoardTrigger> ProjectBoardTriggers { get; init; } = [];
+    /// <summary>Board status configs from projects.yaml (`ai_statuses`); empty when absent. Consumed
+    /// by the dispatch/terminal paths (the AI Processing → In Progress and the implement-success →
+    /// In Review board moves).</summary>
+    public required List<ProjectStatusConfig> ProjectStatusConfigs { get; init; } = [];
 }
 
 /// <summary>
-/// One Projects v2 board trigger (projects.yaml `auto_plan`): when the Poller reports an item's
-/// `status_field` moving `from → to` on the `owner/number` board, the project-event cycle admits a
-/// system-owned plan Task on the item's work item — the board move IS the human signal, no comment
-/// needed. Values compare ordinal (GitHub column names are exact-case).
+/// One Projects v2 board trigger (projects.yaml `auto_plan` / `auto_code`): when the Poller reports
+/// an item's `status_field` moving `from → to` on the `owner/number` board, the project-event cycle
+/// admits a system-owned Task of `task_type` on the item's work item — the board move IS the human
+/// signal, no comment needed. Values compare ordinal (GitHub column names are exact-case).
 /// </summary>
-public sealed record ProjectPlanTrigger(string Owner, int Number, string StatusField, string From, string To)
+public sealed record ProjectBoardTrigger(
+    string Owner, int Number, string StatusField, string From, string To, string TaskType)
+{
+    public string Board => $"{Owner}/{Number}";
+}
+
+/// <summary>
+/// One Projects v2 board status config (projects.yaml `ai_statuses`): the column names the
+/// Orchestrator drives on the `owner/number` board — `processing` when a run is handed off
+/// (AI Processing), `review` when an implement Task succeeds (the PR is up). Null entries mean
+/// "do not move the board for this state". `code_lock_statuses` are the columns where the MANUAL
+/// /code is rejected (the automation owns the card there — the auto_code trigger + the running
+/// implement Task); an item not on a board (or on a board without this key) is not locked.
+/// Values compare ordinal (exact-case option names).
+/// </summary>
+public sealed record ProjectStatusConfig(string Owner, int Number, string StatusField, string? Processing,
+    string? Review, IReadOnlyList<string>? CodeLockStatuses = null)
 {
     public string Board => $"{Owner}/{Number}";
 }

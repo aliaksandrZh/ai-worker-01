@@ -1,3 +1,4 @@
+using PiAgent.Infrastructure.Persistence;
 using PiAgent.Orchestrator.Config;
 using Xunit;
 
@@ -70,7 +71,7 @@ public class ConfigParserTests : IDisposable
         Assert.Empty(config.Repositories);
         Assert.Empty(config.RoutingRules);
         Assert.Empty(config.Profiles);
-        Assert.Empty(config.ProjectPlanTriggers);
+        Assert.Empty(config.ProjectBoardTriggers);
     }
 
     [Fact]
@@ -475,7 +476,7 @@ public class ConfigParserTests : IDisposable
                   to: Clarifying
             """);
         var config = ConfigParser.Parse(_root);
-        var trigger = Assert.Single(config.ProjectPlanTriggers);
+        var trigger = Assert.Single(config.ProjectBoardTriggers);
         Assert.Equal("aliaksandrZh", trigger.Owner);
         Assert.Equal(7, trigger.Number);
         Assert.Equal("aliaksandrZh/7", trigger.Board);
@@ -495,7 +496,7 @@ public class ConfigParserTests : IDisposable
                   from: Todo
                   to: Planning
             """);
-        var trigger = Assert.Single(ConfigParser.Parse(_root).ProjectPlanTriggers);
+        var trigger = Assert.Single(ConfigParser.Parse(_root).ProjectBoardTriggers);
         Assert.Equal("Status", trigger.StatusField);
     }
 
@@ -507,7 +508,7 @@ public class ConfigParserTests : IDisposable
               - owner: octo-org
                 number: 3
             """);
-        Assert.Empty(ConfigParser.Parse(_root).ProjectPlanTriggers);
+        Assert.Empty(ConfigParser.Parse(_root).ProjectBoardTriggers);
     }
 
     [Fact]
@@ -517,7 +518,7 @@ public class ConfigParserTests : IDisposable
         Write("repositories.yaml", MinimalRepositories);
         Write("routing.yaml", MinimalRouting);
         Directory.CreateDirectory(Path.Combine(_root, "agents"));
-        Assert.Empty(ConfigParser.Parse(_root).ProjectPlanTriggers);
+        Assert.Empty(ConfigParser.Parse(_root).ProjectBoardTriggers);
     }
 
     [Fact]
@@ -549,6 +550,96 @@ public class ConfigParserTests : IDisposable
         var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
         Assert.Contains("projects.yaml", exception.Message);
         Assert.Contains("must differ", exception.Message);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AutoCode_TriggerParsedWithImplementType()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                auto_code:
+                  status_field: Status
+                  from: Clarifying
+                  to: Ready
+            """);
+        var trigger = Assert.Single(ConfigParser.Parse(_root).ProjectBoardTriggers);
+        Assert.Equal("aliaksandrZh", trigger.Owner);
+        Assert.Equal(7, trigger.Number);
+        Assert.Equal("Clarifying", trigger.From);
+        Assert.Equal("Ready", trigger.To);
+        Assert.Equal(OrchestrationTaskTypes.Implement, trigger.TaskType);
+    }
+
+    [Fact]
+    public void ProjectsYaml_BothTriggers_ParsedSideBySide()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                auto_plan:
+                  from: Backlog
+                  to: Clarifying
+                auto_code:
+                  from: Clarifying
+                  to: Ready
+            """);
+        var triggers = ConfigParser.Parse(_root).ProjectBoardTriggers;
+        Assert.Equal(2, triggers.Count);
+        Assert.Equal(OrchestrationTaskTypes.Plan, triggers[0].TaskType);
+        Assert.Equal(OrchestrationTaskTypes.Implement, triggers[1].TaskType);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AiStatuses_Parsed()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: aliaksandrZh
+                number: 7
+                ai_statuses:
+                  status_field: Status
+                  processing: In Progress
+                  review: In Review
+            """);
+        var config = Assert.Single(ConfigParser.Parse(_root).ProjectStatusConfigs);
+        Assert.Equal("aliaksandrZh", config.Owner);
+        Assert.Equal(7, config.Number);
+        Assert.Equal("Status", config.StatusField);
+        Assert.Equal("In Progress", config.Processing);
+        Assert.Equal("In Review", config.Review);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AiStatuses_PartialAllowed()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                ai_statuses:
+                  processing: In Progress
+            """);
+        var config = Assert.Single(ConfigParser.Parse(_root).ProjectStatusConfigs);
+        Assert.Equal("In Progress", config.Processing);
+        Assert.Null(config.Review);
+    }
+
+    [Fact]
+    public void ProjectsYaml_AiStatuses_Empty_Fails()
+    {
+        WriteAllWithProjects("""
+            projects:
+              - owner: octo-org
+                number: 3
+                ai_statuses:
+                  status_field: Status
+            """);
+        var exception = Assert.Throws<ConfigException>(() => ConfigParser.Parse(_root));
+        Assert.Contains("projects.yaml", exception.Message);
+        Assert.Contains("ai_statuses", exception.Message);
     }
 
     [Fact]
