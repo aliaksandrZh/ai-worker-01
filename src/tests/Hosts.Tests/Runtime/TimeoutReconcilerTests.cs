@@ -435,7 +435,7 @@ public class TimeoutReconcilerTests(PostgresFixture postgres) : IClassFixture<Po
             Assert.Fail($"consumer threw: {exception}");
         }
         var allActions = await db.OutboxActions.AsNoTracking().ToListAsync();
-        var notification = allActions.SingleOrDefault(a => a.TaskId == task.Id);
+        var notification = allActions.SingleOrDefault(a => a.TaskId == task.Id && a.ActionType == OutboxActionTypes.Comment);
         Assert.True(notification is not null, $"outbox actions: {string.Join(",", allActions.Select(a => $"{a.TaskId}|{a.Payload?.Take(120)}"))}");
         Assert.Contains("reconciled: the container died", notification!.Payload);
     }

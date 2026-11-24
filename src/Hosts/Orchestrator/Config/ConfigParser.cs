@@ -22,6 +22,7 @@ public static class ConfigParser
         var repositories = ParseRepositories(Path.Combine(configRoot, "repositories.yaml"));
         var routing = ParseRouting(Path.Combine(configRoot, "routing.yaml"));
         var profiles = ParseProfiles(Path.Combine(configRoot, "agents"));
+        var projectPlanTriggers = ParseProjects(Path.Combine(configRoot, "projects.yaml"));
 
         return new ParsedConfig
         {
@@ -29,6 +30,7 @@ public static class ConfigParser
             Repositories = repositories,
             RoutingRules = routing,
             Profiles = profiles,
+            ProjectPlanTriggers = projectPlanTriggers,
         };
     }
 
@@ -237,6 +239,57 @@ public static class ConfigParser
         }
 
         return rules;
+    }
+
+    // Board sync is the Poller's concern; the Orchestrator reads the same projects.yaml only for
+    // its triggers. Absent file = no boards, no triggers — valid (the Poller is the one that
+    // requires the file when boards are configured).
+    private sealed class ProjectsDto
+    {
+        [YamlMember(Alias = "projects")] public List<ProjectDto>? Projects { get; set; }
+    }
+
+    private sealed class ProjectDto
+    {
+        [YamlMember(Alias = "owner")] public string? Owner { get; set; }
+        [YamlMember(Alias = "number")] public int? Number { get; set; }
+        [YamlMember(Alias = "auto_plan")] public AutoPlanDto? AutoPlan { get; set; }
+    }
+
+    private sealed class AutoPlanDto
+    {
+        [YamlMember(Alias = "status_field")] public string? StatusField { get; set; }
+        [YamlMember(Alias = "from")] public string? From { get; set; }
+        [YamlMember(Alias = "to")] public string? To { get; set; }
+    }
+
+    private static List<ProjectPlanTrigger> ParseProjects(string path)
+    {
+        const string name = "projects.yaml";
+        if (!File.Exists(path))
+            return [];
+
+        var dto = Load<ProjectsDto>(path, name);
+        var triggers = new List<ProjectPlanTrigger>();
+        foreach (var item in dto.Projects ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(item.Owner))
+                throw new ConfigException($"{name}: project entry is missing `owner`");
+            if (item.Number is not { } number || number <= 0)
+                throw new ConfigException($"{name}: project entry '{item.Owner}' must have a positive `number`");
+            if (item.AutoPlan is not { } autoPlan)
+                continue;
+            if (string.IsNullOrWhiteSpace(autoPlan.From) || string.IsNullOrWhiteSpace(autoPlan.To))
+                throw new ConfigException(
+                    $"{name}: auto_plan for project '{item.Owner}/{number}' requires non-empty `from` and `to`");
+            if (string.Equals(autoPlan.From, autoPlan.To, StringComparison.Ordinal))
+                throw new ConfigException(
+                    $"{name}: auto_plan for project '{item.Owner}/{number}': `from` and `to` must differ");
+            triggers.Add(new ProjectPlanTrigger(item.Owner.Trim(), number,
+                string.IsNullOrWhiteSpace(autoPlan.StatusField) ? "Status" : autoPlan.StatusField.Trim(),
+                autoPlan.From.Trim(), autoPlan.To.Trim()));
+        }
+        return triggers;
     }
 
     private sealed class ProfileDto

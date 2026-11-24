@@ -686,7 +686,7 @@ public class AdmissionTests(PostgresFixture postgres) : IClassFixture<PostgresFi
         Assert.Equal(AgentCommandStatuses.Queued, first.Status);
         Assert.Equal(AgentCommandStatuses.Rejected, second.Status);
         Assert.Equal(AgentCommandRejectionReasons.UnfinishedTaskExists, second.RejectionReason);
-        Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync()); // exactly the rejection reply
+        Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync()); // exactly the rejection reply (plus the admitted command's AI Scheduled label, asserted by its own tests)
         Assert.Equal(1, await db.OrchestrationTasks.AsNoTracking().CountAsync());
     }
 

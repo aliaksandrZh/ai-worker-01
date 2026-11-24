@@ -1,9 +1,18 @@
-# Projects v2 boards the Poller syncs (items + field changes → project_item_* events,
-# logged by the Orchestrator). `owner` is the account owning the board (user-owned boards are
-# addressed as /users/{owner}/projectsV2/{number}); `number` comes from the board URL:
-#   https://github.com/users/<owner>/projects/<number>/views/...
+# Projects v2 boards the Poller syncs (items + field changes → project_item_* events).
+# `owner` is the account owning the board (user-owned boards are addressed as /users/{owner}/projectsV2/{number});
+# `number` comes from the board URL: https://github.com/users/<owner>/projects/<number>/views/...
 # The sync PAT needs read access to each configured board (the owner's PAT, or the board shared
 # with the PAT's account with read access).
+#
+# Board trigger (optional `auto_plan`, Orchestrator-side): when an item's `status_field` moves
+# `from → to` on the board, the Orchestrator admits the system-owned plan Task on the item's work
+# item — equivalent to the human posting `/plan` at that moment (no comment, no reply). Guards: the
+# work item must be open, the workflow not failed/closed, and the planner profile version ready; if
+# another Task is running the trigger defers until the Workflow is idle. Values are exact-case.
 projects:
   - owner: aliaksandrZh
-    number: 6
+    number: 7
+    auto_plan:
+      status_field: Status
+      from: Backlog
+      to: Clarifying

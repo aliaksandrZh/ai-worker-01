@@ -72,6 +72,8 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
             ? await db.AgentCommands.SingleOrDefaultAsync(c => c.Id == commandId, cancellationToken)
             : null;
         var workflow = await db.Workflows.SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
+        var workItem = await db.WorkItems.AsNoTracking()
+            .SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
 
         bool requeued = false; // a silent automatic retry keeps the Task as the Workflow's open work
 
@@ -93,6 +95,10 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                     command.Status = AgentCommandStatuses.Processed;
                     command.ProcessedAt = now;
                 }
+                // the run completed — the AI work of this task is done (the "asked a human" variant
+                // included: the agent did finish its turn); the human's answer is a new task
+                await AiStateLabels.MarkAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
+                    task.Id, AiStateLabels.Finished, cancellationToken);
                 break;
 
             case RunStatuses.Failed:
@@ -122,6 +128,10 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                     command.RejectionReason = task.FailureReason;
                     command.ProcessedAt = now;
                 }
+                // finally failed (the silent-retry path above returns without touching labels —
+                // the item stays "in work" while its retry is queued)
+                await AiStateLabels.MarkAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
+                    task.Id, AiStateLabels.Failed, cancellationToken);
                 // every finally-failed Task notifies once — the exhausted-retries closing
                 // applies when silent automatic retries were involved; publication failures keep their own.
                 var retriesExhausted = preExecution && RunErrorCodes.TransientPreExecution.Contains(run.ErrorCode)
@@ -142,6 +152,10 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                     command.RejectionReason = "run_cancelled";
                     command.ProcessedAt = now;
                 }
+                // a stop is not a failure: remove all four AI labels (the queued-cancellation
+                // path in StopCommandHandler clears as well — both are idempotent, one lands)
+                await AiStateLabels.ClearAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
+                    task.Id, cancellationToken);
                 break;
 
             case RunStatuses.TimedOut:
@@ -155,6 +169,8 @@ public sealed class RunTerminalConsumer(IServiceScopeFactory scopeFactory, ILogg
                     command.ProcessedAt = now;
                 }
                 // TimedOut never auto-retries (execution began) and still notifies.
+                await AiStateLabels.MarkAsync(db, workItem.RepositoryId, workItem.Id, workItem.Number,
+                    task.Id, AiStateLabels.Failed, cancellationToken);
                 await EnqueueFinalFailureNotificationAsync(db, task, run, workflow,
                     preExecution: false, retriesExhausted: false, cancellationToken);
                 break;

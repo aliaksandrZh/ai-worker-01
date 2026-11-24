@@ -193,7 +193,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         db.ChangeTracker.Clear();
         await NewConsumer().RunCycleAsync(default);
 
-        var notifications = await db.OutboxActions.AsNoTracking().ToListAsync();
+        var notifications = await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync();
         var notification = Assert.Single(notifications); // exactly one per failed Run
         Assert.Equal(OutboxActionTypes.Comment, notification.ActionType);
         Assert.Equal(task.Id, notification.TaskId);
@@ -234,7 +234,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
 
         // the generic failure template covers every finally-failed Task —
         // codes outside the exhausted-retries/publication cases get the plain resubmit closing
-        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
         Assert.Contains("Task failed: /plan", text, StringComparison.Ordinal);
@@ -327,7 +327,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         // silent: the trigger command stays queued, no notification
         var command = await db.AgentCommands.AsNoTracking().SingleAsync(c => c.Id == task.TriggerCommandId);
         Assert.Equal(AgentCommandStatuses.Queued, command.Status);
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        Assert.Empty(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         // no new Run until the claim flow recreates it at attempt_number+1
         Assert.Single(await db.Runs.AsNoTracking().Where(r => r.TaskId == task.Id).ToListAsync());
         // the failed attempt's job is closed and exactly one fresh pending job schedules the retry
@@ -354,7 +354,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         var db = postgres.NewDbContext();
         var task = await db.OrchestrationTasks.AsNoTracking().SingleAsync(t => t.Status == OrchestrationTaskStatuses.Queued);
         Assert.Equal(1, task.AutomaticRetriesUsed);
-        Assert.Empty(await db.OutboxActions.AsNoTracking().ToListAsync());
+        Assert.Empty(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
     }
 
     [Fact]
@@ -379,7 +379,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         // no fresh job was created behind the exhausted budget
         Assert.Single(await db.OrchestrationJobs.AsNoTracking().Where(j => j.TaskId == task.Id).ToListAsync());
         // one notification with the exhausted-retries closing
-        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         Assert.Equal(originalRun.Id.ToString(), notification.IdempotencyKey);
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
@@ -402,7 +402,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         var reloaded = await ReloadTaskAsync(originalTask.Id);
         Assert.Equal(OrchestrationTaskStatuses.Failed, reloaded.Status);
         Assert.Equal(0, reloaded.AutomaticRetriesUsed);
-        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
         Assert.DoesNotContain("Automatic retries exhausted", text, StringComparison.Ordinal); // nothing was ever retried
@@ -422,7 +422,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal(0, task.AutomaticRetriesUsed);
         Assert.Equal(WorkflowStatuses.WaitingForHuman,
             (await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId)).Status);
-        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
         Assert.Contains("| Stage: Execution", text, StringComparison.Ordinal); // post-execution stage
@@ -447,7 +447,7 @@ public class RunTerminalConsumerTests(PostgresFixture postgres) : IClassFixture<
         Assert.Equal(OrchestrationTaskStatuses.Failed, reloaded.Status);
         Assert.Equal("max_run_duration", reloaded.FailureReason);
         Assert.Equal(0, reloaded.AutomaticRetriesUsed); // never retried (execution had begun)
-        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().ToListAsync());
+        var notification = Assert.Single(await db.OutboxActions.AsNoTracking().Where(a => a.ActionType == OutboxActionTypes.Comment).ToListAsync());
         using var body = System.Text.Json.JsonDocument.Parse(notification.Payload);
         var text = body.RootElement.GetProperty("text").GetString()!;
         Assert.Contains("Failure: max_run_duration", text, StringComparison.Ordinal);

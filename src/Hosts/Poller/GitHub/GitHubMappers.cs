@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using PiAgent.Infrastructure.Persistence;
 
@@ -134,6 +135,83 @@ public static class GitHubMappers
             Fields: fields,
             CreatedAt: Timestamp(item, "created_at") ?? DateTime.UnixEpoch,
             UpdatedAt: Timestamp(item, "updated_at") ?? DateTime.UnixEpoch);
+    }
+
+    /// <summary>
+    /// One ProjectV2Item node from the GraphQL listing: `databaseId` is the stable numeric item id
+    /// (same value the REST endpoint exposes as `id`), field values come from `fieldValues` —
+    /// single-select options to their `name`, text/date/number/iteration to their scalar — with the
+    /// field identified by its node id hashed to a stable long (ProjectFieldValue stores long ids).
+    /// Value types without a mapped scalar (user/repository/milestone) collapse to "".
+    /// </summary>
+    public static ProjectItemSnapshot MapProjectItemGraphQL(JsonElement node)
+    {
+        var contentType = String(node, "type") is { } type
+            ? type switch
+            {
+                "ISSUE" => "Issue",
+                "PULL_REQUEST" => "PullRequest",
+                "DRAFT_ISSUE" => "DraftIssue",
+                _ => type,
+            }
+            : "Unknown";
+        var hasContent = node.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object
+            && String(content, "__typename") is "Issue" or "PullRequest";
+        var fields = new List<ProjectFieldValue>();
+        if (node.TryGetProperty("fieldValues", out var fieldValues) &&
+            fieldValues.TryGetProperty("nodes", out var valueNodes) && valueNodes.ValueKind == JsonValueKind.Array)
+            foreach (var valueNode in valueNodes.EnumerateArray())
+            {
+                if (!valueNode.TryGetProperty("field", out var field)
+                    || String(field, "id") is not { } fieldId
+                    || CanonicalGraphQlValue(valueNode) is not { } value)
+                    continue;
+                fields.Add(new ProjectFieldValue(Hash64(fieldId), String(field, "name"), value));
+            }
+        return new ProjectItemSnapshot(
+            ItemId: node.GetProperty("databaseId").GetInt64(),
+            ItemNodeId: String(node, "id"),
+            ContentType: contentType,
+            RepositoryFullName: hasContent ? String(content, "repository", "nameWithOwner") : null,
+            Number: hasContent ? Int32(content, "number") : null,
+            Title: hasContent ? String(content, "title") ?? "" : "",
+            Fields: fields,
+            CreatedAt: Timestamp(node, "createdAt") ?? DateTime.UnixEpoch,
+            UpdatedAt: Timestamp(node, "updatedAt") ?? DateTime.UnixEpoch);
+    }
+
+    /// <summary>Scalar for a mapped field value node (`__typename` selects the property); null for
+    /// unmapped value types — they are skipped entirely instead of collapsing to an empty value.</summary>
+    private static string? CanonicalGraphQlValue(JsonElement valueNode)
+    {
+        var typeName = String(valueNode, "__typename");
+        return typeName switch
+        {
+            "ProjectV2ItemFieldSingleSelectValue" => String(valueNode, "name"),
+            "ProjectV2ItemFieldTextValue" => String(valueNode, "text"),
+            "ProjectV2ItemFieldDateValue" => String(valueNode, "date"),
+            "ProjectV2ItemFieldNumberValue" => valueNode.TryGetProperty("number", out var number)
+                ? number.GetRawText()
+                : null,
+            "ProjectV2ItemFieldIterationValue" => String(valueNode, "title"),
+            _ => null,
+        };
+    }
+
+    /// <summary>FNV-1a 64-bit — stable long identity for a GraphQL node-id string; field ids are
+    /// only matched against each other across passes (before/after diff), never compared to REST ids.</summary>
+    private static long Hash64(string text)
+    {
+        unchecked
+        {
+            ulong hash = 14695981039346656037;
+            foreach (var byteValue in Encoding.UTF8.GetBytes(text))
+            {
+                hash ^= byteValue;
+                hash *= 1099511628211;
+            }
+            return (long)hash;
+        }
     }
 
     /// <summary>Issue payloads carry the full `repository` object; PR payloads only the API `url`

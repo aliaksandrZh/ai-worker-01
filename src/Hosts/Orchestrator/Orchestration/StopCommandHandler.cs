@@ -127,6 +127,12 @@ public static class StopCommandHandler
         await new OutboxActionStore(db).EnqueueAsync(
             new OutboxEnqueueRequest(repository.Id, workItem.Id, null, workItem.Number, notification, command.Id),
             cancellationToken);
+        if (queuedCancellations > 0 && active.Count == 0)
+            // queued-only stop: no run will ever turn Cancelled, so the terminal-Run consumer's
+            // clear never fires — clear the AI labels here (an active stop relies on it; a stop
+            // is not a failure, the labels simply go away).
+            await AiStateLabels.ClearAsync(db, repository.Id, workItem.Id, workItem.Number,
+                null, cancellationToken);
         command.Status = AgentCommandStatuses.Processed;
         command.ProcessedAt = DateTime.UtcNow;
     }

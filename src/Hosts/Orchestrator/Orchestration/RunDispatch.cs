@@ -247,5 +247,15 @@ public sealed class RuntimeApiRunDispatcher(RuntimeApiClient client, ILogger<Run
             dispatchJob.UpdatedAt = now;
         }
         await db.SaveChangesAsync(cancellationToken);
+
+        // every accepted handoff (including the restart-recovery 409 and the transport-failure-after-
+        // acceptance paths) marks the item AI Processing; the terminal-Run consumer follows with the
+        // terminal label through the outbox's per-work-item ordering, so the final state stays right.
+        var handoffWorkflow = await db.Workflows.AsNoTracking()
+            .SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
+        var handoffItem = await db.WorkItems.AsNoTracking()
+            .SingleAsync(w => w.Id == handoffWorkflow.WorkItemId, cancellationToken);
+        await AiStateLabels.MarkAsync(db, handoffItem.RepositoryId, handoffItem.Id, handoffItem.Number,
+            task.Id, AiStateLabels.Processing, cancellationToken);
     }
 }

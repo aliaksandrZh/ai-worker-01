@@ -123,7 +123,7 @@ public class RootClosureCycleTests(PostgresFixture postgres) : IClassFixture<Pos
         // cleanup + one stop per active run, service-token guarded
         Assert.Contains(runtimeStub.Requests, r => r.RequestUri!.AbsolutePath.EndsWith("/cleanup"));
         // cleanup is silent — no GitHub notification is enqueued
-        Assert.Equal(0, await db.OutboxActions.CountAsync());
+        Assert.Equal(0, await db.OutboxActions.CountAsync(a => a.ActionType == OutboxActionTypes.Comment));
     }
 
     [Fact]

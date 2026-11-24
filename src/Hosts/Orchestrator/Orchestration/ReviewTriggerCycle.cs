@@ -203,6 +203,8 @@ public sealed class ReviewTriggerCycle(
         workflow.CurrentTaskId = task.Id;
         workflow.StartedAt ??= now;
         workflow.UpdatedAt = now;
+        await AiStateLabels.MarkAsync(db, repository.Id, workItem.Id, workItem.Number,
+            task.Id, AiStateLabels.Scheduled, cancellationToken);
         logger.LogInformation(
             "review trigger: automatic review task {taskId} created for work item {workItemId} (event {eventId}, profile version {versionId})",
             task.Id, workItem.Id, githubEvent.Id, version.Id);

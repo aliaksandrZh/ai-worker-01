@@ -11,15 +11,16 @@ namespace PiAgent.Poller.Streams;
 
 /// <summary>
 /// The Projects v2 pass ("sync + logs" scope): for every configured project
-/// (deploy/config/projects.yaml) one authoritative full listing per pass —
-/// `GET /users/{owner}/projectsV2/{number}/items`, `If-None-Match` against the stored ETag
-/// short-circuits unchanged boards. Detection is list-diff against `project_item` snapshots:
+/// (deploy/config/projects.yaml) one authoritative full listing per pass — GraphQL
+/// `user.projectV2.items`, because the REST `/projectsV2/{n}/items` endpoint does not return field
+/// values (only the built-in Title) and column states — the Status single-select included — are
+/// GraphQL-only. Detection is list-diff against `project_item` snapshots:
 /// added / field-changed / removed items emit `project_item_*` events (deduped, written
 /// `pending`) for content that maps to a tracked repository; unmappable content (DraftIssue,
 /// untracked repository) is synced and logged only. One transaction per pass — a crash rolls
 /// everything back and the next pass re-detects (fingerprint dedupe keeps it idempotent).
-/// Event processing lives in the Orchestrator; the pass keeps no cursor beyond the ETag +
-/// bookkeeping on its project_sync row.
+/// Event processing lives in the Orchestrator; the pass keeps no cursor beyond the
+/// bookkeeping on its project_sync row (the legacy ETag column stays, no longer written).
 /// </summary>
 public static class ProjectItemsSync
 {
@@ -55,21 +56,16 @@ public static class ProjectItemsSync
     {
         var board = $"{project.Owner}/{project.Number}";
 
-        // 1. Full listing: the conditional ETag rides on the first request only (same discipline
-        //    as the timestamp streams); Link-header pages follow unconditionally.
+        // 1. Full listing: cursor-paginated GraphQL (field values are GraphQL-only — see the class doc).
         var listed = new List<ProjectItemSnapshot>();
-        var requestPath = $"users/{project.Owner}/projectsV2/{project.Number}/items?per_page=100";
-        string? etag = null;
+        string? cursor = null;
         while (true)
         {
-            var page = await client.GetPageAsync(requestPath, state.Etag, cancellationToken);
-            if (page.NotModified)
-                return new StreamResult(StreamResultKind.NotModified);
-            etag ??= page.Etag;
-            listed.AddRange(page.Items.Select(GitHubMappers.MapProjectItem));
-            if (page.NextPageUri is not { } nextPage)
+            var page = await client.ListProjectItemsAsync(project.Owner, project.Number, cursor, cancellationToken);
+            listed.AddRange(page.Nodes.Select(GitHubMappers.MapProjectItemGraphQL));
+            if (!page.HasNextPage)
                 break;
-            requestPath = nextPage.PathAndQuery;
+            cursor = page.EndCursor;
         }
 
         // 2. One transaction per pass: diff against the stored snapshots, persist rows + events.
@@ -80,8 +76,9 @@ public static class ProjectItemsSync
             var stored = await db.ProjectItems
                 .Where(i => i.ProjectSyncId == state.Id)
                 .ToDictionaryAsync(i => i.ItemId, cancellationToken);
+            // full_name is stored normalized lowercase; GraphQL nameWithOwner carries the real casing
             var repositories = await db.Repositories.AsNoTracking()
-                .ToDictionaryAsync(r => r.FullName, r => r.Id, cancellationToken);
+                .ToDictionaryAsync(r => r.FullName, r => r.Id, StringComparer.OrdinalIgnoreCase, cancellationToken);
             var listedIds = listed.Select(s => s.ItemId).ToHashSet();
 
             var added = 0;
@@ -124,8 +121,15 @@ public static class ProjectItemsSync
                         cancellationToken);
                     continue;
                 }
-                if (snapshot.UpdatedAt <= row.UpdatedAtGithub)
+                if (snapshot.UpdatedAt < row.UpdatedAtGithub)
                     continue; // stale overlap: the stored state is already current
+                if (snapshot.UpdatedAt == row.UpdatedAtGithub)
+                {
+                    // Already-current content: coordinates only — heals a stale link (e.g. a row
+                    // written while the repository lookup failed) without any event.
+                    ApplyRow(row, snapshot, repositoryId, now);
+                    continue;
+                }
 
                 var changes = FieldChanges(row, snapshot);
                 if (changes.Count == 0)
@@ -146,7 +150,6 @@ public static class ProjectItemsSync
                 ApplyRow(row, snapshot, repositoryId, now);
             }
 
-            state.Etag = etag;
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             logger.LogInformation("project {project} synced: {added} added, {updated} updated, {removed} removed",
