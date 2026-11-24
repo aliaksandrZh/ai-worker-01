@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 namespace PiAgent.Infrastructure.Persistence;
 
@@ -50,6 +51,22 @@ public static class AiScopeLabels
         {
             return [];
         }
+    }
+
+    /// <summary>The review scope-label gate over the LOOP CARD: the review signals target the PR
+    /// (the manual /review, the bot-requested reviewer), while the user's scope labels live on the
+    /// board card (the linked issue) — so a review runs when the item OR its linked issue carries
+    /// the exact `AI:Review` label.</summary>
+    public static async Task<bool> HasReviewScopeAsync(
+        AppDbContext db, Guid repositoryId, WorkItem workItem, CancellationToken cancellationToken)
+    {
+        if (HasScope(workItem, OrchestrationTaskTypes.Review))
+            return true;
+        var linkedLabels = await db.WorkItemLinks.AsNoTracking()
+            .Where(l => l.PrWorkItemId == workItem.Id)
+            .Join(db.WorkItems.AsNoTracking(), l => l.IssueWorkItemId, w => w.Id, (l, w) => w.Labels)
+            .FirstOrDefaultAsync(cancellationToken);
+        return linkedLabels is not null && HasScope(linkedLabels, OrchestrationTaskTypes.Review);
     }
 
     /// <summary>The exact-match gate: does the item carry the scope label of this task type?</summary>
