@@ -399,6 +399,25 @@ public class ReviewLoopTests(PostgresFixture postgres) : IClassFixture<PostgresF
     // ---- the claim-time plan recheck: the fix round needs no plan artifact ----
 
     [Fact]
+    public async Task CodeOnAnIssueWithAnOpenPr_PinsThePrBranch()
+    {
+        await postgres.ResetAsync();
+        await using var db = postgres.NewDbContext();
+        var seed = await SeedLoopAsync(db, cardStatus: "In progress");
+        var version = await OrchestrationTestSupport.SeedVersionAsync(db, ProfileVersionStates.Ready);
+        version.ContainerImage = "agent-coder:v8";
+        await db.SaveChangesAsync();
+        var seeded = await OrchestrationTestSupport.SeedQueuedAsync(db, seed.Issue, version,
+            commandName: AgentCommandNames.Code, withCommand: true, withRun: false);
+        db.ChangeTracker.Clear();
+
+        var preparation = await RunPrepare.PrepareAsync(db, seeded.Task, version, default);
+
+        Assert.NotNull(preparation);
+        Assert.Equal("agent/42-fix", preparation!.Workspace.BranchName); // the PR's head branch — /start drops create_pull_request
+    }
+
+    [Fact]
     public async Task FixRoundTask_Claims_WithoutPlanArtifact()
     {
         await postgres.ResetAsync();

@@ -79,12 +79,19 @@ public static class RunPrepare
         {
             var workflow = await db.Workflows.AsNoTracking().SingleAsync(w => w.Id == task.WorkflowId, cancellationToken);
             var workItem = await db.WorkItems.AsNoTracking().SingleAsync(w => w.Id == workflow.WorkItemId, cancellationToken);
+            // an implement task on an issue whose pull request is ALREADY open continues that PR:
+            // pin its head branch — the entry clones it directly and /start drops the
+            // create_pull_request mandate (the same semantics the auto_fix trigger pins for its tasks)
+            string? pinnedBranch = null;
+            if (task.Type == OrchestrationTaskTypes.Implement)
+                pinnedBranch = (await ReviewFlow.LinkedOpenPullRequestAsync(db, workItem.Id, cancellationToken))?.HeadRef;
             workspace = new Workspace
             {
                 Id = Guid.NewGuid(),
                 TaskId = task.Id,
                 WorkItemId = workItem.Id,
                 RepositoryId = workItem.RepositoryId,
+                BranchName = pinnedBranch,
                 Status = WorkspaceStatuses.Provisioning,
                 CreatedAt = now,
             };
