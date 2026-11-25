@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -402,8 +402,10 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
   const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(records.map((record) => record.type), [
     "response", // the prompt acceptance disposition (pi-shape response record)
-    "agent_start", "turn_start", "message_update", "tool_execution_start",
-    "tool_execution_update", "tool_execution_end", // save_plan (with the progress record)
+    "agent_start", "turn_start", "message_update",
+    "tool_execution_start", "tool_execution_end", // bash — the ordinary work
+    "tool_execution_start", "tool_execution_end", // mcp__github__get_file_contents — the context read
+    "tool_execution_start", "tool_execution_update", "tool_execution_end", // save_plan (with the progress record)
     "tool_execution_start", "tool_execution_end", // submit_pr_description
     "tool_execution_start", "tool_execution_end", // report_completion
     "turn_end", "agent_settled",
@@ -423,11 +425,13 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
   // error-free ends carrying pi's `isError` (never the stub's old `status`)
   const toolCalls = records.filter((record) => record.type === "tool_execution_start");
   assert.deepEqual(toolCalls.map((record) => record.toolName), [
+    "bash",
+    "mcp__github__get_file_contents",
     "mcp__communication__save_plan",
     "mcp__communication__submit_pr_description",
     "mcp__communication__report_completion",
   ]);
-  assert.deepEqual(toolCalls[2].args, {}); // report_completion is parameterless
+  assert.deepEqual(toolCalls[4].args, {}); // report_completion is parameterless
   const ends = records.filter((record) => record.type === "tool_execution_end");
   assert.equal(ends.every((record) => record.isError === false && !("status" in record)), true);
   assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest — ever
@@ -451,16 +455,22 @@ test("EventMapper over the stub succeed stream: the canonical records map withou
   for (const line of child.stdout.split("\n").filter(Boolean)) mapper.onLine(line);
   assert.equal(mapper.settled, true);
   assert.deepEqual(emitted.map((e) => e.type), [
-    "agent_started", "turn_started", "assistant_output", "tool_started", "tool_progress",
-    "tool_completed", "tool_started", "tool_completed", "tool_started", "tool_completed",
+    "agent_started", "turn_started", "assistant_output",
+    "tool_started", "tool_completed", // bash
+    "tool_started", "tool_completed", // mcp__github__get_file_contents
+    "tool_started", "tool_progress", "tool_completed", // save_plan
+    "tool_started", "tool_completed", // submit_pr_description
+    "tool_started", "tool_completed", // report_completion
     "turn_completed", "agent_settled",
   ]);
   assert.deepEqual(
     emitted.find((e) => e.type === "assistant_output").payload,
     { text: "Analyzing the received prompt and publishing the result (stub)." });
-  // the observed completed calls (the Bridge's correlation set): every communication call of
-  // the run, under its original name — the consumer normalizes the server prefix
+  // the observed completed calls (the Bridge's correlation set): every tool call of the run,
+  // under its original name — the consumer normalizes the server prefix
   assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+    "bash",
+    "mcp__github__get_file_contents",
     "mcp__communication__save_plan",
     "mcp__communication__submit_pr_description",
     "mcp__communication__report_completion",
@@ -480,7 +490,11 @@ test("stub no_completion behavior: the work settles WITHOUT report_completion (t
   const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   // the work happened (save_plan observed), the run settled — but the completion call never came
   assert.deepEqual(records.filter((record) => record.type === "tool_execution_start")
-    .map((record) => record.toolName), ["mcp__communication__save_plan"]);
+    .map((record) => record.toolName), [
+    "bash",
+    "mcp__github__get_file_contents",
+    "mcp__communication__save_plan",
+  ]);
   assert.equal(records.some((record) => record.toolName === "mcp__communication__report_completion"), false);
   assert.ok(records.some((record) => record.type === "agent_settled"));
   assert.ok(existsSync(join(workspace, "artifacts", "summary.md"))); // the work itself is done
@@ -498,6 +512,8 @@ test("stub escalate behavior: report_blocker, then the mandatory report_completi
   const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(records.filter((record) => record.type === "tool_execution_start")
     .map((record) => record.toolName), [
+    "bash",
+    "mcp__github__get_file_contents",
     "mcp__communication__save_plan",
     "mcp__communication__report_blocker",
     "mcp__communication__report_completion",
@@ -527,6 +543,8 @@ test("stub bad_payload behavior: the isError end is observed but never a complet
   assert.equal(badEnd.payload.isError, true);
   // ...but it joins no correlation set: only the corrected retry (and the completion) count
   assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+    "bash",
+    "mcp__github__get_file_contents",
     "mcp__communication__save_plan", // the retry with the valid payload
     "mcp__communication__submit_pr_description",
     "mcp__communication__report_completion",
@@ -649,6 +667,8 @@ function fakeRuntimeApi() {
   const cancelledBodies = [];
   const completedBodies = [];
   const failedBodies = [];
+  const toolBodies = []; // route `tool` — the communication-tool callbacks (ticket 06)
+  const eventBodies = []; // route `events` — the opaque progress stream
   const otherRoutes = [];
   const server = createServer((request, response) => {
     const respond = (status, body = {}) => {
@@ -663,6 +683,8 @@ function fakeRuntimeApi() {
         if (parsed.route === "cancelled") cancelledBodies.push(parsed.body);
         else if (parsed.route === "completed") completedBodies.push(parsed.body);
         else if (parsed.route === "failed") failedBodies.push(parsed.body);
+        else if (parsed.route === "tool") toolBodies.push(parsed.body);
+        else if (parsed.route === "events") eventBodies.push(parsed.body);
         else otherRoutes.push(parsed.route);
         respond(202);
         return;
@@ -670,7 +692,7 @@ function fakeRuntimeApi() {
       respond(200);
     });
   });
-  return { server, cancelledBodies, completedBodies, failedBodies, otherRoutes };
+  return { server, cancelledBodies, completedBodies, failedBodies, toolBodies, eventBodies, otherRoutes };
 }
 
 test("bridge end-to-end stop: signal observed → clear_queue/abort settle → terminal cancelled delivered", async () => {
@@ -740,6 +762,205 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   rmSync(logsDir, { recursive: true, force: true });
   rmSync(spoolDir, { recursive: true, force: true });
   rmSync(dirname(tokenFile), { recursive: true, force: true });
+});
+
+// ---- the communication-tool wire (ticket 06): route `tool` callbacks ----
+
+/** Spawns the real bridge against the real stub with the standard e2e env. */
+function spawnE2eBridge({ runId, dirs, port, behavior, extraEnv = {} }) {
+  return spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
+    env: {
+      ...process.env,
+      PI_RUN_ID: runId,
+      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
+      PI_RUN_TOKEN: "per-run-callback-token",
+      PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
+      PI_WORKSPACE: dirs.workspace,
+      PI_SESSION_DIR: dirs.sessionDir,
+      PI_LOGS_DIR: dirs.logsDir,
+      PI_SPOOL_DIR: dirs.spoolDir,
+      PI_AGENT_BIN: process.execPath,
+      PI_AGENT_ARGS: AGENT,
+      STUB_BEHAVIOR: behavior,
+      PI_HEARTBEAT_SECONDS: "300",
+      PI_EVENT_CADENCE_SECONDS: "1",
+      ...extraEnv,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/** Waits for the bridge process to exit, surfacing its stderr on the timeout. */
+async function bridgeExit(bridge, ms = 30_000) {
+  let stderr = "";
+  bridge.stderr.on("data", (chunk) => { stderr += chunk; });
+  return Promise.race([
+    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${stderr}`)), ms).unref()),
+  ]);
+}
+
+async function listen(server) {
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return server.address().port;
+}
+
+/** The `succeed` run's deterministic call plan: the ordinary work first, then the vocabulary. */
+function expectedToolRoute(runId) {
+  return [
+    { eventId: `${runId}-tool-call-3`, toolName: "save_plan", args: {
+      goals: "implement the pipe",
+      scope: "the runtime bridge",
+      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      steps: ["implement", "test"],
+    } },
+    { eventId: `${runId}-tool-call-4`, toolName: "submit_pr_description", args: {
+      title: "stub: the simulated run result",
+      body: "The stub agent completed the simulated run; the Orchestrator creates the PR.",
+    } },
+    { eventId: `${runId}-tool-call-5`, toolName: "report_completion", args: {} },
+  ];
+}
+
+test("bridge end-to-end tool route: each completed communication call becomes one `tool` callback with the deterministic eventId", async () => {
+  const runId = "tool-route-e2e-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed" }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.failedBodies, []);
+  assert.equal(fake.completedBodies.length, 1); // the run still settles completed
+  // exactly one `tool` callback per vocabulary call — eventId <runId>-tool-<callId>, args intact
+  const received = fake.toolBodies.map(({ eventId, occurredAt, toolName, args }) =>
+    ({ eventId, occurredAt, toolName, args }));
+  assert.equal(received.length, 3);
+  for (const [i, expected] of expectedToolRoute(runId).entries()) {
+    assert.equal(received[i].eventId, expected.eventId);
+    assert.equal(received[i].toolName, expected.toolName);
+    assert.deepEqual(received[i].args, expected.args);
+    assert.equal(typeof received[i].occurredAt, "string");
+  }
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end tool route: an isError-ended call produces NO `tool` callback — its corrected retry does", async () => {
+  const runId = "bad-payload-tool-route-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "bad_payload" }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.equal(fake.completedBodies.length, 1); // the retry confirms the mandates — the run settles
+  // call-3 (the invalid save_plan, isError end) is absent; call-4/5/6 are the corrected save_plan,
+  // submit_pr_description and report_completion
+  assert.deepEqual(fake.toolBodies.map((b) => b.eventId), [
+    `${runId}-tool-call-4`,
+    `${runId}-tool-call-5`,
+    `${runId}-tool-call-6`,
+  ]);
+  assert.equal(fake.toolBodies[0].toolName, "save_plan"); // the corrected retry, with the valid args
+  assert.deepEqual(Object.keys(fake.toolBodies[0].args).sort(),
+    ["acceptanceCriteria", "goals", "scope", "steps"]);
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end tool route: ordinary tool calls stay on route `events` and never get a `tool` callback", async () => {
+  const runId = "ordinary-tools-tool-route-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed" }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  // bash and the context MCP tool flow as opaque `events` tool_started/tool_completed as today
+  const started = fake.eventBodies.filter((b) => b.type === "tool_started").map((b) => b.payload.toolName);
+  const completed = fake.eventBodies.filter((b) => b.type === "tool_completed").map((b) => b.payload.toolName);
+  assert.ok(started.includes("bash"));
+  assert.ok(started.includes("mcp__github__get_file_contents"));
+  assert.ok(completed.includes("bash"));
+  assert.ok(completed.includes("mcp__github__get_file_contents"));
+  // the tool route carries ONLY the vocabulary — never the ordinary calls
+  assert.deepEqual(fake.toolBodies.map((b) => b.toolName).sort(),
+    ["report_completion", "save_plan", "submit_pr_description"]);
+  assert.equal(fake.toolBodies.some((b) => b.toolName === "bash"
+    || b.toolName === "get_file_contents"), false);
+  e2eCleanup(dirs);
+});
+
+test("bridge restart mid-run: the spool redelivers `tool` callbacks verbatim and the re-run repeats the same deterministic eventIds", async () => {
+  const runId = "restart-tool-route-run";
+  const dirs = e2eDirs();
+
+  // lifetime 1: hold the first `tool` POST mid-flight — the sender stalls on it while the run
+  // keeps spooling; after a grace wait (the one-shot stub run is over) the container dies
+  // (SIGKILL — the docker-restart analog) with the spooled-but-undelivered lifetime behind
+  let releaseHold = () => {};
+  const firstToolBody = new Promise((resolve) => { releaseHold = resolve; });
+  const gate = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      const parsed = JSON.parse(raw);
+      if (parsed.route === "tool") {
+        releaseHold(parsed.body); // observed; the response never comes — the entry stays spooled
+        releaseHold = () => {};
+        return;
+      }
+      response.writeHead(202, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  const port1 = await listen(gate);
+
+  const bridge1 = spawnE2eBridge({ runId, dirs, port: port1, behavior: "succeed" });
+  const heldBody = await Promise.race([
+    firstToolBody,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("no tool callback arrived")), 20_000).unref()),
+  ]);
+  assert.equal(heldBody.eventId, `${runId}-tool-call-3`); // the first vocabulary call of the run
+  assert.equal(heldBody.toolName, "save_plan");
+  await new Promise((resolve) => setTimeout(resolve, 1_500)); // grace: the stub run finishes spooling
+  bridge1.kill("SIGKILL");
+  await new Promise((resolve) => bridge1.on("exit", resolve));
+  gate.close();
+  releaseHold({}); // free the (dead) socket
+
+  // lifetime 2: same spool/workspace/session — the backlog redelivers first, then the run re-executes
+  const fake = fakeRuntimeApi();
+  const port2 = await listen(fake.server);
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port: port2, behavior: "succeed" }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.failedBodies, []);
+  assert.ok(fake.completedBodies.length >= 1); // a terminal (backlog's or the re-run's) is acked
+  // spool replay contract: the very body that was in flight at the kill is redelivered VERBATIM
+  // (same eventId, same occurredAt, same args)
+  assert.deepEqual(fake.toolBodies[0], heldBody);
+  // the deterministic eventId: across the redelivered backlog AND the re-run's re-observation,
+  // each vocabulary call's eventId exists exactly twice — delivered or still spool-pending;
+  // dedup at ingestion (ticket 03) collapses them to one, never the Bridge
+  const pendingToolBodies = readdirSync(dirs.spoolDir)
+    .filter((name) => /^\d+-.*\.json$/.test(name))
+    .map((name) => JSON.parse(readFileSync(join(dirs.spoolDir, name), "utf8")))
+    .filter((entry) => entry.route === "tool")
+    .map((entry) => entry.body);
+  const ids = [...fake.toolBodies, ...pendingToolBodies].map((b) => b.eventId);
+  assert.deepEqual([...new Set(ids)].sort(), expectedToolRoute(runId).map((e) => e.eventId).sort());
+  for (const expected of expectedToolRoute(runId)) {
+    assert.equal(ids.filter((id) => id === expected.eventId).length, 2,
+      `${expected.eventId} must exist exactly twice (redelivery + re-run)`);
+  }
+  e2eCleanup(dirs);
 });
 
 // ---- the run-outcome mandate (end-to-end: the previously-undetected branch lives here) ----

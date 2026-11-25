@@ -4,7 +4,9 @@
  * extension: it launches the agent CLI in `--mode rpc` (real Pi baked via PI_AGENT_BIN/PI_AGENT_ARGS;
  * the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
  * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
- * callback to the durable per-Run spool BEFORE sending, retries network/5xx/429 with the same
+ * callback to the durable per-Run spool BEFORE sending, turns each observed completed, error-free
+ * communication tool call into a `tool` route callback (the 11-name vocabulary, deterministic
+ * eventId — docs/run-worker.md 'Communication tool callbacks'), retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
  * runs the publication toolcheck after every `agent_settled` (each mandated publication kind must
  * have an OBSERVED error-free completed tool execution; a missing mandate is nudged back to the
@@ -77,6 +79,16 @@ const maxLogBytes = Number(env.PI_MAX_LOG_MB || 50) * 1024 * 1024;
 const logsDir = env.PI_LOGS_DIR || "/logs";
 const spoolDir = env.PI_SPOOL_DIR || "/spool";
 const terminalMarker = join(spoolDir, ".terminal-delivered");
+
+// The communication vocabulary (docs/flows/tools.md; docs/run-worker.md 'Communication tool
+// callbacks'): the eleven flow-driving tool names, HARDCODED — the flows contract is one for every
+// profile; a change to the set or a signature is a bridge contract bump (bridge.json stamp). The
+// normalized name is the last `__` segment of the server-prefixed call name.
+const TOOL_ROUTE_VOCABULARY = new Set([
+  "save_plan", "request_clarification", "report_blocker", "submit_review_comments",
+  "request_decision", "report_bug", "report_env_issue", "request_criteria_clarification",
+  "report_tests_passed", "report_completion", "submit_pr_description",
+]);
 
 /** One readable console line per mapped RunEvent (mirrors what the Runtime API persists). */
 function echoRunEvent(body) {
@@ -275,6 +287,31 @@ async function main() {
       // store the NORMALIZED name (the last __ segment): every consumer — checkPublications,
       // the outcome mandate — matches bare tool names against this set
       if (typeof toolName === "string") completedToolNames.add(normalizeToolName(toolName));
+    }
+    // The communication wire (docs/run-worker.md 'Communication tool callbacks'): each observed
+    // completed, error-free vocabulary call becomes exactly ONE `tool` route callback, spooled like
+    // every delivery — the deterministic eventId makes a restart/redelivery repeat it verbatim
+    // (dedup happens at ingestion, never here). A failed (isError) or permission-denied call
+    // produces no entry; ordinary tools keep flowing as `events` tool_started/tool_completed.
+    if (type === "tool_completed" && isSuccessfulToolEnd(payload)
+        && !mapper.deniedToolCallIds.has(payload.toolCallId)) {
+      const observed = typeof payload.toolName === "string"
+        ? payload.toolName
+        : toolNameByCallId.get(payload.toolCallId);
+      const normalized = normalizeToolName(observed);
+      if (TOOL_ROUTE_VOCABULARY.has(normalized)) {
+        const eventId = `${runId}-tool-${payload.toolCallId}`;
+        spool.append({
+          id: eventId,
+          route: "tool",
+          body: {
+            eventId,
+            occurredAt: new Date().toISOString(),
+            toolName: normalized,
+            args: mapper.argsByCallId.get(payload.toolCallId) ?? {}, // the tool_execution_start args (EventMapper)
+          },
+        });
+      }
     }
     if (type === "assistant_output" && typeof payload?.text === "string") lastAssistantText = payload.text;
     echoRunEvent(entry.body);
