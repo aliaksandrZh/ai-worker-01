@@ -63,7 +63,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service=~\"$service\", logformat=\"json\"} | json | line_format `{{.service}} | {{.level}} | {{.message}}`"
+          "expr": "{service=~\"$service\", logformat=\"json\"} | json | line_format `{{.message}}`"
         },
         {
           "refId": "B",
