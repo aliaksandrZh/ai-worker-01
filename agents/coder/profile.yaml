@@ -1,4 +1,7 @@
-description: Implement the approved plan in the task workspace; commit and push the agent branch; open the pull request into the default branch and publish a summary comment via GitHub MCP (the mandatory pull-request + issue-comment publications)
+# Coder control-plane profile (ticket 08): resources/limits/secrets only — the agent's
+# runtime delta (name, clone_mode, tools, prompt path) lives in agent.json + APPEND_SYSTEM.md
+# in this directory, and mcp.json is generated at image build from agent.json.
+description: Implement the approved plan in the task workspace; deliver the agent branch via git push (the single write carve-out, ADR-0001) and the pull-request description via submit_pr_description
 enabled: true
 runtime_type: pi
 max_context_tokens: 200000
@@ -12,18 +15,8 @@ resources:
 retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
-bridge:
-  version: "1.6.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.6.0 = the review-verdict + run-outcome mandates
-  heartbeat_interval: 15s
-  event_cadence: 5s
-# Effective runtime prompt = the baked APPEND_SYSTEM.md inside the image; this field
-# stays the control-plane summary that pins it on the version row.
-system_prompt: |
-  You are the coder agent. Implement the approved plan in the task workspace on the agent branch:
-  commit the changes, push the branch, open the pull request into the default branch, and publish a
-  summary comment to the issue via GitHub MCP. Write the summary to
-  `/workspace/artifacts/implementation-summary.md`; the Bridge verifies both publications
-  automatically against the observed tool executions.
+# The repo-scoped write PAT: the coder's git-push credential (the carve-out) and the source of
+# the read-only GitHub MCP context reads. No GitHub API write anywhere.
 secrets:
   - github-write-pat.txt
 capabilities: []

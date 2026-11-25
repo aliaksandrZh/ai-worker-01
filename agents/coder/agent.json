@@ -1,0 +1,7 @@
+{
+  "name": "coder",
+  "clone_mode": "branch-continue",
+  "tools": ["issue_read", "pull_request_read", "report_completion", "report_blocker", "submit_pr_description"],
+  "prompt": "/opt/pi-agent/profile/APPEND_SYSTEM.md",
+  "resources": { "cpu": 2.0, "memory": "2GiB" }
+}

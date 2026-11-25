@@ -1,0 +1,7 @@
+{
+  "name": "stub",
+  "clone_mode": "plain",
+  "tools": [],
+  "prompt": null,
+  "resources": { "cpu": 1.0, "memory": "512MiB" }
+}

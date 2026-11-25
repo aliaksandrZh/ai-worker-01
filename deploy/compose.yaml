@@ -48,8 +48,8 @@ services:
       RunWorker__WorkspaceRoot: /var/lib/pi-agent/runs
       RunWorker__AgentNetwork: pi-agent-net
       RunWorker__CallbackBaseUrl: http://app-host:8080
-      # Agent profile images are built at deploy time (task build-agents) — the pinned tag lives here.
-      RunWorker__ImageTag: v10
+      # Agent profile images are built at deploy time (task build-agents): base + agent-<profile>:latest
+      RunWorker__ImageTag: latest
     volumes:
       # The Run Worker provisions agent containers — the Docker socket, read-write.
       - /var/run/docker.sock:/var/run/docker.sock

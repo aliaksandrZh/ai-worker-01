@@ -1,8 +1,6 @@
-# The stub agent profile: a fake headless CLI speaking a tiny pi-RPC-shaped JSON
-# protocol, plus the reference Runtime Bridge baked into the image. Proves the run pipeline end to end
-# while the real planner runs are being wired. Its image builds through the build
-# pipeline automatically (agent-stub:v<n>); the profile must stay otherwise ordinary — routing /plan
-# back to the planner replaces it.
+# Stub control-plane profile (ticket 08): resources/limits/secrets only — the agent's runtime
+# delta (name, clone_mode) lives in agent.json in this directory. The stub speaks its own
+# pi-RPC-shaped protocol; routing /plan back to the planner replaces it.
 description: Stub agent proving the run pipeline (pi-RPC-shaped JSON protocol)
 enabled: true
 runtime_type: pi
@@ -17,12 +15,5 @@ resources:
 retry_policy:
   max_automatic_retries: 1
   initial_backoff: 30s
-bridge:
-  version: "1.6.0" # must match the shared runtime-bridge stamp (agents/_runtime/bridge/bridge.json); 1.6.0 = the review-verdict + run-outcome mandates
-  heartbeat_interval: 15s
-  event_cadence: 5s
-  behavior: succeed   # stub-only scenario lever: succeed | fail | hang | never_start | permission_denied | mcp_failed
-system_prompt: |
-  Stub agent: emits the mapped pi event set, writes the artifacts/ convention files, and settles.
 secrets: []
 capabilities: []

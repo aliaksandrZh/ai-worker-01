@@ -3,7 +3,9 @@
  * CLI: read an agent.json manifest and emit the pi mcp.json.
  *   node src/generate-mcpjson.mjs <agent.json> [-o mcp.json]
  *       [--bundle <path>] [--manifest-arg <path>] [--github-command <cmd>]
- * Default output is stdout (image build passes -o).
+ *       [--github-token-file <path>]
+ * Default output is stdout (image build passes -o); the token-file default is the coder's
+ * write PAT — planner/reviewer image builds pass their read-only PAT path (ticket 08).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { generateMcpJson } from "./mcpjson.mjs";
@@ -15,7 +17,7 @@ function fail(message) {
 
 const argv = process.argv.slice(2);
 const manifestPath = argv.find((a) => !a.startsWith("-"));
-if (!manifestPath) fail("usage: node src/generate-mcpjson.mjs <agent.json> [-o mcp.json] [--bundle p] [--manifest-arg p] [--github-command c]");
+if (!manifestPath) fail("usage: generate-mcpjson.mjs <agent.json> [-o mcp.json] [--bundle p] [--manifest-arg p] [--github-command c] [--github-token-file p]");
 
 const opt = (flag) => {
   const i = argv.indexOf(flag);
@@ -35,6 +37,7 @@ try {
     bundle: opt("--bundle"),
     manifestArg: opt("--manifest-arg"),
     githubCommand: opt("--github-command"),
+    tokenFile: opt("--github-token-file"),
   });
 } catch (e) {
   fail(e.message);

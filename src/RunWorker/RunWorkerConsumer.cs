@@ -65,6 +65,9 @@ public sealed class RunWorkerConsumer(
             $"PI_CALLBACK_BASE_URL={runOptions.CallbackBaseUrl}",
             $"GIT_CLONE_REPO={scheduled.Input.Owner}/{scheduled.Input.Repo}",
             $"GIT_CLONE_BRANCH={scheduled.Input.AgentBranch ?? scheduled.Input.DefaultBranch}",
+            // the default branch as its own pointer: the reviewer entry derives the review base
+            // itself (merge-base origin/<default>, pinned head) — the run input has no base SHA
+            $"GIT_DEFAULT_BRANCH={scheduled.Input.DefaultBranch}",
         };
         if (scheduled.Input.ReviewHeadSha is { } headSha)
             env.Add($"REVIEW_HEAD_SHA={headSha}");

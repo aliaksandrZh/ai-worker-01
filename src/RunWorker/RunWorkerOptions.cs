@@ -16,8 +16,8 @@ public sealed class RunWorkerOptions
     /// <summary>The app host address as reachable from agent containers (the events endpoint).</summary>
     public string CallbackBaseUrl { get; set; } = "http://app-host:8080";
 
-    /// <summary>Agent image naming: agent-{profile}:{tag}.</summary>
-    public string ImageTag { get; set; } = "v1";
+    /// <summary>Agent image tag (agent-{profile}:{tag}); the Taskfile builds :latest — idempotent overwrite, no version tags.</summary>
+    public string ImageTag { get; set; } = "latest";
 
     /// <summary>Watchdog ceiling per Run (seconds).</summary>
     public int RunTimeoutSeconds { get; set; } = 4 * 3600;

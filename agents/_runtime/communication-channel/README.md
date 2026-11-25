@@ -13,8 +13,8 @@ each successful call and turns it into exactly one `tool` callback
   both derived from one spec so they cannot drift. Signatures are hand-synced with the payload
   records of the .NET adapter; only schema (types/required) is validated — business rules live
   on the Orchestrator side.
-- `src/server.mjs` — the server (initialize, notifications/initialized, tools/list, tools/call)
-  in the style of `agents/coder/run-outcome.mjs`, but built from source with zod validation.
+- `src/server.mjs` — the server (initialize, notifications/initialized, tools/list, tools/call),
+  a dependency-free stdio JSON-RPC server with zod validation.
   Invalid payload → JSON-RPC error naming the offending field (surfaces to the agent as an
   isError tool result — early feedback). Valid call → success result with a hint:
   - escalation tools: the flow parks until a user event resumes it as a NEW Run; the agent must
@@ -46,8 +46,16 @@ npm test
 intersection with the fixed 11-name vocabulary — only those tools are registered by this server;
 unlisted vocabulary names are not registered, and names outside the vocabulary (context tools,
 stale names) are ignored. The **context part** is everything else — it becomes the GitHub MCP
-server's `GITHUB_TOOLS` allow-list (github-mcp-server tool names, as in the existing hand-baked
-`agents/*/mcp.json`).
+server's `GITHUB_TOOLS` allow-list (concrete github-mcp-server tool names — the server refuses
+unknown names at startup, fail-closed).
+
+> **Name mapping.** The availability rows of [docs/flows/tools.md](../../../docs/flows/tools.md)
+> use flow-level names; the manifest encodes them concretely: `github_issue_read` and
+> `github_comments_read` → `issue_read` (its `get`/`get_comments` methods),
+> `github_pr_read` and `github_pr_diff` → `pull_request_read` (its `get`/`get_diff` methods).
+> `web_search` has NO implementation in the system today (no server, no tool) — the availability
+> row stays in tools.md for the future; add it to the agent manifests only together with the
+> server that implements it.
 
 ## Server invocation
 
@@ -60,8 +68,12 @@ node dist/server.mjs /path/to/agent.json    # or env AGENT_MANIFEST
 ```
 node src/generate-mcpjson.mjs agent.json -o mcp.json \
   [--bundle <path>] [--manifest-arg <path>] [--github-command <cmd>]
+  [--github-token-file <path>]
 ```
 
-Defaults mirror the existing baked entries: github command `/usr/local/bin/github-mcp-server`,
-bundle `/opt/pi-agent/profile/communication-channel/dist/server.mjs`,
-manifest `/opt/pi-agent/profile/agent.json`. Image assembly (ticket 08) passes its own paths.
+The token-file default is the coder's write PAT (`/run/secrets/github-write-pat.txt`);
+planner/reviewer image builds pass their read-only PAT path (ticket 08: agents never write to
+GitHub — [ADR-0001](../../../docs/adr/0001-agents-never-write-to-github.md)). Image assembly
+passes the baked base paths: github command `/usr/local/bin/github-mcp-server`,
+bundle `/opt/agent-runtime/communication-channel/dist/server.mjs`,
+manifest `/opt/pi-agent/profile/agent.json`.
