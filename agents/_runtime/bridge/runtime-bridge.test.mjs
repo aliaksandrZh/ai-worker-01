@@ -399,22 +399,139 @@ test("stub agent answers one prompt with the mapped event set and settles", () =
     encoding: "utf8",
   });
   assert.equal(child.status, 0, child.stderr);
-  const types = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line).type);
-  assert.deepEqual(types, [
+  const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(records.map((record) => record.type), [
     "response", // the prompt acceptance disposition (pi-shape response record)
     "agent_start", "turn_start", "message_update", "tool_execution_start",
-    "tool_execution_update", "tool_execution_end", "turn_end", "agent_settled",
+    "tool_execution_update", "tool_execution_end", // save_plan (with the progress record)
+    "tool_execution_start", "tool_execution_end", // submit_pr_description
+    "tool_execution_start", "tool_execution_end", // report_completion
+    "turn_end", "agent_settled",
   ]);
-  const accepted = JSON.parse(child.stdout.split("\n")[0]);
+  const accepted = records[0];
   assert.equal(accepted.type, "response");
   assert.equal(accepted.command, "prompt");
   assert.equal(accepted.success, true);
   assert.deepEqual(accepted.data, { disposition: "started" });
+  // canonical protocol: stream records carry their fields top-level — no `data` nesting
+  const streamRecords = records.filter((record) => record.type !== "response");
+  assert.equal(streamRecords.every((record) => !("data" in record)), true);
+  const delta = records.find((record) => record.type === "message_update");
+  assert.deepEqual(delta.assistantMessageEvent, { type: "text_delta", contentIndex: 0,
+    delta: "Analyzing the received prompt and publishing the result (stub)." });
+  // the communication tools of the simulated run (docs/flows/tools.md), normalized names,
+  // error-free ends carrying pi's `isError` (never the stub's old `status`)
+  const toolCalls = records.filter((record) => record.type === "tool_execution_start");
+  assert.deepEqual(toolCalls.map((record) => record.toolName), [
+    "mcp__communication__save_plan",
+    "mcp__communication__submit_pr_description",
+    "mcp__communication__report_completion",
+  ]);
+  assert.deepEqual(toolCalls[2].args, {}); // report_completion is parameterless
+  const ends = records.filter((record) => record.type === "tool_execution_end");
+  assert.equal(ends.every((record) => record.isError === false && !("status" in record)), true);
   assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest — ever
   assert.ok(existsSync(join(workspace, "artifacts", "summary.md"))); // the artifacts/ convention
   assert.ok(existsSync(join(sessionDir, "run-1.jsonl"))); // session history on the pinned path
   rmSync(workspace, { recursive: true, force: true });
   rmSync(sessionDir, { recursive: true, force: true });
+});
+
+test("EventMapper over the stub succeed stream: the canonical records map without dual-shape help", () => {
+  const workspace = tempDir("ws-stub-mapper-");
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-mapper-"),
+    "--session-id", "run-1"], {
+    env: { ...process.env, STUB_BEHAVIOR: "succeed", PI_WORKSPACE: workspace },
+    input: '{"type":"prompt","message":"do a thing"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const emitted = [];
+  const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
+  for (const line of child.stdout.split("\n").filter(Boolean)) mapper.onLine(line);
+  assert.equal(mapper.settled, true);
+  assert.deepEqual(emitted.map((e) => e.type), [
+    "agent_started", "turn_started", "assistant_output", "tool_started", "tool_progress",
+    "tool_completed", "tool_started", "tool_completed", "tool_started", "tool_completed",
+    "turn_completed", "agent_settled",
+  ]);
+  assert.deepEqual(
+    emitted.find((e) => e.type === "assistant_output").payload,
+    { text: "Analyzing the received prompt and publishing the result (stub)." });
+  // the observed completed calls (the Bridge's correlation set): every communication call of
+  // the run, under its original name — the consumer normalizes the server prefix
+  assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+    "mcp__communication__save_plan",
+    "mcp__communication__submit_pr_description",
+    "mcp__communication__report_completion",
+  ]);
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("stub no_completion behavior: the work settles WITHOUT report_completion (the nudge lever)", () => {
+  const workspace = tempDir("ws-nocomp-");
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-nocomp-"),
+    "--session-id", "run-1"], {
+    env: { ...process.env, STUB_BEHAVIOR: "no_completion", PI_WORKSPACE: workspace },
+    input: '{"type":"prompt","message":"do a thing"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  // the work happened (save_plan observed), the run settled — but the completion call never came
+  assert.deepEqual(records.filter((record) => record.type === "tool_execution_start")
+    .map((record) => record.toolName), ["mcp__communication__save_plan"]);
+  assert.equal(records.some((record) => record.toolName === "mcp__communication__report_completion"), false);
+  assert.ok(records.some((record) => record.type === "agent_settled"));
+  assert.ok(existsSync(join(workspace, "artifacts", "summary.md"))); // the work itself is done
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("stub escalate behavior: report_blocker, then the mandatory report_completion", () => {
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-esc-"),
+    "--session-id", "run-1"], {
+    env: { ...process.env, STUB_BEHAVIOR: "escalate", PI_WORKSPACE: tempDir("ws-esc-") },
+    input: '{"type":"prompt","message":"do a thing"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const records = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  assert.deepEqual(records.filter((record) => record.type === "tool_execution_start")
+    .map((record) => record.toolName), [
+    "mcp__communication__save_plan",
+    "mcp__communication__report_blocker",
+    "mcp__communication__report_completion",
+  ]);
+  // the escalation carries cause and options; every end stays error-free
+  const blocker = records.find((record) => record.type === "tool_execution_start"
+    && record.toolName === "mcp__communication__report_blocker");
+  assert.deepEqual(Object.keys(blocker.args).sort(), ["cause", "description", "options"]);
+  assert.equal(records.filter((record) => record.type === "tool_execution_end")
+    .every((record) => record.isError === false), true);
+});
+
+test("stub bad_payload behavior: the isError end is observed but never a completed call", () => {
+  const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-bad-"),
+    "--session-id", "run-1"], {
+    env: { ...process.env, STUB_BEHAVIOR: "bad_payload", PI_WORKSPACE: tempDir("ws-bad-") },
+    input: '{"type":"prompt","message":"do a thing"}\n',
+    encoding: "utf8",
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const emitted = [];
+  const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
+  for (const line of child.stdout.split("\n").filter(Boolean)) mapper.onLine(line);
+  // the invalid save_plan ended with isError — the Bridge maps it as a failed tool execution...
+  const badEnd = emitted.find((e) => e.type === "tool_completed"
+    && e.payload.toolName === "mcp__communication__save_plan");
+  assert.equal(badEnd.payload.isError, true);
+  // ...but it joins no correlation set: only the corrected retry (and the completion) count
+  assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+    "mcp__communication__save_plan", // the retry with the valid payload
+    "mcp__communication__submit_pr_description",
+    "mcp__communication__report_completion",
+  ]);
+  assert.equal(isSuccessfulToolEnd(badEnd.payload), false); // no `tool` route event from it (ticket 06)
 });
 
 test("stub handshake: get_state echoes the discovered session file, then the prompt resolves", () => {
@@ -447,7 +564,7 @@ test("stub agent crash behavior: fail reports an error line and exits non-zero",
   assert.equal(child.status, 3, child.stderr);
   const errorLine = child.stdout.split("\n").map((l) => { try { return JSON.parse(l); } catch { return null; } })
     .find((e) => e?.type === "error");
-  assert.equal(errorLine.data.code, "planner_stub_error");
+  assert.equal(errorLine.code, "stub_forced_error"); // canonical top-level error fields
   assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest on the failure path
   assert.equal(existsSync(join(workspace, "artifacts")), false); // no artifacts either
   rmSync(workspace, { recursive: true, force: true });
@@ -522,7 +639,7 @@ test("stub agent: abort settles an in-flight run with aborted=true; clear_queue/
   // the abort settled the hanging run (aborted flag) — the run never settles on its own in hang mode
   const settled = records.filter((r) => r.type === "agent_settled");
   assert.equal(settled.length, 1);
-  assert.equal(settled[0].data.aborted, true);
+  assert.equal(settled[0].aborted, true); // canonical top-level field
   const session = readFileSync(join(sessionDir, "r.jsonl"), "utf8");
   assert.match(session, /"aborted":true/);
 });
@@ -627,7 +744,9 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
 
 // ---- the run-outcome mandate (end-to-end: the previously-undetected branch lives here) ----
 
-test("bridge end-to-end outcome mandate: the observed completion tool completes the run", async () => {
+// Skipped — ticket 07 replaces the outcome mandate (PI_OUTCOME_TOOL / STUB_OUTCOME_TOOL) with the
+// report_completion loop; the stub no longer emits the old `mcp__outcome__*` completion call.
+test("bridge end-to-end outcome mandate: the observed completion tool completes the run", { skip: "ticket 07: outcome mandate replaced by the report_completion loop" }, async () => {
   const runId = "outcome-e2e-run";
   const dirs = e2eDirs();
   const fake = fakeRuntimeApi();
@@ -674,7 +793,9 @@ test("bridge end-to-end outcome mandate: the observed completion tool completes 
   e2eCleanup(dirs);
 });
 
-test("bridge end-to-end outcome mandate: a settle without the completion tool fails the run", async () => {
+// Skipped — ticket 07 (same mandate removal as above); the no_completion stub behavior re-covers
+// this path once the completion loop itself lands.
+test("bridge end-to-end outcome mandate: a settle without the completion tool fails the run", { skip: "ticket 07: outcome mandate replaced by the report_completion loop" }, async () => {
   const runId = "outcome-missing-e2e-run";
   const dirs = e2eDirs();
   const fake = fakeRuntimeApi();
@@ -821,7 +942,7 @@ test("EventMapper maps permission_denied to permission_blocked and collects the 
   assert.deepEqual([...mapper.deniedToolCallIds], ["call-1"]);
 });
 
-test("stub agent permission_denied behavior denies the publication tool call", () => {
+test("stub agent permission_denied behavior denies a communication tool call (canonical records)", () => {
   const workspace = tempDir("ws-perm-");
   const child = spawnSync(process.execPath, [AGENT, "--session-dir", tempDir("s-"),
     "--session-id", "r", "--workspace", workspace], {
@@ -831,9 +952,14 @@ test("stub agent permission_denied behavior denies the publication tool call", (
   });
   assert.equal(child.status, 0, child.stderr);
   const events = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  assert.ok(events.some((e) => e.type === "permission_denied" && e.data.toolCallId === "call-1"));
-  const deniedEnd = events.find((e) => e.type === "tool_execution_end" && e.data.toolCallId === "call-1");
-  assert.equal(deniedEnd.data.status, "denied"); // never observed as a completed tool call
+  // the denial hits a communication tool (report_completion) — the Bridge records the
+  // `permission_blocked` RunEvent and collects the denied tool name for its toolcheck
+  const denied = events.find((e) => e.type === "permission_denied");
+  assert.equal(denied.toolCallId, "call-1");
+  assert.equal(denied.toolName, "mcp__communication__report_completion");
+  const deniedEnd = events.find((e) => e.type === "tool_execution_end" && e.toolCallId === "call-1");
+  assert.equal(deniedEnd.isError, true); // never observed as a completed tool call
+  assert.equal(deniedEnd.status, undefined); // the stub `status` field is gone — canonical isError only
   assert.equal(existsSync(join(workspace, "result.json")), false); // no manifest — ever
   rmSync(workspace, { recursive: true, force: true });
 });

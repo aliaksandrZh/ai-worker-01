@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 /**
- * Stub agent CLI: the pi-RPC-shaped fake headless agent (protocol shape).
+ * Stub agent CLI: the pi-shaped fake headless agent speaking the CANONICAL stream protocol
+ * (real-pi record shapes — top-level stream fields, typed `assistantMessageEvent` text deltas,
+ * `isError` on tool ends; the dual-shape `data`-nesting world is deleted with ticket 07).
  * Reads JSON objects on stdin (one per line), answers one `prompt` with the event set on stdout,
  * writes a session `.jsonl` (history) plus the artifact files into the workspace (the artifacts/
  * directory convention the Bridge collects), then exits. Behavior (env STUB_BEHAVIOR):
- * succeed (default) | fail | hang
- * | never_start (accepts the prompt, then never emits anything — startup_timeout) |
- * permission_denied (the run's mandatory publication tool call is denied by the
- * unattended permission policy — the fail-closed path) |
- * mcp_failed (the Bridge's /mcp status probe sees a failed github server — the fail-fast path).
+ * succeed (default) | no_completion | escalate | bad_payload | fail | hang
+ * | never_start (accepts the prompt, then never emits anything — startup_timeout)
+ * | permission_denied (a communication tool call is denied by the unattended permission
+ * policy — the fail-closed path) | mcp_failed (the Bridge's /mcp status probe sees a failed
+ * github server — the fail-fast path).
+ *
+ * The agent communicates only through the communication tools (docs/flows/tools.md): the calls
+ * use the normalized server-prefixed names `mcp__communication__<name>` from the eleven-name
+ * vocabulary. `report_completion` is the mandatory final call of every Run.
  *
  * The scenario lever exists only to make the failure/needs-human/hang paths testable; in the real
  * profiles these paths come from real agent work and MCP failures.
@@ -31,12 +37,28 @@ function argvBehavior() {
   return flag > -1 ? process.argv[flag + 1] : null;
 }
 
+// The communication vocabulary (docs/flows/tools.md) under the normalized server prefix the
+// Bridge resolves to the bare name (the last `__` segment) when it observes the calls.
+const comm = (name) => `mcp__communication__${name}`;
+const SAVE_PLAN = comm("save_plan");
+const SUBMIT_PR_DESCRIPTION = comm("submit_pr_description");
+const REPORT_BLOCKER = comm("report_blocker");
+const REPORT_COMPLETION = comm("report_completion");
+
 const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
 mkdirSync(sessionDir, { recursive: true });
 
+let eventSeq = 0;
+let callSeq = 0; // toolCallId counter (uniqueness within the run is all the Bridge needs)
 function emit(event) {
   appendFileSync(sessionFile, JSON.stringify(event) + "\n");
   process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+/** Next stream event id (`e<N>`, pi json.md's per-record id field). */
+function nextId() {
+  eventSeq += 1;
+  return `e${eventSeq}`;
 }
 
 /** pi RPC `response` record (rpc.md): echoes the command id; the Bridge correlates on it. */
@@ -45,9 +67,29 @@ function respond(id, command, data) {
   process.stdout.write(JSON.stringify(record) + "\n");
 }
 
+/** One observed tool call: the start/end pair the Bridge maps (and, from ticket 06, routes
+ * to the `tool` callback when the name is in the vocabulary and the end is error-free). */
+function toolCall(toolName, args, { isError = false, progress = false } = {}) {
+  const callId = `call-${++callSeq}`;
+  emit({ id: nextId(), type: "tool_execution_start", toolCallId: callId, toolName,
+    ...(args !== undefined ? { args } : {}) });
+  if (progress)
+    emit({ id: nextId(), type: "tool_execution_update", toolCallId: callId, toolName });
+  emit({ id: nextId(), type: "tool_execution_end", toolCallId: callId, toolName,
+    result: isError ? { error: `${toolName} rejected the payload` } : {}, isError, durationMs: 12 });
+  return callId;
+}
+
+/** The canonical assistant text delta: typed `assistantMessageEvent` (only `text_delta`
+ * is assistant output — thinking deltas never become RunEvents). */
+function say(text) {
+  emit({ id: nextId(), type: "message_update", usage: {},
+    assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text } });
+}
+
 function settleWork() {
   // agent-local git so the Bridge can genuinely derive branch/commitSha via Git; the artifacts/
-  // directory is the convention the Bridge collects after the publication toolcheck
+  // directory is the convention the Bridge collects after the run
   if (!existsSync(join(workspace, ".git"))) {
     execFileSync("git", ["init", "-b", "agent/pipe-stub"], { cwd: workspace, stdio: "ignore" });
   }
@@ -68,52 +110,78 @@ function answerPrompt() {
     // emits ANYTHING — not even agent_start — so the Run never became ready
     return;
   }
-  emit({ id: "e1", type: "agent_start", data: { sessionId } });
-  const toolCallId = "call-1";
+  emit({ id: nextId(), type: "agent_start" });
   if (behavior === "fail") {
-    emit({ id: "e2", type: "turn_start" });
-    process.stdout.write(JSON.stringify({
-      id: "e3", type: "error",
-      data: { code: "planner_stub_error", message: "stub forced failure" },
-    }) + "\n");
-    appendFileSync(sessionFile, JSON.stringify({ id: "e3", type: "error", data: { code: "planner_stub_error" } }) + "\n");
+    // the crash lever: a mid-run agent error — the stream carries pi's error record, the
+    // process exits non-zero WITHOUT settling; the Bridge judges the crash on the exit code
+    emit({ id: nextId(), type: "error", code: "stub_forced_error", message: "stub forced failure" });
     process.exit(3);
   }
-  emit({ id: "e2", type: "turn_start" });
-  if (behavior === "permission_denied") {
-    // the permission_denied lever: the mandatory publication tool call is denied by the
-    // permission policy — the agent answers the denial itself (no dialog), the Bridge records the
-    // `permission_blocked` RunEvent and the publication toolcheck fails the mandated kind
-    const deniedToolCallId = "call-1";
-    emit({ id: "e3", type: "message_update", data: { delta: "Trying to publish (stub)." } });
-    emit({ id: "e4", type: "tool_execution_start", data: { toolCallId: deniedToolCallId, toolName: "stub_publish" } });
-    emit({ id: "e5", type: "permission_denied", data: { toolCallId: deniedToolCallId, toolName: "stub_publish", reason: "not on the profile's permission allow-list" } });
-    emit({ id: "e6", type: "tool_execution_end", data: { toolCallId: deniedToolCallId, status: "denied" } });
-    emit({ id: "e7", type: "turn_end" });
-    settleWork();
-    emit({ id: "e8", type: "agent_settled", data: { sessionId } });
-    setTimeout(() => process.exit(0), 200);
-    return;
-  }
+  emit({ id: nextId(), type: "turn_start", message: {}, toolResults: [] });
   if (behavior === "hang") {
-    // agent_started, then never settles again while the process stays alive (the timeouts;
+    // agent started, then never settles again while the process stays alive (the timeouts;
     // the stop lever — an `abort` RPC settles the run with aborted=true and exits)
     return;
   }
-  emit({ id: "e3", type: "message_update", data: { delta: "Analyzing the received prompt (stub)." } });
-  emit({ id: "e4", type: "tool_execution_start", data: { toolCallId, toolName: "stub_publish" } });
-  emit({ id: "e5", type: "tool_execution_update", data: { toolCallId, step: "writing artifacts" } });
-  emit({ id: "e6", type: "tool_execution_end", data: { toolCallId, status: "completed" } });
-  // the run-outcome mandate's happy path: when the completion tool is configured, the stub calls it
-  // (the Bridge's toolcheck observes the name + the tool_execution_start args)
-  const outcomeTool = process.env.STUB_OUTCOME_TOOL;
-  if (outcomeTool) {
-    emit({ id: "e6b", type: "tool_execution_start", data: { toolCallId: "call-2", toolName: `mcp__outcome__${outcomeTool}`, args: { summary: "stub work completed" } } });
-    emit({ id: "e6c", type: "tool_execution_end", data: { toolCallId: "call-2", toolName: `mcp__outcome__${outcomeTool}`, status: "completed" } });
+  if (behavior === "permission_denied") {
+    // the permission_denied lever: a communication tool call is denied by the unattended
+    // permission policy — the agent answers the denial itself (no dialog), the Bridge records
+    // the `permission_blocked` RunEvent and the denial of a mandated call fails the run
+    say("Trying to report completion (stub).");
+    const deniedCallId = "call-1";
+    emit({ id: nextId(), type: "tool_execution_start", toolCallId: deniedCallId,
+      toolName: REPORT_COMPLETION, args: {} });
+    emit({ id: nextId(), type: "permission_denied", toolCallId: deniedCallId,
+      toolName: REPORT_COMPLETION, reason: "not on the profile's permission allow-list" });
+    emit({ id: nextId(), type: "tool_execution_end", toolCallId: deniedCallId,
+      toolName: REPORT_COMPLETION, result: { error: "denied" }, isError: true, durationMs: 0 });
+    emit({ id: nextId(), type: "turn_end", message: {}, toolResults: [] });
+    settleWork();
+    emit({ id: nextId(), type: "agent_settled", aborted: false });
+    setTimeout(() => process.exit(0), 200);
+    return;
   }
-  emit({ id: "e7", type: "turn_end" });
+  say("Analyzing the received prompt and publishing the result (stub).");
+  if (behavior === "bad_payload") {
+    // the bad_payload lever: an invalid save_plan payload — the tool errors, the end is
+    // isError:true and must produce NO `tool` route event; the corrected retry does
+    toolCall(SAVE_PLAN, { goals: "ship it" }, { isError: true }); // invalid: no scope/criteria/steps
+    toolCall(SAVE_PLAN, {
+      goals: "implement the pipe",
+      scope: "the runtime bridge",
+      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      steps: ["implement", "test"],
+    }, { progress: true });
+  } else {
+    toolCall(SAVE_PLAN, {
+      goals: "implement the pipe",
+      scope: "the runtime bridge",
+      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      steps: ["implement", "test"],
+    }, { progress: true });
+  }
+  if (behavior === "escalate") {
+    // the escalate lever: the work hit a blocker the agent cannot resolve — report_blocker
+    // hands the User the cause and the options; the run still ends with report_completion
+    toolCall(REPORT_BLOCKER, {
+      description: "the spool delivery blocks the run",
+      cause: "the app host is unreachable",
+      options: ["retry later", "restart the app host"],
+    });
+  } else if (behavior !== "no_completion") {
+    // the coder's summary carrier (publication rule — the agent never writes to GitHub)
+    toolCall(SUBMIT_PR_DESCRIPTION, {
+      title: "stub: the simulated run result",
+      body: "The stub agent completed the simulated run; the Orchestrator creates the PR.",
+    });
+  }
+  // the completion rule (docs/flows/tools.md): the mandatory final call of every Run;
+  // no_completion deliberately skips it — the nudge scenario the Bridge must catch
+  if (behavior !== "no_completion")
+    toolCall(REPORT_COMPLETION, {});
+  emit({ id: nextId(), type: "turn_end", message: {}, toolResults: [] });
   settleWork();
-  emit({ id: "e8", type: "agent_settled", data: { sessionId } });
+  emit({ id: nextId(), type: "agent_settled", aborted: false });
   // one-shot sessions: after settling the agent is done with this run — exit regardless
   // of stdin state (the Bridge closes stdin after settle either way). STUB_STAY_ALIVE keeps the
   // process alive instead (exit on stdin EOF) so nudge-loop tests are deterministic — the agent
@@ -174,7 +242,7 @@ process.stdin.on("data", (chunk) => {
         respond(rpc.id, rpc.type);
         if (rpc.type === "abort" && runInFlight) {
           runInFlight = false;
-          emit({ id: "abort-1", type: "agent_settled", data: { sessionId, aborted: true } });
+          emit({ id: nextId(), type: "agent_settled", aborted: true });
           setTimeout(() => process.exit(0), 100);
         }
         break;
