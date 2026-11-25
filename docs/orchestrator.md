@@ -25,11 +25,11 @@ Invariants:
    (ADR-0001); the sole exception is the Coder's branch push.
 3. **No Run without a Task** — every Run belongs to a Task; the Task decides what a
    Run's outcome means for the flow.
-4. **Claim-time authorization recheck** — permissions can change between admission and
-   execution; a queued Task revalidates them when claimed (ref: `TaskLifecycle.cs`).
-   A Task that fails the recheck turns `cancelled` with the reason recorded.
+4. **Permissions travel in the event** — the Poller resolves the command author's
+   permission at detection ([ADR-0006](adr/0006-github-sync.md)); the Orchestrator
+   gates on the payload and never reads GitHub.
 5. **Events are the only input** — the Orchestrator reacts to nothing else
-   ([flows/events.md](flows/events.md)).
+   ([flows/events.md](flows/events.md)); it holds zero GitHub knowledge.
 
 ## 2. Event pipeline
 
@@ -41,9 +41,11 @@ event → admission → validation → schedule (run_scheduled) or park (waiting
       → next transition (next Task · retry · park · workflow completion)
 ```
 
-- **Admission** decides *is this event for us*: permission gates, routing rules, the
-  Workflow state gate (a command on a closed Workflow is rejected, not scheduled).
-  Rejections are recorded and notified, never dropped silently (ref: `CommandAdmission.cs`).
+- **Admission** decides *is this event for us*: permission and label gates were
+  resolved by the Poller and travel in the payload; the Orchestrator checks routing
+  rules and the Workflow state gate (a command on a closed Workflow is rejected, not
+  scheduled). Rejections are recorded and notified, never dropped silently
+  (ref: `CommandAdmission.cs`).
 - **Validation** decides *is it actionable now*: for commands — the item carries the
   right AI-scope label, no unfinished Task occupies the slot; for tool events — the Run
   that produced them still matches the active Task.
@@ -106,7 +108,6 @@ Applied while processing events, never as flow nodes (table mirrored in
 | Auto-retry of a failed Run | Orchestrator decides: new Run of the same Task vs park |
 | Plan approval required? | the `plan_saved` event is processed |
 | Manual acceptance of test results required? | a `test_design` Task succeeds; if required → park, route to the User |
-| Claim-time permission recheck | the run worker claims a queued Task |
 
 ## 5. Publication and notifications
 
@@ -132,10 +133,14 @@ Applied while processing events, never as flow nodes (table mirrored in
 
 ## 7. Boundaries
 
+All consumers (Poller, Orchestration, Run Worker, Publisher, Build Worker) are
+in-process workers of one app host ([ADR-0004](adr/0004-one-app-host.md)); the table
+below is about module seams, not processes.
+
 | Neighbor | Direction | Contract |
 |---|---|---|
-| **Poller** | in | normalized GitHub events (commands, PR updates, board/label transitions, item closed) |
-| **Runtime API** | out/in | dispatch of claimed Runs; progress/terminal callbacks back; it owns container execution, sessions, and the run watchdog |
+| **Poller** | in | parsed trigger events (`user_command` with author permission) + sync events; it owns the command grammar and every GitHub read |
+| **Run Worker** | in/out | consumes `run_scheduled` / `run_stop_requested`, emits terminal events; it owns container execution, sessions, and the run watchdog ([run-worker.md](run-worker.md)) |
 | **Outbox** | out | durable user-facing notifications |
 | **Build Worker** | out | durable build jobs for profile versions; Orchestrator validates the result and flips the version `ready` / `build_failed` |
 | **Config plane** | in | YAML (system, repositories, routing, projects) loaded at startup; desired configuration lives in files, never in the DB |
@@ -153,3 +158,9 @@ Applied while processing events, never as flow nodes (table mirrored in
   `RetryCommandHandler`, `StopCommandHandler`, `ClaimCancellationNotices` are all
   reactions to events from [flows/events.md](flows/events.md) inside the single
   pipeline — not parallel schedulers.
+- **The GitHub mirror dies** ([ADR-0006](adr/0006-github-sync.md)): normalized GitHub
+  entities, their mappers and the claim-time recheck are deletions; the Orchestrator
+  reads no GitHub state.
+- **ContextAssembler and the RunContextSnapshot are deleted**: agents read their
+  context from GitHub through their read tools; the Run input is pointers (item, PR,
+  plan, command); byte-exact snapshots and token budgets (OBS-6/OBS-8) go with it.
