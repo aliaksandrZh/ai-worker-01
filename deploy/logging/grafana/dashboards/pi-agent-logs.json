@@ -72,7 +72,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service=~\"$service\", logformat=\"text\"}"
+          "expr": "{service=~\"$service\", logformat!=\"json\"}"
         }
       ],
       "options": {
