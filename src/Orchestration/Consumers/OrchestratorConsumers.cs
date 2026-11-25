@@ -54,8 +54,8 @@ public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEv
 {
     public Type[] Consumes { get; } =
     [
-        typeof(PlanSaved), typeof(BlockerReported), typeof(ReviewDecisionRequested),
-        typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
+        typeof(PlanSaved), typeof(ClarificationRequested), typeof(BlockerReported),
+        typeof(ReviewDecisionRequested), typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
         typeof(ReviewCommentsSubmitted), typeof(BugReported), typeof(TestsPassed),
         typeof(ProjectItemChanged), typeof(LabelsChanged), typeof(PrUpdated),
     ];
@@ -69,6 +69,8 @@ public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEv
         BugReported bug => core.HandleBugReportedAsync(bug, ct),
         TestsPassed tests => core.HandleTestsPassedAsync(tests, ct),
         ProjectItemChanged card => core.HandleProjectItemChangedAsync(card, ct),
+        ClarificationRequested c => core.HandleEscalationAsync(c,
+            $"clarification needed: {c.Question}", ct),
         BlockerReported b => core.HandleEscalationAsync(b,
             $"blocked: {b.Description}\n\n{string.Join('\n', b.Options.Select(o => $"- {o}"))}", ct),
         ReviewDecisionRequested r => core.HandleEscalationAsync(r,

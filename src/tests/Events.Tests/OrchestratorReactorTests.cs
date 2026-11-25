@@ -133,6 +133,20 @@ public sealed class OrchestratorReactorTests
     }
 
     [Fact]
+    public async Task Clarification_escalation_parks_the_task_and_stops_the_run()
+    {
+        var workflow = await RunCommandAsync(PlanCommand());
+
+        await _orchestrator.HandleEscalationAsync(
+            new ClarificationRequested("o", "r", 1, RunId: 1, Question: "which scope?", Context: null),
+            "clarification needed", CancellationToken.None);
+
+        Assert.Contains(_log.Appended, e => e is RunStopRequested);
+        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
+    }
+
+    [Fact]
     public async Task Second_command_is_rejected_while_task_occupies_the_slot()
     {
         await RunCommandAsync(Command());
@@ -168,7 +182,7 @@ public sealed class OrchestratorReactorTests
     {
         var workflow = await RunCommandAsync(PlanCommand());
         await _orchestrator.HandlePlanSavedAsync(new PlanSaved(
-            "o", "r", 1, workflow.Id, Goals: "g", Scope: "s", AcceptanceCriteria: "a"), CancellationToken.None);
+            "o", "r", 1, workflow.Id, Goals: "g", Scope: "s", AcceptanceCriteria: "a", Steps: ["step"]), CancellationToken.None);
 
         Assert.Contains(_log.Appended, e =>
             e is PublishComment { Kind: PublishCommentKind.Plan, Body: var b } && b.Contains("Acceptance criteria"));

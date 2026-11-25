@@ -30,6 +30,7 @@ public sealed class RunWorkerOptions
 public sealed record RunEntry(
     long RunId,
     long TaskId,
+    long WorkflowId,
     RunInput Input,
     string ContainerName,
     string Token,

@@ -337,6 +337,7 @@ public sealed class Orchestrator(
         var (item, runId, taskId) = evt switch
         {
             BlockerReported b => (new ItemRef(b.Owner, b.Repo, b.ItemNumber), b.RunId, 0L),
+            ClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), c.RunId, 0L),
             ReviewDecisionRequested r => (new ItemRef(r.Owner, r.Repo, r.ItemNumber), r.RunId, 0L),
             EnvIssueReported e => (new ItemRef(e.Owner, e.Repo, e.ItemNumber), 0L, e.TaskId),
             CriteriaClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), 0L, c.TaskId),

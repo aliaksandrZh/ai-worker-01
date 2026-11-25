@@ -76,9 +76,11 @@ public sealed record RunCancelled(long RunId, long TaskId, string Owner, string 
 
 /// <summary>
 /// The Bridge's egress (stage 4): one POST /events per callback — terminal routes are
-/// never dropped; heartbeat/progress routes are recorded but carry no state.
+/// never dropped; heartbeat/progress routes are recorded but carry no state. EventId is
+/// the Bridge's deterministic callback id (run + toolCallId), promoted to the row's
+/// payload for the ingestion dedup index (docs/run-worker.md route tool).
 /// </summary>
-public sealed record AgentCallback(long RunId, string Route, string? Body) : IEvent
+public sealed record AgentCallback(long RunId, string Route, string? Body, string? EventId = null) : IEvent
 {
     public string StreamKey => Streams.Global;
 }

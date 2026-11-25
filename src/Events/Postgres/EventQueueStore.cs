@@ -39,6 +39,10 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
             );
             CREATE INDEX IF NOT EXISTS ix_events_claim
                 ON events (stream, id) WHERE processed_at IS NULL;
+            -- callback dedup (docs/run-worker.md): only rows carrying the Bridge's
+            -- deterministic eventId participate; other types keep NULL keys (never equal).
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_events_type_event_id
+                ON events (type, (payload->>'eventId'));
             CREATE TABLE IF NOT EXISTS dead_letter (
                 id          bigserial PRIMARY KEY,
                 stream      text   NOT NULL,
@@ -94,17 +98,34 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
     private static async Task<long> AppendCoreAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, CancellationToken ct)
     {
+        // Callback dedup (docs/run-worker.md): spool redelivery repeats the deterministic
+        // eventId verbatim — ON CONFLICT DO NOTHING keeps the row unique and the existing
+        // row's id is returned, so no consumer sees a duplicate.
+        var eventId = (evt as AgentCallback)?.EventId;
         const string sql = """
-            INSERT INTO events (stream, type, payload)
-            VALUES (@stream, @type, @payload::jsonb)
-            RETURNING id
+            WITH inserted AS (
+                INSERT INTO events (stream, type, payload)
+                VALUES (@stream, @type, @payload::jsonb)
+                ON CONFLICT (type, (payload->>'eventId')) DO NOTHING
+                RETURNING id
+            ), redelivered AS (
+                SELECT id FROM events
+                WHERE type = @type AND @event_id::text IS NOT NULL
+                                   AND payload->>'eventId' = @event_id
+            )
+            SELECT id FROM inserted
+            UNION ALL
+            SELECT id FROM redelivered
+            LIMIT 1
             """;
         await using var cmd = new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("stream", evt.StreamKey);
         cmd.Parameters.AddWithValue("type", EventRegistry.TypeName(evt.GetType()));
         cmd.Parameters.AddWithValue("payload", EventRegistry.Serialize(evt));
+        cmd.Parameters.AddWithValue("event_id", (object?)eventId ?? DBNull.Value);
         var id = await cmd.ExecuteScalarAsync(ct);
-        return (long)id!;
+        return id is long value ? value : throw new InvalidOperationException(
+            $"event append produced no row (dedup conflict with a different payload): {evt.GetType().Name}");
     }
 
     private sealed class EventTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction)
