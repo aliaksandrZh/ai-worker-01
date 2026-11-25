@@ -53,3 +53,12 @@ public sealed record RunCancelled(long RunId, long TaskId, string Owner, string 
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
+
+/// <summary>
+/// The Bridge's egress (stage 4): one POST /events per callback — terminal routes are
+/// never dropped; heartbeat/progress routes are recorded but carry no state.
+/// </summary>
+public sealed record AgentCallback(long RunId, string Route, string? Body) : IEvent
+{
+    public string StreamKey => Streams.Global;
+}

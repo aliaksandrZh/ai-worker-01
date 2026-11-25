@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\GithubSync\PiAgent.GithubSync.csproj" />
     <ProjectReference Include="..\..\Orchestration\PiAgent.Orchestration.csproj" />
     <ProjectReference Include="..\..\Platform\PiAgent.Platform.csproj" />
+    <ProjectReference Include="..\..\RunWorker\PiAgent.RunWorker.csproj" />
     <ProjectReference Include="..\..\Publisher\PiAgent.Publisher.csproj" />
     <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
   </ItemGroup>
