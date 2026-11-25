@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using PiAgent.Events.Delivery;
 using PiAgent.Events.Postgres;
+using PiAgent.GithubSync;
 using PiAgent.Orchestration;
 using PiAgent.Orchestration.State.Postgres;
 using PiAgent.Publisher;
@@ -17,6 +18,7 @@ builder.Logging.AddPiJsonLogging("app-host");
 builder.Services.AddEventLog(builder.Configuration);
 builder.Services.AddOrchestrator(builder.Configuration);
 builder.Services.AddPublisher(builder.Configuration);
+builder.Services.AddGithubSync(builder.Configuration);
 
 builder.Services.AddHostedService<SchemaBootstrap>();
 

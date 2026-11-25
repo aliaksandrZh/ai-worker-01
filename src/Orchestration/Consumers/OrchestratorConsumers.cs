@@ -9,7 +9,8 @@ public sealed class OrchestratorConsumer(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
-        typeof(UserCommand), typeof(UserReply), typeof(UserDecision), typeof(UserCancel), typeof(ItemClosed),
+        typeof(UserCommand), typeof(UserReply), typeof(UserDecision), typeof(UserCancel),
+        typeof(ItemClosed), typeof(CommentChanged),
     ];
 
     public string Name => "OrchestratorCommands";
@@ -21,6 +22,9 @@ public sealed class OrchestratorConsumer(Orchestrator core) : IEventConsumer
         UserDecision decision => core.HandleUserDecisionAsync(decision, ct),
         UserCancel cancel => core.HandleUserCancelAsync(cancel, ct),
         ItemClosed closed => core.HandleItemClosedAsync(closed, ct),
+        // a non-command comment on an item with a parked Task is the User's reply:
+        // commands were already derived by the Poller (docs/github-sync.md)
+        CommentChanged comment => core.HandleCommentChangedAsync(comment, ct),
         _ => Task.CompletedTask,
     };
 }

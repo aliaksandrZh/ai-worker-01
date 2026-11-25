@@ -58,6 +58,17 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// A non-command comment on an item whose Task is parked is the User's reply
+    /// (commands were derived by the Poller) — resumes the parked Task with a fresh Run.
+    /// </summary>
+    public Task HandleCommentChangedAsync(CommentChanged comment, CancellationToken ct)
+    {
+        var reply = new UserReply(comment.Owner, comment.Repo, comment.ItemNumber,
+            comment.CommentId, comment.Author, comment.Body);
+        return HandleUserReplyAsync(reply, ct);
+    }
+
     /// <summary>A reply resumes the parked Task with a fresh Run.</summary>
     public async Task HandleUserReplyAsync(UserReply reply, CancellationToken ct)
     {
