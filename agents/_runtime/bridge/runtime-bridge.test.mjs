@@ -744,20 +744,21 @@ async function listen(server) {
   return server.address().port;
 }
 
-/** The `succeed` run's deterministic call plan: the ordinary work first, then the vocabulary. */
+/** The `succeed` run's deterministic call plan: the ordinary work first, then the vocabulary —
+ * the completion mandate call (call-5) is the settle signal, never a `tool` callback. */
 function expectedToolRoute(runId) {
   return [
     { eventId: `${runId}-tool-call-3`, toolName: "save_plan", args: {
       goals: "implement the pipe",
       scope: "the runtime bridge",
-      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      // tools.md save_plan signature: acceptanceCriteria is the criteria text (scalar), steps[] the only list
+      acceptanceCriteria: "bridge delivers the tool callbacks",
       steps: ["implement", "test"],
     } },
     { eventId: `${runId}-tool-call-4`, toolName: "submit_pr_description", args: {
       title: "stub: the simulated run result",
       body: "The stub agent completed the simulated run; the Orchestrator creates the PR.",
     } },
-    { eventId: `${runId}-tool-call-5`, toolName: "report_completion", args: {} },
   ];
 }
 
@@ -773,10 +774,13 @@ test("bridge end-to-end tool route: each completed communication call becomes on
   assert.equal(exitCode, 0);
   assert.deepEqual(fake.failedBodies, []);
   assert.equal(fake.completedBodies.length, 1); // the run still settles completed
-  // exactly one `tool` callback per vocabulary call — eventId <runId>-tool-<callId>, args intact
+  // exactly one `tool` callback per vocabulary call EXCEPT the completion mandate — the observed
+  // report_completion is the settle signal, rendered as the terminal `completed` callback only
+  // (eventId <runId>-tool-<callId>, args intact)
   const received = fake.toolBodies.map(({ eventId, occurredAt, toolName, args }) =>
     ({ eventId, occurredAt, toolName, args }));
-  assert.equal(received.length, 3);
+  assert.equal(received.length, 2);
+  assert.deepEqual(received.map((r) => r.toolName), ["save_plan", "submit_pr_description"]);
   for (const [i, expected] of expectedToolRoute(runId).entries()) {
     assert.equal(received[i].eventId, expected.eventId);
     assert.equal(received[i].toolName, expected.toolName);
@@ -797,12 +801,11 @@ test("bridge end-to-end tool route: an isError-ended call produces NO `tool` cal
 
   assert.equal(exitCode, 0);
   assert.equal(fake.completedBodies.length, 1); // the retry confirms the mandates — the run settles
-  // call-3 (the invalid save_plan, isError end) is absent; call-4/5/6 are the corrected save_plan,
-  // submit_pr_description and report_completion
+  // call-3 (the invalid save_plan, isError end) is absent; call-4/5 are the corrected save_plan
+  // and submit_pr_description — call-6 (report_completion) is the settle mandate, never a `tool` callback
   assert.deepEqual(fake.toolBodies.map((b) => b.eventId), [
     `${runId}-tool-call-4`,
     `${runId}-tool-call-5`,
-    `${runId}-tool-call-6`,
   ]);
   assert.equal(fake.toolBodies[0].toolName, "save_plan"); // the corrected retry, with the valid args
   assert.deepEqual(Object.keys(fake.toolBodies[0].args).sort(),
@@ -827,9 +830,10 @@ test("bridge end-to-end tool route: ordinary tool calls stay on route `events` a
   assert.ok(started.includes("mcp__github__get_file_contents"));
   assert.ok(completed.includes("bash"));
   assert.ok(completed.includes("mcp__github__get_file_contents"));
-  // the tool route carries ONLY the vocabulary — never the ordinary calls
+  // the tool route carries ONLY the payload-carrying vocabulary — never the ordinary calls,
+  // never the completion mandate (the settle signal renders as the terminal `completed` callback)
   assert.deepEqual(fake.toolBodies.map((b) => b.toolName).sort(),
-    ["report_completion", "save_plan", "submit_pr_description"]);
+    ["save_plan", "submit_pr_description"]);
   assert.equal(fake.toolBodies.some((b) => b.toolName === "bash"
     || b.toolName === "get_file_contents"), false);
   e2eCleanup(dirs);

@@ -27,8 +27,11 @@ public static class RunWorkerEndpoints
             if (payload is null)
                 return Results.BadRequest(new { error = "body required" });
 
+            // the Bridge sends the callback body as a JSON object (the route's body of
+            // docs/run-worker.md); the callback row carries its raw JSON text
             await log.AppendAsync(
-                new AgentCallback(entry.RunId, payload.Route, payload.Body, ParseEventId(payload.Body)), ct);
+                new AgentCallback(entry.RunId, payload.Route,
+                    payload.Body?.GetRawText(), ParseEventId(payload.Body?.GetRawText())), ct);
             return Results.Accepted();
         });
 
@@ -58,5 +61,5 @@ public static class RunWorkerEndpoints
         }
     }
 
-    private sealed record CallbackRequest(string Route, string? Body);
+    private sealed record CallbackRequest(string Route, JsonElement? Body);
 }
