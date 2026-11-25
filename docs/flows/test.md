@@ -5,20 +5,20 @@ flowchart TB
     subgraph TESTING["4. TESTING — Testing Agent"]
         direction TB
 
-        T1["Testing Agent: executes tests<br/><br/>Unit Tests<br/>Integration Tests<br/>E2E Tests<br/>Acceptance Tests"]
+        T1["Testing Agent: executes tests<br/><br/>Unit Tests<br/>Integration Tests<br/>E2E Tests<br/>Acceptance Tests<br/><br/>project-specific build &amp; tests"]
 
         T2{"Have all tests passed?"}
         T3{"What is the cause of the failure?"}
 
-        T4["Testing Agent → Orchestrator:<br/>reports bug, reproduction steps, and test results"]
+        T4["Testing Agent → Orchestrator:<br/>reports bug, reproduction steps, and test results<br/><br/>report_bug"]
 
-        T5["Testing Agent → Orchestrator:<br/>reports environment or access issue"]
+        T5["Testing Agent → Orchestrator:<br/>reports environment or access issue<br/><br/>report_env_issue"]
         T6["Orchestrator → User:<br/>requests environment recovery / access"]
         T7["Waiting for Human"]
         T8["User: restores environment / provides access"]
         T9["Orchestrator → Testing Agent:<br/>notifies that testing can resume"]
 
-        T10["Testing Agent → Orchestrator:<br/>requests clarification of acceptance criteria"]
+        T10["Testing Agent → Orchestrator:<br/>requests clarification of acceptance criteria<br/><br/>request_criteria_clarification"]
         T11["Orchestrator → User:<br/>requests clarification of expected behavior"]
         T12["Waiting for Human"]
         T13["User: clarifies expected behavior"]
@@ -42,7 +42,8 @@ flowchart TB
 
     T14 --> EXIT2(["Return control to Orchestrator"])
 
-    T2 -- "Yes" --> O2["Orchestrator: checks manual acceptance policy"]
+    T2 -- "Yes" --> TP["Testing Agent → Orchestrator:<br/>reports all tests passed<br/><br/>report_tests_passed"]
+    TP --> O2["Orchestrator: checks manual acceptance policy"]
     O2 --> O3{"Manual acceptance required?"}
 
     O3 -- "No" --> DONE(["Testing completed"])

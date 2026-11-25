@@ -7,6 +7,8 @@ flowchart TB
 
         D1{"Execution mode"}
 
+        D1 -.- T0["Tools (all modes)<br/><br/>built-in code read / edit / write<br/>github_pr_read<br/>github_comments_read<br/>web_search<br/>project-specific build &amp; tests"]
+
         subgraph IMPLEMENTATION["Implementation"]
             I1["Implement the task from scratch"]
         end
@@ -34,7 +36,7 @@ flowchart TB
 
         V4 -- "Yes" --> V5{"Can Coder resolve it independently?"}
         V5 -- "Yes" --> V3
-        V5 -- "No" --> V6["Coder → Orchestrator: reports blocker, causes, and possible solutions"]
+        V5 -- "No" --> V6["Coder → Orchestrator: reports blocker, causes, and possible solutions<br/><br/>report_blocker"]
         V6 --> V7["Orchestrator → User: requests decision / information / access"]
         V7 --> V8["Waiting for Human"]
         V8 --> V9["User provides response"]
@@ -43,7 +45,7 @@ flowchart TB
 
         V4 -- "No" --> V11{"Work completed?"}
         V11 -- "No" --> V1
-        V11 -- "Yes" --> V12["Coder: creates or updates Pull Request"]
+        V11 -- "Yes" --> V12["Coder: creates or updates Pull Request<br/><br/>github_pr_create / github_pr_update"]
     end
 
     START --> D1

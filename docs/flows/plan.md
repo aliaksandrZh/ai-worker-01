@@ -4,12 +4,12 @@ flowchart TD
 
     subgraph PL["Planner: Requirements Analysis & Planning"]
         direction TD
-        P1["Analyze requirements and context<br/><br/>github_issue_read<br/>github_comments_read<br/>github_pr_read<br/>+ code"]
+        P1["Analyze requirements and context<br/><br/>github_issue_read<br/>github_comments_read<br/>github_pr_read<br/>web_search<br/>+ built-in code read"]
         P1 --> Q{"Enough information?"}
-        Q -->|Yes| P2["Prepare or update plan, scope<br/>and acceptance criteria<br/>(save_plan)"]
+        Q -->|Yes| P2["Prepare or update plan, scope<br/>and acceptance criteria<br/><br/>save_plan"]
     end
 
-    Q -->|No| C1["Planner → Orchestrator:<br/>request missing information<br/>(request_clarification)"]
+    Q -->|No| C1["Planner → Orchestrator:<br/>request missing information<br/><br/>request_clarification"]
     C1 --> C2["Orchestrator → User:<br/>request clarification"]
     C2 --> W1["Waiting for Human"]
     W1 --> U1["User provides clarification"]
