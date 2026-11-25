@@ -19,7 +19,7 @@ Emitted:
 | Event | Meaning |
 |---|---|
 | `run_processing` | the container is up, the agent started |
-| `run_completed` | settled **with** `report_completion` |
+| `run_completed` | settled **with** `report_completion`; carries `Branch` and `CommitSha` from the terminal body's git facts — the pointer producers for the fix-round branch and the review head pin |
 | `run_failed` | settled without it, never started, or watchdog timeout |
 | `run_cancelled` | stopped on `run_stop_requested` |
 
@@ -63,15 +63,21 @@ RunInput {
   Owner, Repo, ItemNumber, Command, PlanCommentId, Profile,   // identity + trigger
   PrNumber?,                                                  // linked PR, if any
   AgentBranch?,                                               // fix round: continue this branch/PR
-  DefaultBranch,                                              // PR base
-  ReviewHeadSha?, ReviewBaseSha?                              // reviewer's pinned revisions
+  DefaultBranch,                                              // PR base (repositories config)
+  ReviewHeadSha?                                              // reviewer's pinned head
 }
 ```
 
-The Orchestrator fills every pointer from Workflow/Task state at `run_scheduled`. The
-worker exports the entry-facing subset as container env (`GIT_CLONE_REPO`,
-`GIT_CLONE_BRANCH`, `REVIEW_HEAD_SHA`, `REVIEW_BASE_SHA`, `REVIEW_PR_NUMBER`) and the
-Bridge renders the task prompt from the same file — one input contract, not env + json.
+The Orchestrator fills every pointer from Workflow/Task state at `run_scheduled`:
+`AgentBranch`/`HeadSha` are recorded from `run_completed`'s git facts (first implement
+Run creates the branch; fix rounds continue it), `ReviewHeadSha` is pinned from
+`pr_updated` when a review round starts, `DefaultBranch` comes from the repositories
+config injected via Orchestrator options. The review base is deliberately absent: the
+reviewer entry derives it locally (`merge-base(head, origin/<DefaultBranch>)`) — the
+Orchestrator keeps zero GitHub knowledge. The worker exports the entry-facing subset as
+container env (`GIT_CLONE_REPO`, `GIT_CLONE_BRANCH`, `REVIEW_HEAD_SHA`,
+`REVIEW_PR_NUMBER`) and the Bridge renders the task prompt from the same file — one
+input contract, not env + json.
 
 ## The one HTTP surface
 
