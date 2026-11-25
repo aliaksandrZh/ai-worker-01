@@ -66,6 +66,19 @@ _Avoid_: poison queue
 The explicit parameterless signal with which every agent ends its Run (`report_completion`).
 _Avoid_: done marker, finish signal
 
+### Agent channel
+
+**Communication tool**:
+An agent's only channel to the Orchestrator and the User; each call produces exactly one Event
+that carries the payload. Publication to GitHub is never part of a Communication tool call —
+it is the Orchestrator's act, triggered by the Event.
+_Avoid_: callback, marker tool
+
+**Tool manifest**:
+The full catalog of tools an agent may use — communication and context — baked into the agent's
+image; per-flow tool availability is a property of the manifest, not of the code.
+_Avoid_: tool list, allow-list
+
 **Escalation**:
 Handing an issue to the User because the agent cannot proceed on its own: clarification,
 blocker, decision, or criteria clarification.
