@@ -32,4 +32,13 @@ public sealed class OrchestrationOptions
 
     /// <summary>The default branch for a repository with no config entry.</summary>
     public string DefaultBranchFallback { get; set; } = "main";
+
+    /// <summary>
+    /// Profile secret NAMES per agent profile (the config plane's frozen copy of
+    /// agents/&lt;name&gt;/profile.yaml `secrets:`): frozen into run_scheduled; the Run Worker
+    /// binds the host-managed files read-only at /run/secrets/&lt;name&gt;. Only names travel
+    /// through configuration — values never do.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ProfileSecrets { get; set; } =
+        new Dictionary<string, IReadOnlyList<string>>();
 }

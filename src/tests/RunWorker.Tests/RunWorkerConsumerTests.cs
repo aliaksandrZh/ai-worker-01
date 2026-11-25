@@ -31,14 +31,30 @@ public sealed class RunWorkerConsumerTests
             NullLogger<RunWorkerConsumer>.Instance);
     }
 
+    /// <summary>A consumer over explicit provisioning paths (the secret/bind test variants).</summary>
+    private RunWorkerConsumer ConsumerWith(
+        string? secretsDir = null, string? secretsHostDir = null,
+        string? workspaceHostRoot = null, string? stubBehavior = null) =>
+        new(_registry, _docker, _log,
+            Options.Create(new RunWorkerOptions
+            {
+                WorkspaceRoot = _workspace,
+                SecretsDir = secretsDir ?? "",
+                SecretsHostDir = secretsHostDir ?? "",
+                WorkspaceHostRoot = workspaceHostRoot ?? "",
+                StubBehavior = stubBehavior ?? "succeed",
+            }),
+            NullLogger<RunWorkerConsumer>.Instance);
+
     private static RunInput PlannerInput() => new(
         Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: null,
         Command: "/plan", PlanCommentId: 0, Profile: "planner",
         AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
 
-    private async Task StartRunAsync(RunInput input, long runId = 7)
+    private async Task StartRunAsync(RunInput input, long runId = 7,
+        IReadOnlyList<string>? secrets = null)
     {
-        await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input),
+        await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input, secrets),
             attempt: 1, CancellationToken.None);
     }
 
@@ -64,6 +80,61 @@ public sealed class RunWorkerConsumerTests
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_HEAD_SHA="));
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_PR_NUMBER="));
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_BASE_SHA=")); // the review base is derived, never exported
+    }
+
+    [Fact]
+    public async Task Profile_secrets_bind_read_only_into_the_agent_container()
+    {
+        var secretsDir = Path.Combine(_workspace, "secrets");
+        Directory.CreateDirectory(secretsDir);
+        await File.WriteAllTextAsync(Path.Combine(secretsDir, "github-write-pat.txt"), "token");
+        var consumer = ConsumerWith(secretsDir: secretsDir, secretsHostDir: "/host/secrets",
+            workspaceHostRoot: "/host/runs");
+
+        await consumer.HandleAsync(
+            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput(),
+                Secrets: ["github-write-pat.txt"]),
+            attempt: 1, CancellationToken.None);
+
+        var binds = _docker.LastPlan!.Binds;
+        // the per-Run tree and the secret files mount by their HOST paths, the secret read-only
+        Assert.Contains("/host/runs/run-7/workspace:/workspace", binds);
+        Assert.Contains("/host/runs/run-7/logs:/logs", binds);
+        Assert.Contains("/host/runs/run-7/input.json:/run/input.json:ro", binds);
+        Assert.Contains("/host/secrets/github-write-pat.txt:/run/secrets/github-write-pat.txt:ro", binds);
+        // secrets never enter env vars, images, or input.json — the mount is the only delivery
+        Assert.DoesNotContain(_docker.LastPlan.Env, e => e.Contains("token"));
+    }
+
+    [Fact]
+    public async Task A_missing_profile_secret_fails_the_run_before_the_container_exists()
+    {
+        var secretsDir = Path.Combine(_workspace, "secrets-missing");
+        Directory.CreateDirectory(secretsDir); // no github-write-pat.txt inside
+        var consumer = ConsumerWith(secretsDir: secretsDir, secretsHostDir: "/host/secrets");
+
+        await consumer.HandleAsync(
+            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput(),
+                Secrets: ["github-write-pat.txt"]),
+            attempt: 1, CancellationToken.None);
+
+        var failed = Assert.Single(_log.Appended.OfType<RunFailed>());
+        Assert.Contains("secret_missing", failed.Cause);
+        Assert.Contains("github-write-pat.txt", failed.Cause);
+        Assert.Null(_docker.LastPlan);      // fail closed: nothing was provisioned
+        Assert.Null(_registry.Get(7));      // nothing in flight
+    }
+
+    [Fact]
+    public async Task The_stub_behavior_lever_rides_the_entry_env()
+    {
+        var consumer = ConsumerWith(stubBehavior: "no_completion");
+
+        await consumer.HandleAsync(
+            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput() with { Profile = "stub" }),
+            attempt: 1, CancellationToken.None);
+
+        Assert.Contains("STUB_BEHAVIOR=no_completion", _docker.LastPlan!.Env);
     }
 
     [Fact]

@@ -239,7 +239,8 @@ public sealed class Orchestrator(
             // auto-retry: a new Run of the same Task (docs/orchestrator.md §4)
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.Queued, uow, ct);
             var newRunId = await state.CreateRunAsync(task.Id, run.Input, uow, ct);
-            await log.AppendAsync(new RunScheduled(newRunId, task.Id, workflow.Id, run.Input), uow.Events, ct);
+            await log.AppendAsync(new RunScheduled(newRunId, task.Id, workflow.Id, run.Input,
+                SecretsFor(run.Input.Profile)), uow.Events, ct);
             logger.LogWarning("run {run} failed ({cause}); retrying as run {new} (attempt {n})",
                 evt.RunId, evt.Cause, newRunId, attempts + 1);
         }
@@ -430,8 +431,15 @@ public sealed class Orchestrator(
             DefaultBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
             ReviewHeadSha: task.Type is TaskTypes.Review ? workflow.HeadSha : null);
         var runId = await state.CreateRunAsync(taskId, input, uow, ct);
-        await log.AppendAsync(new RunScheduled(runId, taskId, workflow.Id, input), uow.Events, ct);
+        await log.AppendAsync(new RunScheduled(runId, taskId, workflow.Id, input,
+            SecretsFor(input.Profile)), uow.Events, ct);
     }
+
+    /// <summary>The profile's secret NAMES (config plane profile_secrets) for run_scheduled.</summary>
+    private IReadOnlyList<string> SecretsFor(string profile) =>
+        Options.ProfileSecrets.TryGetValue(profile, out var names)
+            ? names
+            : [];
 
     private string DefaultBranchFor(string owner, string repo) =>
         Options.DefaultBranches.TryGetValue($"{owner}/{repo}", out var branch)

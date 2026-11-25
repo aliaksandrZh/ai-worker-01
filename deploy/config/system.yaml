@@ -16,3 +16,13 @@ max_automatic_retries: 1
 outbox_retry_window: 24h
 orphan_grace_period: 24h
 orphan_quarantine_period: 24h
+
+# Profile secret NAMES per agent profile — the frozen agents/<name>/profile.yaml `secrets:` lists.
+# The Orchestrator freezes them into run_scheduled; the Run Worker mounts the host-managed files
+# (deploy/.env SECRETS_DIR) read-only at /run/secrets/<name>. Names only — values never travel
+# through configuration.
+profile_secrets:
+  coder: [github-write-pat.txt]
+  planner: [github-read-pat.txt]
+  reviewer: [github-read-pat.txt]
+  stub: []

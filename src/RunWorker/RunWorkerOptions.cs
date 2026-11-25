@@ -10,6 +10,35 @@ public sealed class RunWorkerOptions
     /// <summary>Root directory for per-Run trees (workspace + session + input).</summary>
     public string WorkspaceRoot { get; set; } = "/var/lib/pi-agent/runs";
 
+    /// <summary>
+    /// ABSOLUTE HOST path of the workspace root — the bind SOURCE the host docker daemon
+    /// resolves when the per-Run tree is mounted into the agent container. The worker writes
+    /// the tree through WorkspaceRoot (its own container view) but binds from here; the two
+    /// are the same directory when the app host runs on the host. Empty = WorkspaceRoot.
+    /// </summary>
+    public string WorkspaceHostRoot { get; set; } = "";
+
+    /// <summary>
+    /// The worker's own view of the host-managed secret files (fail-closed existence check
+    /// at provisioning). Empty = secret mounts are not configured.
+    /// </summary>
+    public string SecretsDir { get; set; } = "/etc/pi-agent/secrets";
+
+    /// <summary>
+    /// ABSOLUTE HOST path of the host-managed secret files — the bind SOURCE for
+    /// `/run/secrets/<name>` mounts (resolved by the host docker daemon, never read by the
+    /// worker). Empty = secret mounts are not configured; a Run carrying secret names then
+    /// fails closed at provisioning (secret_missing) instead of starting without them.
+    /// </summary>
+    public string SecretsHostDir { get; set; } = "";
+
+    /// <summary>
+    /// The stub's scenario lever (succeed | no_completion | escalate | ...), exported as
+    /// STUB_BEHAVIOR so the failure/needs-human paths stay drivable through the stack. Only
+    /// the stub reads it; real profiles ignore the variable.
+    /// </summary>
+    public string StubBehavior { get; set; } = "succeed";
+
     /// <summary>Compose network agent containers join.</summary>
     public string AgentNetwork { get; set; } = "pi-agent-net";
 
@@ -24,6 +53,9 @@ public sealed class RunWorkerOptions
 
     /// <summary>How long a stop waits before the container is killed (seconds).</summary>
     public int StopGraceSeconds { get; set; } = 30;
+
+    /// <summary>The uid agent containers run as — the per-Run tree's writable dirs are chowned to it.</summary>
+    public long ContainerUserId { get; set; } = 1000;
 }
 
 /// <summary>In-flight Run state for the worker (recovered lazily by container labels).</summary>

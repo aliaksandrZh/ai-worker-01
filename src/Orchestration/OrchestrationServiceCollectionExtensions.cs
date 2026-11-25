@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -9,6 +10,8 @@ using PiAgent.Events.Postgres;
 using PiAgent.Orchestration.Consumers;
 using PiAgent.Orchestration.State;
 using PiAgent.Orchestration.State.Postgres;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace PiAgent.Orchestration;
 
@@ -27,6 +30,9 @@ public static class OrchestrationServiceCollectionExtensions
             {
                 if (o.DefaultBranches.Count == 0)
                     o.DefaultBranches = RepositoriesConfig.ReadDefaultBranches(
+                        configuration["PI_AGENT_CONFIG_DIR"] ?? "config");
+                if (o.ProfileSecrets.Count == 0)
+                    o.ProfileSecrets = ReadProfileSecrets(
                         configuration["PI_AGENT_CONFIG_DIR"] ?? "config");
             });
         services.AddOrchestrationState(configuration);
@@ -49,6 +55,50 @@ public static class OrchestrationServiceCollectionExtensions
         services.AddHostedService<EventConsumerRunner<WorkflowEventsConsumer>>();
         return services;
     }
+
+    /// <summary>
+    /// Profile secret NAMES from the configuration plane's system.yaml (`profile_secrets:` —
+    /// the frozen agents/&lt;name&gt;/profile.yaml `secrets:` lists): names only, values never
+    /// enter configuration. An absent key = a profile without secret mounts; a malformed name
+    /// fails startup (the config plane is the schema authority). The name grammar mirrors
+    /// Platform's ProfileSecretName (the worker's runtime validator).
+    /// </summary>
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadProfileSecrets(string configDir)
+    {
+        var path = Path.Combine(configDir, "system.yaml");
+        if (!File.Exists(path))
+            return new Dictionary<string, IReadOnlyList<string>>();
+
+        var root = new DeserializerBuilder()
+            .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .Build()
+            .Deserialize<SystemYamlRoot>(File.ReadAllText(path));
+
+        var secrets = new Dictionary<string, IReadOnlyList<string>>();
+        foreach (var (profile, names) in root.ProfileSecrets)
+        {
+            foreach (var name in names)
+            {
+                if (!ValidSecretName(name))
+                    throw new InvalidOperationException(
+                        $"configuration error: profile secret '{name}' of profile '{profile}': " +
+                        "secret reference must match [A-Za-z0-9][A-Za-z0-9._-]* (a single file name)");
+            }
+            secrets[profile] = names;
+        }
+        return secrets;
+    }
+
+    /// <summary>The narrow system.yaml subset the Orchestrator reads (profile_secrets).</summary>
+    private sealed class SystemYamlRoot
+    {
+        public Dictionary<string, List<string>> ProfileSecrets { get; init; } = [];
+    }
+
+    private static readonly Regex SecretNamePattern = new("^[A-Za-z0-9][A-Za-z0-9._-]*$", RegexOptions.Compiled);
+
+    private static bool ValidSecretName(string name) =>
+        !string.IsNullOrWhiteSpace(name) && SecretNamePattern.IsMatch(name);
 
     private static void AddOrchestrationState(this IServiceCollection services, IConfiguration configuration)
     {

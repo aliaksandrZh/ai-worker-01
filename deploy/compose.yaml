@@ -46,8 +46,16 @@ services:
       Workers__RunWorker__Enabled: "true"
       # Run Worker provisioning (docs/run-worker.md).
       RunWorker__WorkspaceRoot: /var/lib/pi-agent/runs
+      # Bind sources resolve on the HOST daemon: the agent containers mount the run tree and
+      # the host-managed secret files by their ABSOLUTE host paths (same directories the
+      # compose binds below expose to the app host at the container paths).
+      RunWorker__WorkspaceHostRoot: ${STORAGE_HOST_ROOT:-/var/lib/pi-agent/runs}
+      RunWorker__SecretsDir: /etc/pi-agent/secrets
+      RunWorker__SecretsHostDir: ${SECRETS_HOST_DIR:-/etc/pi-agent/secrets}
       RunWorker__AgentNetwork: pi-agent-net
       RunWorker__CallbackBaseUrl: http://app-host:8080
+      # the stub's scenario lever (only the stub reads it; a stack-level acceptance driver)
+      RunWorker__StubBehavior: ${RUN_WORKER_STUB_BEHAVIOR:-succeed}
       # Agent profile images are built at deploy time (task build-agents): base + agent-<profile>:latest
       RunWorker__ImageTag: latest
     volumes:

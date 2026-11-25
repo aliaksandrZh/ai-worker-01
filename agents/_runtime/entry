@@ -1,6 +1,7 @@
 #!/bin/sh
 # The ONE shared agent entry (ticket 08): the clone prelude "token → clone → scrub" lives here
 # once, parameterized by the agent manifest's clone_mode (agent.json — the agent delta is data):
+#   none             — no clone prelude at all (stub: proves the pipeline without credentials)
 #   plain            — clone the repository's default branch (planner)
 #   branch-continue  — clone GIT_CLONE_BRANCH (coder): the default branch on a first round (the
 #                      worker exports AgentBranch ?? DefaultBranch), the agent branch on a fix
@@ -23,13 +24,19 @@ if [ -f "${manifest}" ]; then
   clone_mode=$(node -e "const m=require('${manifest}');process.stdout.write(typeof m.clone_mode==='string'&&m.clone_mode?m.clone_mode:'plain')" 2>/dev/null || echo plain)
 fi
 case "${clone_mode}" in
-  plain|branch-continue|pinned-review) ;;
+  none|plain|branch-continue|pinned-review) ;;
   *) echo "agent-entry: unknown clone_mode '${clone_mode}' in ${manifest}" >&2; exit 78 ;;
 esac
 
 token=""
 if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
   token="$(tr -d '\r' < "${GIT_CLONE_TOKEN_FILE}" | head -n1)"
+fi
+
+# clone_mode none: no clone prelude at all — the agent runs in an empty workspace without
+# credentials (the stub: it proves the pipeline, it does not read the repository).
+if [ "${clone_mode}" = "none" ]; then
+  exec "$@"
 fi
 
 if [ "${clone_mode}" = "pinned-review" ]; then
