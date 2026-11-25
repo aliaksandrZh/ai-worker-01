@@ -21,7 +21,14 @@ public static class OrchestrationServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddOrchestrator(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddOptions<OrchestrationOptions>().Bind(configuration.GetSection(OrchestrationOptions.SectionName));
+        services.AddOptions<OrchestrationOptions>()
+            .Bind(configuration.GetSection(OrchestrationOptions.SectionName))
+            .PostConfigure(o =>
+            {
+                if (o.DefaultBranches.Count == 0)
+                    o.DefaultBranches = RepositoriesConfig.ReadDefaultBranches(
+                        configuration["PI_AGENT_CONFIG_DIR"] ?? "config");
+            });
         services.AddOrchestrationState(configuration);
 
         services.AddSingleton<Orchestrator>();

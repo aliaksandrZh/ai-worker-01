@@ -52,7 +52,8 @@ public sealed class InMemoryOrchestrationState : IOrchestrationState
             return Task.FromResult(existing);
 
         var row = new WorkflowRow(++_workflowId, item.Owner, item.Repo, item.Number,
-            WorkflowStatuses.Active, NodeId: null, PlanApproved: false, ReviewRounds: 0);
+            WorkflowStatuses.Active, NodeId: null, PlanApproved: false, ReviewRounds: 0,
+            AgentBranch: null, HeadSha: null);
         _workflows.Add(row);
         return Task.FromResult(row);
     }
@@ -85,6 +86,17 @@ public sealed class InMemoryOrchestrationState : IOrchestrationState
     {
         var index = _workflows.FindIndex(w => w.Id == workflowId);
         _workflows[index] = _workflows[index] with { ReviewRounds = _workflows[index].ReviewRounds + 1 };
+        return Task.CompletedTask;
+    }
+
+    public Task SetWorkflowPointersAsync(long workflowId, string? agentBranch, string? headSha, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    {
+        var index = _workflows.FindIndex(w => w.Id == workflowId);
+        _workflows[index] = _workflows[index] with
+        {
+            AgentBranch = agentBranch ?? _workflows[index].AgentBranch,
+            HeadSha = headSha ?? _workflows[index].HeadSha,
+        };
         return Task.CompletedTask;
     }
 

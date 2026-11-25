@@ -38,6 +38,13 @@ public interface IOrchestrationState
 
     Task SetWorkflowNodeAsync(long workflowId, string nodeId, IOrchestrationUnitOfWork uow, CancellationToken ct);
 
+    /// <summary>
+    /// Records the Workflow's run-input pointers: the agent branch a fix round continues
+    /// (from the completed Coder run's git facts) and the head commit a review round pins
+    /// (from the same facts or from pr_updated). Non-null values overwrite; null preserves.
+    /// </summary>
+    Task SetWorkflowPointersAsync(long workflowId, string? agentBranch, string? headSha, IOrchestrationUnitOfWork uow, CancellationToken ct);
+
     Task IncrementReviewRoundsAsync(long workflowId, IOrchestrationUnitOfWork uow, CancellationToken ct);
 
     Task<long> CreateTaskAsync(long workflowId, string type, IOrchestrationUnitOfWork uow, CancellationToken ct);
