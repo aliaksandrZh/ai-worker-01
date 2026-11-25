@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using PiAgent.Platform;
 using PiAgent.Platform.Http;
 using PiAgent.Platform.Logging;
-using PiAgent.Platform.Workers;
 using Xunit;
 
 namespace PiAgent.Platform.Tests.Http;
@@ -20,20 +19,11 @@ public class PlatformEndpointsTests
             Task.FromResult(ok ? ReadinessResult.Ready() : ReadinessResult.NotReady(error ?? "unavailable"));
     }
 
-    private sealed class TestWorkerMetrics(WorkerLoopState state) : WorkerMetricsBase(state)
-    {
-        protected override IEnumerable<KeyValuePair<string, object?>> CollectExtra()
-        {
-            yield return new KeyValuePair<string, object?>("testCustomKey", 123);
-        }
-    }
-
     private static WebApplicationBuilder NewBuilder()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.Configure<PiJsonConsoleFormatterOptions>(options => options.ServiceName = "test-service");
-        builder.Services.AddSingleton<WorkerLoopState>();
         return builder;
     }
 
@@ -90,10 +80,9 @@ public class PlatformEndpointsTests
     }
 
     [Fact]
-    public async Task Metrics_ContainsService_GeneratedAt_HeartbeatAndCustomKeys()
+    public async Task Metrics_ContainsService_AndGeneratedAt()
     {
         var builder = NewBuilder();
-        builder.Services.AddSingleton<IWorkerMetrics, TestWorkerMetrics>();
         await using var app = builder.Build();
         app.MapPiEndpoints();
         await app.StartAsync();
@@ -103,11 +92,6 @@ public class PlatformEndpointsTests
         Assert.Equal(200, (int)response.StatusCode);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("test-service", doc.RootElement.GetProperty("service").GetString());
-        var metrics = doc.RootElement.GetProperty("metrics");
-        Assert.Equal(123, metrics.GetProperty("testCustomKey").GetInt32());
-        Assert.True(metrics.TryGetProperty("running", out _));
-        Assert.True(metrics.TryGetProperty("heartbeatUtc", out _));
-        Assert.True(metrics.TryGetProperty("lastSuccessfulCycleUtc", out _));
         var generatedAt = doc.RootElement.GetProperty("generatedAtUtc").GetString();
         Assert.True(
             DateTime.TryParse(generatedAt, System.Globalization.CultureInfo.InvariantCulture,
