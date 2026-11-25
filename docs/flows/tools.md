@@ -1,9 +1,10 @@
 # Agent Tools
 
-> **Status: proposal.** Derived from the workflow definitions in [plan.md](plan.md),
-> [development.md](development.md), [review.md](review.md), [test.md](test.md) and the
-> event list in [events.md](events.md). Only the tools marked **[explicit]** were named in
-> the flow documents; every other name and signature is inferred and open to revision.
+> **Status: contract.** The tool set, signatures and availability below are fixed for the
+> flows rework. The eleven communication tool names are the Runtime Bridge's `tool`-route
+> vocabulary (see [../run-worker.md](../run-worker.md)): the Bridge observes each completed
+> call and turns it into exactly one event — a change to the set or a signature is a bridge
+> contract bump (`bridge.json` stamp).
 >
 > Agents communicate with the Orchestrator / User **only through tools**. Every
 > "Agent → Orchestrator/User" arrow in a flow diagram maps to one of the communication
@@ -155,6 +156,15 @@
 - **Used by:** Testing Agent
 - **Stage:** Testing — all tests passed (T2 Yes)
 
+### `submit_pr_description` [new]
+- **Purpose:** Carry the Coder's result to the Orchestrator: the title and body of the pull
+  request the Orchestrator creates after `run_completed` (publication rule — the agent
+  never writes to GitHub). This is the summary carrier: `report_completion` stays
+  parameterless, the payload travels here.
+- **Signature:** `submit_pr_description(title, body) → void`
+- **Used by:** Coder
+- **Stage:** Development — right before `report_completion` (V12–V13)
+
 ## Escalation pattern
 
 `request_clarification`, `report_blocker`, `request_decision` and
@@ -186,6 +196,7 @@ flow resumes on a user event* — but they are deliberately four separate tools,
 | `report_env_issue` | — | — | — | ✅ |
 | `request_criteria_clarification` | — | — | — | ✅ |
 | `report_tests_passed` | — | — | — | ✅ |
+| `submit_pr_description` | — | ✅ | — | — |
 
 ## Possible consolidation
 
@@ -193,4 +204,5 @@ flow resumes on a user event* — but they are deliberately four separate tools,
   `github_pr_read`) could be merged into a single `github_read(entity, id)`. This does not
   change any flow.
 - `github_pr_create` / `github_pr_update` were removed: under the publication rule the
-  Orchestrator creates and updates the PR when the Coder's Run completes.
+  Orchestrator creates and updates the PR when the Coder's Run completes; the Coder
+  delivers the description through `submit_pr_description`.
