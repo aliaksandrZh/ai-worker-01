@@ -2,7 +2,7 @@ version: 3
 
 tasks:
   stack:
-    desc: Run the pi-agent control plane (postgres → app-host: EventLog + Orchestrator + Publisher + GithubSync + RunWorker; plus backup/snapshot loops and the logging stack; uses deploy/.env)
+    desc: 'Run the pi-agent control plane (postgres, app-host with all EventLog consumers, backup and logging stack; uses deploy/.env)'
     cmds:
       - test -f deploy/.env || cp deploy/.env.example deploy/.env
       - docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --wait
@@ -48,10 +48,11 @@ tasks:
       - dotnet run --project src/Hosts/AppHost --no-launch-profile
 
   build-agents:
-    desc: Build the agent profile images (agent-<profile>:v1) the Run Worker starts — deploy-time step until the build plane is reworked
-    cmds: |
-      for profile in agents/*/; do
-        name=$(basename "$profile")
-        [ "$name" = "_runtime" ] && continue
-        docker build -t "agent-$name:v1" "$profile"
-      done
+    desc: 'Build agent profile images (agent-<profile>:v1) the Run Worker starts; deploy-time step until the build plane is reworked'
+    cmds:
+      - cmd: |
+          for p in agents/*/; do
+            n=$(basename "$p")
+            [ "$n" = "_runtime" ] && continue
+            docker build -t "agent-$n:v1" "$p" || exit 1
+          done

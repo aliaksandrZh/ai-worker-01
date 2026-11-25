@@ -53,10 +53,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # Per-Run trees (workspace + session + input).
       - ${STORAGE_ROOT:-../runtime/runs}:/var/lib/pi-agent/runs
-      # Configuration plane (YAML is the source of desired configuration).
-      - ../deploy/config:/etc/pi-agent/config:ro
-      # Agent profiles (agents/<name>/) + the shared Runtime Bridge (agents/_runtime/bridge).
-      - ../agents:/etc/pi-agent/config/agents:ro
+      # Configuration plane — per-file mounts (a read-only parent bind can't host nested
+      # mountpoints; compose mkdirat → EROFS). The sync reads repositories.yaml + system.yaml.
+      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
+      - ../deploy/config/repositories.yaml:/etc/pi-agent/config/repositories.yaml:ro
       # Host-managed secrets (read-only).
       - ${SECRETS_DIR:-../secrets}:/etc/pi-agent/secrets:ro
     depends_on:

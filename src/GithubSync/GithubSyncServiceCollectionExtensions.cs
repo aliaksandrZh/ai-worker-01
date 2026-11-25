@@ -20,10 +20,11 @@ public static class GithubSyncServiceCollectionExtensions
     {
         services.AddSingleton(sp => SyncConfig.Read(
             configuration["PI_AGENT_CONFIG_DIR"] ?? "config"));
-        services.AddSingleton<ICursorStore>(sp => new PostgresCursorStore(
+        services.AddSingleton(sp => new PostgresCursorStore(
             new Npgsql.NpgsqlDataSourceBuilder(configuration.GetConnectionString("DefaultDb")
                 ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured")).Build(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<PostgresCursorStore>()));
+        services.AddSingleton<ICursorStore>(sp => sp.GetRequiredService<PostgresCursorStore>());
         services.AddHostedService<CursorSchemaBootstrap>();
 
         if (configuration.GetValue<bool?>($"Workers:GithubSync:Enabled") is not true)

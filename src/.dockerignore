@@ -9,10 +9,16 @@
 !PiAgent.slnx
 !Platform/
 !Platform/**
-!Infrastructure/
-!Infrastructure/**
-!Migrator/
-!Migrator/**
+!Events/
+!Events/**
+!Orchestration/
+!Orchestration/**
+!GithubSync/
+!GithubSync/**
+!Publisher/
+!Publisher/**
+!RunWorker/
+!RunWorker/**
 !Hosts/
 !Hosts/**
 # build artifacts of local Rider/CLI builds inside the source tree

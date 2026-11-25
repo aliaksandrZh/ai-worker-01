@@ -21,7 +21,11 @@ public static class EventLogServiceCollectionExtensions
                     ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured");
             });
         services.AddSingleton<EventQueueStore>();
-        services.AddSingleton<IEventLog>(sp => sp.GetRequiredService<EventQueueStore>());
+        services.AddSingleton<IEventLog>(sp =>
+        {
+            var store = sp.GetRequiredService<EventQueueStore>();
+            return store;
+        });
         services.AddSingleton<IEventQueue>(sp => sp.GetRequiredService<EventQueueStore>());
         return services;
     }

@@ -20,13 +20,11 @@ public static class PublisherServiceCollectionExtensions
     public static IServiceCollection AddPublisher(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<PublisherOptions>().Bind(configuration.GetSection(PublisherOptions.SectionName));
-        services.AddSingleton<IPublishMarkerStore>(sp =>
-        {
-            var dataSource = new Npgsql.NpgsqlDataSourceBuilder(configuration.GetConnectionString("DefaultDb")
-                ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured")).Build();
-            return new PostgresPublishMarkerStore(
-                dataSource, sp.GetRequiredService<ILoggerFactory>().CreateLogger<PostgresPublishMarkerStore>());
-        });
+        services.AddSingleton(sp => new PostgresPublishMarkerStore(
+            new Npgsql.NpgsqlDataSourceBuilder(configuration.GetConnectionString("DefaultDb")
+                ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured")).Build(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<PostgresPublishMarkerStore>()));
+        services.AddSingleton<IPublishMarkerStore>(sp => sp.GetRequiredService<PostgresPublishMarkerStore>());
 
         if (configuration.GetValue<bool?>($"Workers:Publisher:Enabled") is not true)
             return services;
