@@ -1,11 +1,21 @@
 # GitHub-native pi agent system
 
+> **Event-driven redesign landed (ADR-0002..0006).** One app host runs the whole control
+> plane as EventLog consumers: **GithubSync** (trigger detection, cursor-diff — no GitHub
+> mirror) → **Orchestrator** (a pure event reactor: Workflow → Task → Run state machines,
+> admission, policies) → **Run Worker** (container provisioning, per-run tokens,
+> `POST /events` egress) → **Publisher** (the only GitHub write path, key-once idempotent).
+> The transport is a **Postgres Event Log** (`docs/eventlog.md`): at-least-once, per-stream
+> order, visibility timeout, dead-letter. Agents read GitHub themselves; the schema is
+> owned by modules' idempotent bootstrap DDL. Flow docs: `docs/flows/`; component
+> contracts: `docs/{orchestrator,eventlog,run-worker,publisher,github-sync}.md`.
+
 A control plane that runs specialized pi coding agents on GitHub Issues and Pull Requests: users
-command agents with slash commands in comments, a poller syncs GitHub state into PostgreSQL, an
-Orchestrator turns commands into Workflows → Tasks → Runs, and per-Run containers execute Pi
-sessions whose results flow back to GitHub. PostgreSQL is the source of truth for orchestration
-state; GitHub remains the source of truth for issues/PRs/comments/reviews; desired configuration
-is YAML in `deploy/config/` (+ `agents/` profiles), synced into the DB only at startup.
+command agents with slash commands in comments, an event log carries every signal, and
+per-Run containers execute Pi sessions whose results flow back to GitHub. PostgreSQL is the
+source of truth for orchestration state and the event log; GitHub remains the source of truth
+for issues/PRs/comments/reviews; desired configuration is YAML in `deploy/config/` (+ `agents/`
+profiles).
 
 ## Main flow
 
