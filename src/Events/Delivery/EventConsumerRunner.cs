@@ -8,7 +8,7 @@ namespace PiAgent.Events.Delivery;
 /// The worker loop shared by every consumer (docs/eventlog.md): poll → claim a batch →
 /// handle → ack / fail. Delivery semantics live here once, not per consumer.
 /// </summary>
-internal sealed class EventConsumerRunner<TConsumer>(
+public sealed class EventConsumerRunner<TConsumer>(
     TConsumer consumer,
     IEventQueue queue,
     IOptions<EventLogOptions> options,

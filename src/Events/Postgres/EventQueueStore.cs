@@ -78,6 +78,14 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
         return new EventTransaction(conn, tx);
     }
 
+    /// <summary>
+    /// Wraps a caller-owned Npgsql transaction so event appends commit atomically with
+    /// the caller's state change (docs/eventlog.md invariant 6) — the Orchestrator's
+    /// unit-of-work uses this to share one transaction across stores.
+    /// </summary>
+    public IEventTransaction WrapTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction) =>
+        new EventTransaction(connection, transaction);
+
     private static async Task<long> AppendCoreAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, CancellationToken ct)
     {

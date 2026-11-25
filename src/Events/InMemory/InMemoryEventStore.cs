@@ -46,7 +46,13 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
 
     public Task<long> AppendAsync<TEvent>(TEvent evt, IEventTransaction tx, CancellationToken ct)
         where TEvent : IEvent
-        => ((InMemoryTransaction)tx).Enlist(evt, this);
+    {
+        // a foreign transaction (another adapter's unit of work) is a no-op here —
+        // the in-memory store is never its commit target
+        return tx is InMemoryTransaction own
+            ? own.Enlist(evt, this)
+            : AppendAsync(evt, ct);
+    }
 
     public Task<IEventTransaction> BeginTransactionAsync(CancellationToken ct) =>
         Task.FromResult<IEventTransaction>(new InMemoryTransaction());
@@ -178,6 +184,15 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
         get
         {
             lock (_lock) return _events.Count(e => !e.Processed);
+        }
+    }
+
+    /// <summary>All appended events in append order (test surface).</summary>
+    public IReadOnlyList<IEvent> Appended
+    {
+        get
+        {
+            lock (_lock) return _events.Select(e => e.Event).ToList();
         }
     }
 
