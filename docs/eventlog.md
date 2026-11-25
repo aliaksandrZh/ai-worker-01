@@ -65,7 +65,9 @@ services.AddEventConsumer<PollerConsumer>(config);   // started only if Workers:
    idempotent. The `attempt` parameter says which delivery it is.
 2. **Visibility timeout.** A claimed event is invisible for at most the configured
    timeout; a crashed or stalled handler's event is redelivered after it. After
-   `MaxAttempts` failed deliveries the event moves to the dead-letter store.
+   `MaxAttempts` failed deliveries the event moves to the dead-letter store; a handler
+   may also declare a failure permanent (`PoisonAsync`) — the event dead-letters
+   immediately, because no retry can succeed.
 3. **Dead-letter is inspectable and replayable.** Parked events stay; replay re-enters
    the log with attempt reset. Dead-lettering also emits a user-facing notification.
 4. **Strict order inside a stream, parallel across streams.** While a stream's head

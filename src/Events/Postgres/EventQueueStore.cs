@@ -86,6 +86,10 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
     public IEventTransaction WrapTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction) =>
         new EventTransaction(connection, transaction);
 
+    /// <summary>Underlying Npgsql transaction of a store-created IEventTransaction (or null for foreign ones).</summary>
+    public static (NpgsqlConnection? Connection, NpgsqlTransaction? Transaction) Unwrap(IEventTransaction tx) =>
+        tx is EventTransaction own ? (own.Connection, own.Transaction) : (null, null);
+
     private static async Task<long> AppendCoreAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, CancellationToken ct)
     {
@@ -199,6 +203,29 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
 
         if (parked is not null)
             _logger.LogError("event {id} moved to dead-letter after repeated failures", id);
+    }
+
+    public async Task PoisonAsync(long id, string error, CancellationToken ct)
+    {
+        const string sql = """
+            WITH moved AS (
+                DELETE FROM events
+                WHERE id = @id
+                RETURNING stream, type, payload, attempts
+            )
+            INSERT INTO dead_letter (stream, type, payload, attempts, last_error)
+            SELECT stream, type, payload, attempts, @error
+            FROM moved
+            RETURNING id
+            """;
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("error", error);
+        var parked = await cmd.ExecuteScalarAsync(ct);
+
+        if (parked is not null)
+            _logger.LogError("event {id} poisoned straight to dead-letter: {error}", id, error);
     }
 
     public async Task<IReadOnlyList<DeadLetterEntry>> ListDeadLettersAsync(int limit, CancellationToken ct)

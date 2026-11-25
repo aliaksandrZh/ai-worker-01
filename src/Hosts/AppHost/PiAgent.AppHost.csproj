@@ -9,6 +9,7 @@
     <ProjectReference Include="..\..\Events\PiAgent.Events.csproj" />
     <ProjectReference Include="..\..\Orchestration\PiAgent.Orchestration.csproj" />
     <ProjectReference Include="..\..\Platform\PiAgent.Platform.csproj" />
+    <ProjectReference Include="..\..\Publisher\PiAgent.Publisher.csproj" />
     <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
   </ItemGroup>
 

@@ -162,6 +162,20 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
         }
     }
 
+    public Task PoisonAsync(long id, string error, CancellationToken ct)
+    {
+        lock (_lock)
+        {
+            var row = _events.FirstOrDefault(e => e.Id == id);
+            if (row is null)
+                return Task.CompletedTask;
+
+            _events.Remove(row);
+            _deadLetters.Add(new DeadLetterRow(_nextId++, row.Event, row.Attempts, error));
+            return Task.CompletedTask;
+        }
+    }
+
     public Task<bool> ReplayDeadLetterAsync(long deadLetterId, CancellationToken ct)
     {
         lock (_lock)
