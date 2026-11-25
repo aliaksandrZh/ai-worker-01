@@ -23,8 +23,15 @@ public sealed record RunInput(
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
-/// <summary>Orchestrator, after admitting any event — the Run is queued.</summary>
-public sealed record RunScheduled(long RunId, long TaskId, long WorkflowId, RunInput Input) : IEvent
+/// <summary>
+/// Orchestrator, after admitting any event — the Run is queued. Secrets carries the
+/// profile's secret NAMES (config plane `profile_secrets`, the frozen profile.yaml
+/// `secrets:` list): the worker binds the host-managed files read-only at
+/// `/run/secrets/<name>` — names travel through configuration, values never do.
+/// </summary>
+public sealed record RunScheduled(
+    long RunId, long TaskId, long WorkflowId, RunInput Input,
+    IReadOnlyList<string>? Secrets = null) : IEvent
 {
     public string StreamKey => Input.StreamKey;
 }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PiAgent.Events;
+using PiAgent.Platform.Secrets;
 using PiAgent.RunWorker.Docker;
 
 namespace PiAgent.RunWorker;
@@ -43,12 +44,36 @@ public sealed class RunWorkerConsumer(
     private async Task StartRunAsync(RunScheduled scheduled, CancellationToken ct)
     {
         var runOptions = options.Value;
-        var runDir = Path.Combine(runOptions.WorkspaceRoot, $"run-{scheduled.RunId}");
-        Directory.CreateDirectory(runDir);
-        Directory.CreateDirectory(Path.Combine(runDir, "logs"));
-        await File.WriteAllTextAsync(
-            Path.Combine(runDir, "input.json"),
-            JsonSerializer.Serialize(scheduled.Input, new JsonSerializerOptions(JsonSerializerDefaults.Web)), ct);
+        var runDir = RunTree.Ensure(runOptions.WorkspaceRoot, scheduled.RunId, runOptions.ContainerUserId, scheduled.Input);
+
+        // profile secrets (docs/run-worker.md invariant 5 — provisioning is internal):
+        // the host-managed files bind read-only at /run/secrets/<name>; a name that does not
+        // resolve to an existing file fails the Run BEFORE the container exists — the agent
+        // would fail later with no hint (fail closed, the deleted Runtime API's rule).
+        var secretBinds = new List<string>();
+        foreach (var name in scheduled.Secrets ?? [])
+        {
+            var invalid = ProfileSecretName.Validate(name);
+            if (invalid is not null)
+            {
+                await FailProvisioningAsync(scheduled, $"invalid secret reference: {invalid}", ct);
+                return;
+            }
+            var managed = Path.Combine(runOptions.SecretsDir, name);
+            if (runOptions.SecretsDir.Length > 0 && !File.Exists(managed))
+            {
+                await FailProvisioningAsync(scheduled,
+                    $"secret_missing: profile secret '{name}' has no host-managed file under {runOptions.SecretsDir}", ct);
+                return;
+            }
+            if (runOptions.SecretsDir.Length > 0 && new FileInfo(managed).Length == 0)
+            {
+                await FailProvisioningAsync(scheduled,
+                    $"secret_missing: profile secret '{name}' exists but is empty; supply the host-managed secret value", ct);
+                return;
+            }
+            secretBinds.Add($"{runOptions.SecretsHostDir}/{name}:/run/secrets/{name}:ro");
+        }
 
         var token = Guid.NewGuid().ToString("N");
         var containerName = $"pi-session-{scheduled.RunId}";
@@ -68,17 +93,34 @@ public sealed class RunWorkerConsumer(
             // the default branch as its own pointer: the reviewer entry derives the review base
             // itself (merge-base origin/<default>, pinned head) — the run input has no base SHA
             $"GIT_DEFAULT_BRANCH={scheduled.Input.DefaultBranch}",
+            // the stub's scenario lever (only the stub reads it; real profiles ignore it)
+            $"STUB_BEHAVIOR={runOptions.StubBehavior}",
         };
         if (scheduled.Input.ReviewHeadSha is { } headSha)
             env.Add($"REVIEW_HEAD_SHA={headSha}");
         if (scheduled.Input.PrNumber is { } prNumber)
             env.Add($"REVIEW_PR_NUMBER={prNumber}");
 
+        // bind sources resolve on the HOST daemon (Docker-in-Docker): the workspace root the
+        // worker writes through its own container view has a separate host path (same directory)
+        var workspaceHostRoot = runOptions.WorkspaceHostRoot.Length > 0
+            ? runOptions.WorkspaceHostRoot
+            : runOptions.WorkspaceRoot;
+
         var plan = new ContainerPlan(
             Name: containerName,
             Image: $"{entry.Image}:{runOptions.ImageTag}",
             Env: [.. env],
-            Binds: [$"{runDir}:/run"],
+            Binds:
+            [
+                $"{workspaceHostRoot}/run-{scheduled.RunId}/{RunTree.WorkspaceDirName}:/workspace",
+                $"{workspaceHostRoot}/run-{scheduled.RunId}/session:/session",
+                $"{workspaceHostRoot}/run-{scheduled.RunId}/logs:/logs",
+                $"{workspaceHostRoot}/run-{scheduled.RunId}/spool:/spool",
+                // the run input (pointers v2): one file, the Bridge renders the prompt from it
+                $"{workspaceHostRoot}/run-{scheduled.RunId}/input.json:/run/input.json:ro",
+                .. secretBinds,
+            ],
             Labels: new Dictionary<string, string> { ["pi.run.id"] = scheduled.RunId.ToString() },
             Cpus: null,
             MemoryBytes: null,
@@ -103,6 +145,16 @@ public sealed class RunWorkerConsumer(
                 scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
                 Cause: $"provisioning failed: {ex.Message}"), ct);
         }
+    }
+
+    /// <summary>Fail-closed provisioning: the Run fails before the container exists, with the cause.</summary>
+    private async Task FailProvisioningAsync(RunScheduled scheduled, string cause, CancellationToken ct)
+    {
+        await log.AppendAsync(new RunFailed(
+            scheduled.RunId, scheduled.TaskId,
+            scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
+            Cause: cause), ct);
+        logger.LogInformation("run {run} not provisioned: {cause}", scheduled.RunId, cause);
     }
 
     private async Task StopRunAsync(RunStopRequested stop, CancellationToken ct)
