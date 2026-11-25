@@ -99,7 +99,9 @@ public sealed class RunWorkerConsumer(
             return; // nothing in flight
 
         await docker.StopAsync(entry.ContainerName, ct);
-        await docker.RemoveAsync(entry.ContainerName, ct);
+        // container removal is disabled by owner decision: the pi-session container and its
+        // logs stay on the host for diagnosability (docker logs pi-session-<runId>)
+        // await docker.RemoveAsync(entry.ContainerName, ct);
         registry.Remove(stop.RunId);
         await log.AppendAsync(new RunCancelled(
             stop.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber), ct);
@@ -137,7 +139,9 @@ public sealed class RunWorkerConsumer(
     {
         registry.Remove(entry.RunId);
         await docker.StopAsync(entry.ContainerName, ct);
-        await docker.RemoveAsync(entry.ContainerName, ct);
+        // container removal is disabled by owner decision: the pi-session container and its
+        // logs stay on the host for diagnosability (docker logs pi-session-<runId>)
+        // await docker.RemoveAsync(entry.ContainerName, ct);
 
         IEvent terminal = status switch
         {
