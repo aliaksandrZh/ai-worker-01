@@ -1,52 +1,25 @@
-# Planner agent profile image. Own build context, own Git clone path.
-# Pi is PINNED at build time (never floating `latest`; a Pi upgrade = a new AgentProfileVersion) and
-# the profile configuration is baked at /opt/pi-agent/profile, selected via PI_CODING_AGENT_DIR
-# (settings/models/MCP/system-prompt land here as the profile defines them).
+# Planner agent profile image (ticket 08): a slim layer over agent-runtime-base (pi + the
+# Runtime Bridge + the communication-channel bundle + the ONE shared entry). The agent delta
+# is data: agent.json (clone_mode + tools) + the prompt; mcp.json is GENERATED at build from
+# agent.json (the ticket-04 generator baked in the base). The GitHub MCP allow-list is
+# READ-ONLY: agents never write to GitHub (ADR-0001) — every publication is the Orchestrator's
+# act, triggered by a communication-tool call.
+FROM agent-runtime-base:latest
 
-# The official GitHub MCP server binary comes from the pinned upstream image (static Go binary at
-# /server/github-mcp-server); the tool allow-list travels in the baked mcp.json (GITHUB_TOOLS — the
-# server refuses unknown names at startup, fail-closed).
-ARG PI_VERSION=1.6.0
-ARG GH_MCP_VERSION=v2.2.0
+COPY agent.json profile.yaml APPEND_SYSTEM.md settings.json models.json /opt/pi-agent/profile/
+RUN node /opt/agent-runtime/communication-channel/dist/generate-mcpjson.mjs \
+      /opt/pi-agent/profile/agent.json \
+      --bundle /opt/agent-runtime/communication-channel/dist/server.mjs \
+      --manifest-arg /opt/pi-agent/profile/agent.json \
+      --github-token-file /run/secrets/github-read-pat.txt \
+      -o /opt/pi-agent/profile/mcp.json
 
-FROM ghcr.io/github/github-mcp-server:${GH_MCP_VERSION} AS gh-mcp
+# The token-file path pointer is non-secret configuration only — the token VALUE stays in the
+# host-managed read-only secret file. The planner holds the read-only PAT (context reads).
+ENV GIT_CLONE_TOKEN_FILE=/run/secrets/github-read-pat.txt
 
-FROM node:24-bookworm-slim
-ARG PI_VERSION
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" \
-    && npm cache clean --force
-
-# Official GitHub MCP server (planner's GitHub write path: add_issue_comment + issue_read only)
-COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
-
-WORKDIR /workspace
-# Profile configuration (control plane) + the pinned Runtime Bridge; uid 1000 (`node`) is the user the
-# Runtime API chowns the per-Run mounts to (task 09). `/opt/pi-agent/profile` is chowned to `node`
-# below — the FILES remain image-baked (the image is the sole source; nothing mounts over
-# them), the ownership only lets pi write its own state files (mcp.log et al.) inside the ephemeral
-# container layer the same way the PoC's owned /home/pi/.pi/agent did.
-COPY profile.yaml APPEND_SYSTEM.md settings.json models.json mcp.json /opt/pi-agent/profile/
-COPY runtime-bridge/ /opt/pi-agent/profile/runtime-bridge/
-COPY entry /usr/local/bin/agent-entry
-
-ENV PI_CODING_AGENT_DIR=/opt/pi-agent/profile
-# Agent launch: real pi in RPC mode; the Bridge appends --session-dir/--session-id per
-# Run. PI_REQUIRED_PUBLICATION_KINDS pins the publication mandate in the image: the Bridge's
-# toolcheck verifies the issue comment against the observed tool executions (nudging a missing
-# one; PI_PUBLICATION_NUDGES caps those follow-up prompts). PI_REQUIRED_PUBLICATION_KINDS /
-# PI_PUBLICATION_NUDGES / the token-file path pointer are non-secret configuration only — the token
-# VALUE stays in the host-managed secret file.
-ENV PI_AGENT_BIN=pi \
-    PI_AGENT_ARGS="--mode rpc" \
-    PI_REQUIRED_PUBLICATION_KINDS=issue_comment \
-    PI_PUBLICATION_NUDGES=2 \
-    GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
-
-RUN chmod +x /usr/local/bin/agent-entry /usr/local/bin/github-mcp-server \
-    && chown -R node:node /opt/pi-agent/profile
+# uid 1000 (`node`) is the user the Run Worker chowns the per-Run mounts to. /opt/pi-agent/profile
+# is chowned to `node` — the FILES remain image-baked (nothing mounts over them), the ownership
+# only lets pi write its own state files (mcp.log et al.) inside the ephemeral container layer.
+RUN chown -R node:node /opt/pi-agent/profile
 USER node
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/agent-entry"]
-CMD ["node", "/opt/pi-agent/profile/runtime-bridge/bridge.mjs"]

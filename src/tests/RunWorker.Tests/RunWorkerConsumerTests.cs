@@ -59,8 +59,11 @@ public sealed class RunWorkerConsumerTests
         var env = _docker.LastPlan!.Env;
         Assert.Contains("GIT_CLONE_REPO=o/r", env);
         Assert.Contains("GIT_CLONE_BRANCH=main", env);
+        // the default branch as its own pointer: the reviewer entry derives the review base itself
+        Assert.Contains("GIT_DEFAULT_BRANCH=main", env);
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_HEAD_SHA="));
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_PR_NUMBER="));
+        Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_BASE_SHA=")); // the review base is derived, never exported
     }
 
     [Fact]
@@ -95,6 +98,9 @@ public sealed class RunWorkerConsumerTests
         Assert.Contains("REVIEW_HEAD_SHA=cafe01", env);
         Assert.Contains("REVIEW_PR_NUMBER=12", env);
         Assert.Contains("GIT_CLONE_REPO=o/r", env);
+        // the reviewer derives the base itself: the default branch travels, a base SHA never does
+        Assert.Contains("GIT_DEFAULT_BRANCH=main", env);
+        Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_BASE_SHA="));
     }
 
     [Fact]

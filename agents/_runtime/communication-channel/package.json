@@ -5,7 +5,7 @@
   "description": "The agent's single channel to the Orchestrator/User: stdio MCP server exposing the 11 communication tools of docs/flows/tools.md, driven by an agent.json manifest.",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/server.mjs --bundle --format=esm --platform=node --outfile=dist/server.mjs",
+    "build": "esbuild src/server.mjs --bundle --format=esm --platform=node --outfile=dist/server.mjs && esbuild src/generate-mcpjson.mjs --bundle --format=esm --platform=node --outfile=dist/generate-mcpjson.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

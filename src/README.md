@@ -111,11 +111,11 @@ result → version `ready` (or `build_failed` on a real build failure). The work
 local JSON state under `BUILD_STATE_ROOT` (default `../runtime/builds`): results stay retrievable after
 worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
 with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
-Orchestrator's service credential. Pinned Pi + the baked `/opt/pi-agent/profile`
-are profile-Dockerfile responsibilities (see `agents/planner/Dockerfile`). The shared
-Runtime Bridge implementation is a single copy at `agents/_runtime/bridge/` (never per-profile);
-the Config Loader merges it into every profile's pinned snapshot under `runtime-bridge/` so the
-profile Dockerfiles keep `COPY runtime-bridge/` unchanged.
+Orchestrator's service credential. The shared runtime is assembled once as `agent-runtime-base`
+from `agents/_runtime/` (pinned Pi + bridge + communication channel + the ONE shared entry);
+each profile is a slim layer over it (see `agents/planner/Dockerfile`) — the agent delta is
+data: `agent.json` (name, clone_mode, tools, prompt path) + the baked APPEND_SYSTEM.md, with
+`mcp.json` generated at build from the manifest (ticket-04 generator).
 
 ## Context assembling
 

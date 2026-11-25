@@ -1,0 +1,6 @@
+# Image-build context for agent-runtime-base: the sources only — node_modules and the local
+# dist output are built inside the builder stage (npm ci + npm run build), never shipped in
+# the context.
+communication-channel/node_modules
+communication-channel/dist
+bridge/runtime-bridge.test.mjs

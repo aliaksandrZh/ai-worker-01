@@ -19,8 +19,7 @@
  * callback (docs/run-worker.md); failed calls produce no callback.
  *
  * Minimal MCP stdio server: JSON-RPC 2.0 lines over stdin/stdout (initialize,
- * notifications/initialized, tools/list, tools/call), in the style of agents/coder/run-outcome.mjs,
- * but built from source with zod validation. Usage:
+ * notifications/initialized, tools/list, tools/call), built from source with zod validation. Usage:
  *   node dist/server.mjs /path/to/agent.json     (or env AGENT_MANIFEST)
  */
 import { createInterface } from "node:readline";

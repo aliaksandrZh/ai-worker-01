@@ -48,11 +48,13 @@ tasks:
       - dotnet run --project src/Hosts/AppHost --no-launch-profile
 
   build-agents:
-    desc: 'Build agent profile images (agent-<profile>:v1) the Run Worker starts; deploy-time step until the build plane is reworked'
+    desc: 'Build the shared agent runtime base, then every agent profile image (agent-<profile>:latest, idempotent :latest overwrite) the Run Worker starts'
     cmds:
       - cmd: |
+          set -e
+          docker build -t agent-runtime-base:latest agents/_runtime
           for p in agents/*/; do
             n=$(basename "$p")
             [ "$n" = "_runtime" ] && continue
-            docker build -t "agent-$n:v1" "$p" || exit 1
+            docker build -t "agent-$n:latest" "$p" || exit 1
           done

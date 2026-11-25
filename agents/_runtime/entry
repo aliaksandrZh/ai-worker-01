@@ -1,0 +1,130 @@
+#!/bin/sh
+# The ONE shared agent entry (ticket 08): the clone prelude "token → clone → scrub" lives here
+# once, parameterized by the agent manifest's clone_mode (agent.json — the agent delta is data):
+#   plain            — clone the repository's default branch (planner)
+#   branch-continue  — clone GIT_CLONE_BRANCH (coder): the default branch on a first round (the
+#                      worker exports AgentBranch ?? DefaultBranch), the agent branch on a fix
+#                      round — plus the commit identity and the push credential helper
+#   pinned-review    — read-only pinned review checkout (reviewer): clone --no-checkout, fetch the
+#                      pinned head (refs/pull/<n>/head fallback), verify the pinned SHA, derive the
+#                      review base LOCALLY as git merge-base origin/$GIT_DEFAULT_BRANCH <head>
+#                      (REVIEW_BASE_SHA is gone from the run-input contract: the Orchestrator keeps
+#                      zero GitHub knowledge — docs/run-worker.md "Run input (pointers v2)")
+# GIT_CLONE_REPO / GIT_CLONE_BRANCH / REVIEW_HEAD_SHA / REVIEW_PR_NUMBER / GIT_DEFAULT_BRANCH are
+# runtime-injected by the Run Worker (pointers v2). The token lives ONLY in the host-managed file
+# mounted read-only at /run/secrets/<name> (GIT_CLONE_TOKEN_FILE is a baked path pointer) — never
+# in env vars, git config, or image layers.
+# Fork code is untrusted: nothing from the checkout is executed here (no install/build/test hooks).
+set -eu
+
+manifest=/opt/pi-agent/profile/agent.json
+clone_mode=plain
+if [ -f "${manifest}" ]; then
+  clone_mode=$(node -e "const m=require('${manifest}');process.stdout.write(typeof m.clone_mode==='string'&&m.clone_mode?m.clone_mode:'plain')" 2>/dev/null || echo plain)
+fi
+case "${clone_mode}" in
+  plain|branch-continue|pinned-review) ;;
+  *) echo "agent-entry: unknown clone_mode '${clone_mode}' in ${manifest}" >&2; exit 78 ;;
+esac
+
+token=""
+if [ -n "${GIT_CLONE_TOKEN_FILE:-}" ] && [ -f "${GIT_CLONE_TOKEN_FILE}" ]; then
+  token="$(tr -d '\r' < "${GIT_CLONE_TOKEN_FILE}" | head -n1)"
+fi
+
+if [ "${clone_mode}" = "pinned-review" ]; then
+  fail_source() {
+    # review_source_unavailable: the pinned head (or the derived base) cannot be resolved
+    echo "agent-entry: review_source_unavailable: $1" >&2
+    exit 75
+  }
+
+  if [ -n "${GIT_CLONE_REPO:-}" ]; then
+    # Fresh workspace only: a reviewer never reuses a coder workspace.
+    if [ -n "$(ls -A /workspace 2>/dev/null)" ]; then
+      echo "agent-entry: /workspace not empty — refusing to reuse a workspace for a review" >&2
+      exit 70
+    fi
+    : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to clone}"
+    : "${REVIEW_HEAD_SHA:?REVIEW_HEAD_SHA is required (the pinned review head)}"
+    : "${GIT_DEFAULT_BRANCH:?GIT_DEFAULT_BRANCH is required — the reviewer derives the review base itself via merge-base (docs/run-worker.md)}"
+
+    # Clone the BASE repository (never a fork remote), no checkout yet, then fetch the pinned head.
+    GIT_TERMINAL_PROMPT=0 git clone --no-checkout \
+      "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+    git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub the token
+
+    # The head may live on a fork: GitHub exposes every PR head at refs/pull/<n>/head of the base
+    # repo, so the pinned SHA is fetched from there (works for same-repo and fork PRs alike).
+    if [ -n "${REVIEW_PR_NUMBER:-}" ]; then
+      GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin \
+        "refs/pull/${REVIEW_PR_NUMBER}/head:refs/review/head" 2>/dev/null \
+        || GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin "${REVIEW_HEAD_SHA}" 2>/dev/null \
+        || fail_source "cannot fetch PR #${REVIEW_PR_NUMBER} head ${REVIEW_HEAD_SHA}"
+    else
+      GIT_TERMINAL_PROMPT=0 git -C /workspace fetch --quiet origin "${REVIEW_HEAD_SHA}" 2>/dev/null \
+        || fail_source "cannot fetch head ${REVIEW_HEAD_SHA}"
+    fi
+
+    # The checkout is pinned to the exact head; a head that does not resolve to the pinned SHA
+    # fails closed. The review base is DERIVED locally — never taken from the run input.
+    git -C /workspace cat-file -e "${REVIEW_HEAD_SHA}^{commit}" 2>/dev/null \
+      || fail_source "pinned head ${REVIEW_HEAD_SHA} is not present after fetch"
+    review_base=$(git -C /workspace merge-base "origin/${GIT_DEFAULT_BRANCH}" "${REVIEW_HEAD_SHA}") \
+      || fail_source "cannot derive the review base: merge-base origin/${GIT_DEFAULT_BRANCH} ${REVIEW_HEAD_SHA}"
+    git -C /workspace cat-file -e "${review_base}^{commit}" 2>/dev/null \
+      || fail_source "derived review base ${review_base} is not present"
+
+    git -C /workspace -c advice.detachedHead=false checkout --quiet --detach "${REVIEW_HEAD_SHA}"
+
+    # The diff is formed locally from the derived base and the pinned head — never via the GitHub
+    # files endpoint. Formed BEFORE the tree is made read-only, so the artifact can be written.
+    mkdir -p /workspace/.review
+    git -C /workspace diff --no-color "${review_base}..${REVIEW_HEAD_SHA}" > /workspace/.review/diff.patch 2>/dev/null \
+      || fail_source "cannot form diff ${review_base}..${REVIEW_HEAD_SHA}"
+
+    # Read-only where possible: the review never edits the CHECKOUT. Dot-directories (.review
+    # included) stay writable; everything else is chmod'd a-w.
+    find /workspace -mindepth 1 -maxdepth 1 ! -name '.*' -exec chmod -R a-w {} + 2>/dev/null || true
+    chmod a-w /workspace/.git 2>/dev/null || true
+    echo "agent-entry: checked out ${REVIEW_HEAD_SHA} (base ${review_base}) for ${GIT_CLONE_REPO}"
+  fi
+
+else
+  if [ -n "${GIT_CLONE_REPO:-}" ]; then
+    # Workspace persistence is per-Task (retry reuse): clone only into an EMPTY workspace.
+    if [ -z "$(ls -A /workspace 2>/dev/null)" ]; then
+      : "${token:?${GIT_CLONE_TOKEN_FILE:-GIT_CLONE_TOKEN_FILE} exists but holds no token — refusing to run without the repository clone}"
+      if [ "${clone_mode}" = "branch-continue" ]; then
+        # The fix-round workspace IS the pull request branch: clone that branch directly —
+        # the agent continues the EXISTING pull request (a push updates it; no second PR).
+        # On a first round the worker exports the default branch here.
+        : "${GIT_CLONE_BRANCH:?GIT_CLONE_BRANCH is required (branch-continue)}"
+        GIT_TERMINAL_PROMPT=0 git clone --branch "${GIT_CLONE_BRANCH}" \
+          "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace \
+          || { echo "agent-entry: fix_branch_unavailable: branch ${GIT_CLONE_BRANCH} cannot be cloned from ${GIT_CLONE_REPO}" >&2; exit 75; }
+        echo "agent-entry: cloned ${GIT_CLONE_REPO} branch ${GIT_CLONE_BRANCH} into /workspace"
+      else
+        GIT_TERMINAL_PROMPT=0 git clone \
+          "https://x-access-token:${token}@github.com/${GIT_CLONE_REPO}.git" /workspace
+        echo "agent-entry: cloned ${GIT_CLONE_REPO} into /workspace"
+      fi
+      git -C /workspace remote set-url origin "https://github.com/${GIT_CLONE_REPO}.git" # scrub the token
+    else
+      echo "agent-entry: /workspace not empty — keeping the existing workspace (retry reuse)"
+    fi
+
+    if [ "${clone_mode}" = "branch-continue" ]; then
+      # Commit identity for the agent's commits (not a secret; GitHub attributes pushes via the
+      # token account, the commit author string is cosmetic).
+      git -C /workspace config user.name  "${GIT_AUTHOR_NAME:-pi-coder-agent}"
+      git -C /workspace config user.email "${GIT_AUTHOR_EMAIL:-pi-coder-agent@users.noreply.github.com}"
+
+      # Push auth with NO token in any remote URL or persisted config: the helper reads the
+      # mounted token file per credential request (see /usr/local/bin/git-credential-pat-file).
+      git -C /workspace config credential.helper /usr/local/bin/git-credential-pat-file
+    fi
+  fi
+fi
+
+exec "$@"

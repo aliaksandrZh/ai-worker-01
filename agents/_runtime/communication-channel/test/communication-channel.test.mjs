@@ -192,6 +192,16 @@ test("generator: GITHUB_TOOLS = manifest context tools; communication entry runs
   assert.equal(json.mcpServers.communication.command, "node");
 });
 
+test("generator: token-file path pointer is per-agent (planner/reviewer read-only PAT, ticket 08)", () => {
+  const json = generateMcpJson({ name: "planner", tools: ["issue_read", "save_plan"] });
+  assert.equal(json.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN, "!cat /run/secrets/github-write-pat.txt"); // coder default
+  const ro = generateMcpJson(
+    { name: "planner", tools: ["issue_read", "save_plan"] },
+    { tokenFile: "/run/secrets/github-read-pat.txt" });
+  assert.equal(ro.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN, "!cat /run/secrets/github-read-pat.txt");
+  assert.equal(ro.mcpServers.github.env.GITHUB_TOOLS, "issue_read");
+});
+
 test("generator CLI writes the file with -o", () => {
   const dir = tempDir("comm-");
   try {
