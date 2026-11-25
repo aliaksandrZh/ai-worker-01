@@ -155,14 +155,16 @@ function answerPrompt() {
     toolCall(SAVE_PLAN, {
       goals: "implement the pipe",
       scope: "the runtime bridge",
-      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      // tools.md save_plan signature: acceptanceCriteria is the criteria text (scalar),
+      // steps[] is the only list
+      acceptanceCriteria: "bridge delivers the tool callbacks",
       steps: ["implement", "test"],
     }, { progress: true });
   } else {
     toolCall(SAVE_PLAN, {
       goals: "implement the pipe",
       scope: "the runtime bridge",
-      acceptanceCriteria: ["bridge delivers the tool callbacks"],
+      acceptanceCriteria: "bridge delivers the tool callbacks",
       steps: ["implement", "test"],
     }, { progress: true });
   }

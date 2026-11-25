@@ -70,7 +70,10 @@ const terminalMarker = join(spoolDir, ".terminal-delivered");
 // The communication vocabulary (docs/flows/tools.md; docs/run-worker.md 'Communication tool
 // callbacks'): the eleven flow-driving tool names, HARDCODED — the flows contract is one for every
 // profile; a change to the set or a signature is a bridge contract bump (bridge.json stamp). The
-// normalized name is the last `__` segment of the server-prefixed call name.
+// normalized name is the last `__` segment of the server-prefixed call name. report_completion is
+// IN the vocabulary but NEVER a `tool` callback: its observed call is the completion mandate's
+// settle signal, rendered as the terminal `completed` callback — the route-tool adapter (the
+// worker's tool→event map) deliberately never sees it (docs/run-worker.md, ticket-03 amendment).
 const TOOL_ROUTE_VOCABULARY = new Set([
   "save_plan", "request_clarification", "report_blocker", "submit_review_comments",
   "request_decision", "report_bug", "report_env_issue", "request_criteria_clarification",
@@ -281,7 +284,7 @@ async function main() {
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)
         && !mapper.deniedToolCallIds.has(payload.toolCallId)) {
       const normalized = normalizeToolName(payload.toolName ?? toolNameByCallId.get(payload.toolCallId));
-      if (TOOL_ROUTE_VOCABULARY.has(normalized)) {
+      if (TOOL_ROUTE_VOCABULARY.has(normalized) && normalized !== COMPLETION_TOOL) {
         const eventId = `${runId}-tool-${payload.toolCallId}`;
         spool.append({
           id: eventId,
