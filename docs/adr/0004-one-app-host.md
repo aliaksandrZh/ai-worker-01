@@ -1,5 +1,14 @@
 # One app host: workers become in-process consumers
 
+> **Amendment (implementation).** The EF migration history is not just reset to one
+> baseline — EF is gone entirely: `Infrastructure` and `Migrator` were deleted, and the
+> schema is owned by each module's idempotent bootstrap DDL (`EnsureSchemaAsync` at host
+> startup, before consumers). One schema owner per module, no migration choreography;
+> `task stack` gates on postgres health alone. Old-growth deleted in stage 3: the five
+> old hosts, `OrchestrationApi`, `MonitorTelemetryApi`, service-token auth, the GitHub
+> mirror, and the whole build/config plane — agent profile images are built at deploy
+> time (`task build-agents`) until the build plane is reworked.
+
 Six executables (RuntimeApi, Orchestrator, Poller, OutboxWorker, BuildWorker,
 HostMonitor) each pay the full host tax — Program.cs, DI, health/readyz/metrics
 endpoints, heartbeat, Dockerfile, compose entry — on a single-host deployment where the
