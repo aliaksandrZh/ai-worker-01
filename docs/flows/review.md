@@ -5,14 +5,14 @@ START(["Pull Request created / updated"])
 subgraph REVIEW["3. CODE REVIEW — Review Agent"]
     direction TB
 
-    R1["Review Agent: analyzes Pull Request"]
+    R1["Review Agent: analyzes Pull Request<br/><br/>github_pr_read<br/>github_pr_diff<br/>github_comments_read<br/>built-in code read"]
     R2{"Are there any review comments?"}
     R3{"Can the issues be resolved without user input?"}
 
-    R4["Review Agent → Orchestrator:<br/>submits review comments"]
+    R4["Review Agent → Orchestrator:<br/>submits review comments<br/><br/>submit_review_comments"]
     R5["Orchestrator → Coder:<br/>assigns fixes and passes review comments"]
 
-    R6["Review Agent → Orchestrator:<br/>reports issue, context, and possible solutions"]
+    R6["Review Agent → Orchestrator:<br/>reports issue, context, and possible solutions<br/><br/>request_decision"]
     R7["Orchestrator → User:<br/>requests decision"]
     R8["Waiting for Human"]
     R9{"User decision"}
