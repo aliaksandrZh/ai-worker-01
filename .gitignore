@@ -44,3 +44,6 @@ dev/env/*.env
 
 # macOS Finder metadata
 **/.DS_Store
+
+# local task orchestration (never commit)
+.scratch/
