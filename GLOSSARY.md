@@ -24,8 +24,8 @@ A single execution of an agent inside a Task.
 _Avoid_: session, execution
 
 **Run lifecycle**:
-The state machine every Run passes through — scheduled, processing, completed, failed —
-where each transition is an event the Orchestrator reacts to.
+The state machine every Run passes through — scheduled, processing, completed, failed,
+cancelled — where each transition is an event the Orchestrator reacts to.
 
 **Waiting for Human**:
 A Task state: the flow stage is paused until exactly one user event arrives.
@@ -42,6 +42,25 @@ _Avoid_: slash command, hook
 A signal the Orchestrator reacts to by starting or restarting a flow: a user action, a
 GitHub state change, a board transition, or an agent's tool call.
 _Avoid_: trigger, notification
+
+**Event log**:
+The append-only Postgres log every module writes to and reads from — the single channel
+between modules and the single source of truth for what happened.
+_Avoid_: bus, queue, outbox
+
+**Stream**:
+The ordering unit of the event log: all events of one root item. Strict order inside,
+parallel across.
+_Avoid_: partition, topic
+
+**Consumer**:
+A config-gated worker loop that processes its event types from the log; several
+instances may run the same consumer.
+_Avoid_: worker (run worker is a specific consumer), handler
+
+**Dead-letter**:
+Where the log parks an event after repeated failed deliveries, for inspection and replay.
+_Avoid_: poison queue
 
 **Completion**:
 The explicit parameterless signal with which every agent ends its Run (`report_completion`).

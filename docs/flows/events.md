@@ -1,5 +1,9 @@
 # Events
 
+> Events are delivered through the Postgres Event Log ([../eventlog.md](../eventlog.md),
+> [ADR-0002](../adr/0002-event-log.md)) — this document is their vocabulary, not their
+> transport.
+>
 > An **event** is anything the Orchestrator must react to: a user action, a GitHub state
 > change, a board/label transition, or an agent's tool call. The Orchestrator consumes
 > events, updates Workflow state, and starts or restarts the mapped flow — a restarted flow
@@ -15,17 +19,26 @@
 
 | Event | Produced by | Effect |
 |---|---|---|
-| `user_command` | a trigger command on an issue or PR (the trigger set is defined separately — commands are triggers, not flows) | starts the mapped flow (→ `run_scheduled`) |
+| `user_command` | the Poller parses a slash command on an issue or PR (grammar, author permission and resolved target travel in the payload — the trigger set is defined separately) | starts the mapped flow (→ `run_scheduled`) |
 | `user_reply` | the User answers a clarification, blocker, or env-issue request | resumes the paused flow: new Run of the waiting agent with the response |
 | `user_decision` | plan approved / changes requested; review escalation resolved (fixes / change scope / accept risk); test results accepted / bug found / does not meet requirements | routes the decision to the flow stage that asked for it |
 | `user_cancel` | the User cancels the workflow | all related events, tasks, and runs stop: the running container is stopped immediately, the Run is marked failed-by-cancel (no retry), the Workflow → cancelled |
 
-## GitHub state events (Poller-synced)
+## Sync events (Poller → EventLog)
 
-| Event | Produced by | Effect |
-|---|---|---|
-| `pr_updated` | new commits land on the PR | starts the next review round |
-| `item_closed` | the root issue or PR is closed | closes the Workflow and its storage; in-flight runs stop, as on `user_cancel` |
+Raw normalized GitHub state changes — the only GitHub facts any other module consumes
+([../github-sync.md](../github-sync.md)); the Poller derives `user_command` from parsed
+comments. Stream key: the root item, else the repo.
+
+| Event | Carries |
+|---|---|
+| `item_changed` | issue/PR: title, body, state |
+| `item_closed` | explicit terminal beat when the root item closes — closes the Workflow; in-flight runs stop, as on `user_cancel` |
+| `comment_changed` | added / edited / **deleted** (tombstone flag) |
+| `review_added` | submitted review: verdict + inline comments |
+| `pr_updated` | new commits on the PR — starts the next review round |
+| `project_item_changed` | board card: column, link to its item |
+| `labels_changed` | AI-scope labels — read-only, trigger material |
 
 ## Board / label events (Projects v2)
 
@@ -52,6 +65,21 @@ releases it.
 | `criteria_clarification_requested` | `request_criteria_clarification` | `waiting_for_human`, routes the answer to the Planner |
 | `tests_passed` | `report_tests_passed` | manual acceptance policy check |
 
+## Publication events (Orchestrator → Publisher)
+
+The Orchestrator's output channel to the Publisher consumer
+([../publisher.md](../publisher.md)): one event per artifact, deterministic idempotency
+key, riding the root item's stream.
+
+| Event | Covers |
+|---|---|
+| `publish_comment` | plan, bug report, notification — an issue/PR comment |
+| `publish_pr` | PR create/update |
+| `publish_review` | review outcome: approve / request changes |
+| `publish_board_move` | Projects v2 card status |
+
+Labels are never written — AI-scope labels are read-only triggers.
+
 ## Run lifecycle events
 
 Every accepted event that needs agent work — a `user_command`, a resuming
@@ -68,8 +96,10 @@ are Orchestrator policy decisions made while processing events, not flow nodes.
 |---|---|---|
 | `run_scheduled` | Orchestrator, after admitting any event | the Run is queued; the run worker claims it when capacity allows |
 | `run_processing` | run worker, on claiming the Run | the agent Run starts |
+| `run_stop_requested` | Orchestrator, on the cancel path | the run worker stops the container (see [../run-worker.md](../run-worker.md)) |
 | `run_completed` | run worker, on a Run settled **with** `report_completion` | starts the next flow stage per the fixed order (development → review → testing), or a `waiting_for_human` state |
-| `run_failed` | run worker — when the Run cannot be started, settles **without** `report_completion`, or crashes | auto-retry or `waiting_for_human` — the Orchestrator decides; on giving up it notifies the User |
+| `run_failed` | run worker — when the Run cannot be started, settles **without** `report_completion`, crashes, or hits the watchdog timeout | auto-retry or `waiting_for_human` — the Orchestrator decides; on giving up it notifies the User |
+| `run_cancelled` | run worker, on stopping for `run_stop_requested` | the Run is terminal; the Task → cancelled |
 
 ## Not events
 
