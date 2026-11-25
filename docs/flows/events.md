@@ -57,6 +57,7 @@ releases it.
 | Event | Produced by tool | Effect |
 |---|---|---|
 | `plan_saved` | `save_plan` | publishes the plan as a comment in the issue, runs the approval step |
+| `clarification_requested` | `request_clarification` | `waiting_for_human`, routes the answer back to the Planner |
 | `blocker_reported` | `report_blocker` | `waiting_for_human` |
 | `review_comments_submitted` | `submit_review_comments` | publishes the comments to the PR, starts a fixing Coder Run |
 | `review_decision_requested` | `request_decision` | `waiting_for_human` |
