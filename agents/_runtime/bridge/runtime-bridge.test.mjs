@@ -8,16 +8,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { EventMapper, isSuccessfulToolEnd } from "./events.mjs";
+import { EventMapper, isSuccessfulToolEnd, normalizeToolName } from "./events.mjs";
 import { openSpool } from "./spool.mjs";
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { Trio } from "./logs.mjs";
-import { checkPublications, nudgePrompt, verdictNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal, gitFacts, renderPrompt } from "./toolcheck.mjs";
+import { completionNudgePrompt, renderPrompt } from "./prompt.mjs";
+import { completedTerminal, gitFacts } from "./terminal.mjs";
 
 // The stub CLI lives in the stub profile (only agent that bakes it); cross-reference kept explicit.
 const AGENT = fileURLToPath(new URL("../../stub/stub-agent/pi-stub.mjs", import.meta.url));
@@ -26,20 +27,22 @@ function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-// ---- EventMapper: pi→RunEvent mapping ----
+// ---- EventMapper: pi→RunEvent mapping (the canonical stream — top-level fields,
+// typed assistantMessageEvent, isError; no dual-protocol shapes remain) ----
 
-test("EventMapper maps the prompt event sequence one to one", () => {
+test("EventMapper maps the canonical prompt event sequence one to one", () => {
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    JSON.stringify({ id: "1", type: "agent_start", data: { sessionId: "s" } }),
+    JSON.stringify({ id: "1", type: "agent_start" }),
     JSON.stringify({ id: "2", type: "turn_start" }),
-    JSON.stringify({ id: "3", type: "message_update", data: { delta: "Analyzing " } }),
-    JSON.stringify({ id: "4", type: "tool_execution_start", data: { toolCallId: "c1", toolName: "t" } }),
-    JSON.stringify({ id: "5", type: "tool_execution_update", data: { toolCallId: "c1" } }),
-    JSON.stringify({ id: "6", type: "tool_execution_end", data: { toolCallId: "c1", toolName: "t", status: "completed" } }),
+    JSON.stringify({ id: "3", type: "message_update",
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Analyzing " } }),
+    JSON.stringify({ id: "4", type: "tool_execution_start", toolCallId: "c1", toolName: "t", args: {} }),
+    JSON.stringify({ id: "5", type: "tool_execution_update", toolCallId: "c1" }),
+    JSON.stringify({ id: "6", type: "tool_execution_end", toolCallId: "c1", toolName: "t", isError: false }),
     JSON.stringify({ id: "7", type: "turn_end" }),
-    JSON.stringify({ id: "8", type: "agent_settled", data: {} }),
+    JSON.stringify({ id: "8", type: "agent_settled", aborted: false }),
     JSON.stringify({ id: "c1", type: "response", command: "prompt", success: true, data: { disposition: "started" } }),
   ]) mapper.onLine(line);
 
@@ -48,7 +51,7 @@ test("EventMapper maps the prompt event sequence one to one", () => {
   ]);
   assert.equal(mapper.settled, true);
   const toolCompleted = emitted.find((e) => e.type === "tool_completed");
-  assert.deepEqual(toolCompleted.payload, { toolCallId: "c1", toolName: "t", status: "completed" });
+  assert.deepEqual(toolCompleted.payload, { toolCallId: "c1", toolName: "t", isError: false });
   assert.equal(emitted.every((e) => typeof e.eventId === "string" && e.eventId.length > 0), true);
 });
 
@@ -56,24 +59,26 @@ test("EventMapper aggregates text deltas (no per-token events) and flushes on se
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    JSON.stringify({ type: "message_update", data: { delta: "one " } }),
-    JSON.stringify({ type: "message_update", data: { delta: "two" } }),
-    JSON.stringify({ type: "agent_settled", data: {} }),
+    JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "one " } }),
+    JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "two" } }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
   ]) mapper.onLine(line);
   const assistant = emitted.filter((e) => e.type === "assistant_output");
   assert.equal(assistant.length, 1); // aggregated BEFORE persistence
   assert.deepEqual(assistant[0].payload, { text: "one two" });
 });
 
-test("EventMapper: thinking deltas, queue updates and empty text are not events", () => {
+test("EventMapper: thinking deltas, untyped updates, queue updates and empty text are not events", () => {
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    // real pi thinking stream events are typed and never become RunEvents
+    // typed thinking stream events never become RunEvents
     JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "hmm" } }),
-    JSON.stringify({ type: "message_update", data: { delta: "" } }),
-    JSON.stringify({ type: "queue_update", data: { queued: 1 } }),
-    JSON.stringify({ type: "unknown_stream_type", data: {} }),
+    // canonical protocol: only typed text_delta is assistant output — an untyped delta is not
+    JSON.stringify({ type: "message_update", delta: "legacy shape" }),
+    JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "" } }),
+    JSON.stringify({ type: "queue_update", queued: 1 }),
+    JSON.stringify({ type: "unknown_stream_type" }),
     JSON.stringify({ type: "response", command: "prompt", success: true, id: "r1" }),
   ]) mapper.onLine(line);
   assert.equal(emitted.length, 0);
@@ -108,27 +113,34 @@ test("EventMapper maps real pi shapes: nested text deltas, top-level tool events
   assert.deepEqual(completed.payload, { toolCallId: "c9", toolName: "mcp__github__add_issue_comment", isError: false });
 });
 
-/** Mirrors the Bridge's correlation set building (only error-free completed ends count). */
-function completedToolCallsFrom(records) {
-  const set = new Set();
+test("normalizeToolName strips the server prefix; a bare name passes through", () => {
+  assert.equal(normalizeToolName("mcp__github__add_issue_comment"), "add_issue_comment");
+  assert.equal(normalizeToolName("mcp__communication__report_completion"), "report_completion");
+  assert.equal(normalizeToolName("bash"), "bash");
+});
+
+/** Mirrors the Bridge's completion-mandate set building (only error-free completed ends count,
+ * names normalized to their bare form). */
+function completedToolNamesFrom(records) {
+  const names = new Set();
   const mapper = new EventMapper((entry) => {
     if (entry.body.type === "tool_completed" && isSuccessfulToolEnd(entry.body.payload))
-      set.add(entry.body.payload.toolCallId);
+      names.add(normalizeToolName(entry.body.payload.toolName));
   }, 5);
   for (const line of records) mapper.onLine(line);
-  return set;
+  return names;
 }
 
-test("isSuccessfulToolEnd: pi isError and stub status determine the correlation set", () => {
-  const set = completedToolCallsFrom([
-    JSON.stringify({ type: "tool_execution_end", toolCallId: "ok", toolName: "add_issue_comment", isError: false }),
-    JSON.stringify({ type: "tool_execution_end", toolCallId: "bad", toolName: "add_issue_comment", isError: true }),
-    JSON.stringify({ type: "tool_execution_end", toolCallId: "stub", status: "completed" }),
+test("isSuccessfulToolEnd: the canonical isError field determines the correlation set", () => {
+  const names = completedToolNamesFrom([
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "ok", toolName: "mcp__communication__report_completion", isError: false }),
+    JSON.stringify({ type: "tool_execution_end", toolCallId: "bad", toolName: "mcp__communication__report_completion", isError: true }),
   ]);
-  assert.deepEqual([...set].sort(), ["ok", "stub"]);
+  // the server-prefixed name is normalized — the completion mandate matches the bare name
+  assert.deepEqual([...names], ["report_completion"]);
   assert.equal(isSuccessfulToolEnd({ toolCallId: "ok", isError: false }), true);
   assert.equal(isSuccessfulToolEnd({ toolCallId: "bad", isError: true }), false);
-  assert.equal(isSuccessfulToolEnd({ toolCallId: "x", status: "failed" }), false);
+  assert.equal(isSuccessfulToolEnd({ toolCallId: "x" }), true); // canonical ends carry isError; absent is not a failure
   assert.equal(isSuccessfulToolEnd(null), false);
 });
 
@@ -164,156 +176,74 @@ test("promptDisposition: only 'started' begins a run", () => {
   assert.equal(promptDisposition({}), undefined);
 });
 
-// ---- publication toolcheck + terminal shape ----
+// ---- the completion mandate: prompt + terminal shape ----
 
-test("checkPublications confirms mandated kinds from observed tool names", () => {
-  assert.equal(checkPublications(["issue_comment"], new Set(["add_issue_comment"])).ok, true);
-  // real pi reports the server-prefixed MCP name — the normalization strips the `mcp__<server>__`
-  assert.equal(checkPublications(["issue_comment"], new Set(["mcp__github__add_issue_comment"])).ok, true);
-  assert.equal(checkPublications(["pull_request"], new Set(["mcp__github__create_pull_request"])).ok, true);
-  assert.equal(checkPublications(["review"], new Set(["mcp__github__pull_request_review_write"])).ok, true);
-  const missing = checkPublications(["issue_comment", "pull_request"], new Set(["add_issue_comment"]));
-  assert.deepEqual(missing, { ok: false, missing: ["pull_request"], denied: [] });
-  // a kind with no mapped tool can never be confirmed — it fails diagnosably, not silently
-  const unknown = checkPublications(["mystery"], new Set(["add_issue_comment"]));
-  assert.deepEqual(unknown, { ok: false, missing: ["mystery"], denied: [] });
+test("completionNudgePrompt names the completion tool and the no-false-completion rule", () => {
+  const message = completionNudgePrompt("report_completion");
+  assert.match(message, /report_completion/);
+  assert.match(message, /never\s+call it for work you did not finish/i);
 });
 
-test("checkPublications: a mandated kind denied by the permission policy fails required_permission_denied", () => {
-  const denied = checkPublications(["issue_comment"], new Set(), new Set(["mcp__github__add_issue_comment"]));
-  assert.deepEqual(denied, { ok: false, missing: [], denied: ["issue_comment"] });
-  // a denial of a tool no mandate needs does not affect the run
-  assert.equal(checkPublications([], new Set(), new Set(["add_issue_comment"])).ok, true);
+test("renderPrompt renders only the pointers of the run input (pointers v2)", () => {
+  const prompt = renderPrompt({
+    owner: "acme", repo: "widgets", itemNumber: 42, prNumber: 7, planCommentId: 12345,
+    command: "fix the flaky test", profile: "coder",
+    agentBranch: "agent/42", defaultBranch: "main", reviewHeadSha: "abc123",
+  });
+  assert.match(prompt, /# Task/);
+  assert.match(prompt, /- Issue: acme\/widgets#42/);
+  assert.match(prompt, /- PR: #7/);
+  assert.match(prompt, /- Plan comment: #12345/);
+  assert.match(prompt, /fix the flaky test/);
+  assert.match(prompt, /- Profile: coder/);
+  assert.match(prompt, /- Agent branch: agent\/42/);
+  assert.match(prompt, /- Default branch: main/);
+  assert.match(prompt, /- Review head SHA: abc123/);
+  // the rich sections are dead against the pointers input (ADR-0006) — none survive
+  for (const dead of ["## ", "Work item body", "Conversation", "Submitted reviews", "Review threads",
+    "Input artifacts", "Labels", "Title:", "Instructions"])
+    assert.equal(prompt.includes(dead), false, `rich section leaked: ${dead}`);
 });
 
-test("nudgePrompt names the missing kinds and the no-duplicate rule", () => {
-  const message = nudgePrompt(["issue_comment", "pull_request"]);
-  assert.match(message, /issue_comment, pull_request/);
-  assert.match(message, /Never duplicate/);
+test("renderPrompt skips pointers absent from the input and invents nothing", () => {
+  const prompt = renderPrompt({
+    owner: "acme", repo: "widgets", itemNumber: 1, command: "go", profile: "planner",
+    defaultBranch: "main",
+  });
+  assert.match(prompt, /- Issue: acme\/widgets#1/);
+  assert.match(prompt, /- Command:\n  go/);
+  assert.match(prompt, /- Profile: planner/);
+  assert.match(prompt, /- Default branch: main/);
+  assert.equal(prompt.includes("PR:"), false);
+  assert.equal(prompt.includes("Plan comment"), false);
+  assert.equal(prompt.includes("Agent branch"), false);
+  assert.equal(prompt.includes("Review head"), false);
 });
 
-test("collectArtifacts maps the artifacts/ directory by convention (no agent-side JSON)", () => {
-  const workspace = tempDir("ws-");
-  mkdirSync(join(workspace, "artifacts"), { recursive: true });
-  writeFileSync(join(workspace, "artifacts", "plan.md"), "THE PLAN");
-  writeFileSync(join(workspace, "artifacts", "summary.json"), "{}");
-  writeFileSync(join(workspace, "artifacts", "notes.txt"), "n");
-  const { artifacts, error } = collectArtifacts(workspace);
-  assert.equal(error, null);
-  assert.deepEqual(artifacts, [
-    { type: "custom", format: "text", path: "artifacts/notes.txt" },
-    { type: "plan", format: "markdown", path: "artifacts/plan.md" },
-    { type: "custom", format: "json", path: "artifacts/summary.json" },
-  ]);
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("collectArtifacts: no directory → no artifacts; oversize file fails without truncation", () => {
-  const empty = tempDir("ws-empty-");
-  assert.deepEqual(collectArtifacts(empty), { artifacts: [], error: null });
-  rmSync(empty, { recursive: true, force: true });
-
-  const workspace = tempDir("ws-");
-  mkdirSync(join(workspace, "artifacts"), { recursive: true });
-  writeFileSync(join(workspace, "artifacts", "big.md"), "x".repeat(256 * 1024 + 1));
-  const { error } = collectArtifacts(workspace);
-  assert.equal(error.code, "artifact_too_large");
-  assert.ok(statSync(join(workspace, "artifacts", "big.md")).size > 256 * 1024); // file intact
-  rmSync(workspace, { recursive: true, force: true });
-});
-
-test("completedTerminal carries summary, artifacts, session path and git facts", () => {
+test("completedTerminal carries summary, git facts and session path — never artifacts or outcome", () => {
   const workspace = tempDir("ws-");
   execFileSync("git", ["init", "-q", "-b", "agent/pipe-stub", workspace]);
   execFileSync("git", ["-C", workspace, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-q", "-m", "k"]);
-  const terminal = completedTerminal("run-1", "/session/run-1.jsonl", "s",
-    [{ type: "plan", format: "markdown", path: "artifacts/plan.md" }], gitFacts(workspace));
+  const terminal = completedTerminal("run-1", "/session/run-1.jsonl", "s", gitFacts(workspace));
   assert.equal(terminal.route, "completed");
   assert.equal(terminal.id, "evt-run-1-terminal");
   assert.equal(terminal.body.eventId, "evt-run-1-terminal");
   assert.equal(terminal.body.sessionFilePath, "/session/run-1.jsonl");
   assert.equal(terminal.body.result.summary, "s");
-  assert.deepEqual(terminal.body.result.artifacts, [{ type: "plan", format: "markdown", path: "artifacts/plan.md" }]);
   assert.equal(terminal.body.result.branch, "agent/pipe-stub");
   assert.match(terminal.body.result.commitSha, /^[0-9a-f]{40}$/);
+  assert.equal("artifacts" in terminal.body.result, false); // the artifacts/ convention is dead
+  assert.equal("outcome" in terminal.body, false);          // the review verdict is gone with the mandates
+
+  // a fact-less workspace: null pointers, still a valid terminal without a session path
+  const bareWorkspace = tempDir("ws-bare-");
+  const bare = completedTerminal("run-2", null, "run completed", gitFacts(bareWorkspace));
+  assert.equal(bare.body.result.summary, "run completed");
+  assert.equal(bare.body.result.branch, null);
+  assert.equal(bare.body.result.commitSha, null);
+  assert.equal(bare.body.sessionFilePath, undefined);
   rmSync(workspace, { recursive: true, force: true });
-});
-
-test("completedTerminal carries the review verdict as outcome; absent verdict means no outcome key", () => {
-  const verdict = completedTerminal("run-1", null, "s", [], {}, "changes_requested");
-  assert.equal(verdict.body.outcome, "changes_requested");
-  const silent = completedTerminal("run-1", null, "s", [], {}, undefined);
-  assert.equal("outcome" in silent.body, false); // a passing review adds nothing
-});
-
-// ---- reviewVerdict: the mandate reads the OBSERVED tool calls (names + args) ----
-
-test("reviewVerdict: the changes tool decides changes_requested; APPROVE submit decides passed", () => {
-  const requested = reviewVerdict(
-    [{ toolName: "mcp__outcome__request_changes", args: { reason: "broken" } }], "request_changes");
-  assert.deepEqual(requested, { decided: true, changesRequested: true });
-
-  const approved = reviewVerdict([
-    { toolName: "mcp__github__pull_request_review_write", args: { method: "submit_pending", event: "APPROVE" } },
-  ], "request_changes");
-  assert.deepEqual(approved, { decided: true, changesRequested: false });
-
-  // a REQUEST_CHANGES submission without the tool call is a verdict too
-  const submittedChanges = reviewVerdict([
-    { toolName: "pull_request_review_write", args: { method: "submit_pending", event: "request_changes" } },
-  ], "request_changes");
-  assert.deepEqual(submittedChanges, { decided: true, changesRequested: true });
-
-  // a COMMENT submission is NOT a verdict; nor is a create/inline call or silence
-  const commented = reviewVerdict([
-    { toolName: "pull_request_review_write", args: { method: "submit_pending", event: "COMMENT" } },
-    { toolName: "pull_request_review_write", args: { method: "create" } },
-  ], "request_changes");
-  assert.deepEqual(commented, { decided: false, changesRequested: false });
-  assert.deepEqual(reviewVerdict([], "request_changes"), { decided: false, changesRequested: false });
-});
-
-// ---- review-outcome MCP server: the review→fix loop's verdict marker ----
-
-test("review-outcome server answers initialize, lists the tool and records the call", async () => {
-  const server = fileURLToPath(new URL("../../reviewer/review-outcome.mjs", import.meta.url));
-  const send = (input) => spawnSync("node", [server], { input, encoding: "utf8" }).stdout
-    .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
-
-  const initialized = send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }));
-  assert.equal(initialized[0].result.serverInfo.name, "review-outcome");
-
-  const listed = send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-  assert.ok(listed[0].result.tools.some((t) => t.name === "request_changes"));
-
-  const called = send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "request_changes", arguments: { reason: "the loop leaks" } } }));
-  assert.match(called[0].result.content[0].text, /requests changes/);
-
-  // a call without a reason is a protocol error; notifications are never answered
-  const invalid = send(JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "request_changes", arguments: {} } }));
-  assert.equal(invalid[0].error.code, -32602);
-  const silent = send(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }));
-  assert.equal(silent.length, 0);
-});
-
-// ---- run-outcome MCP server: the coder's completion marker ----
-
-test("run-outcome server answers initialize, lists the tool and records the call", async () => {
-  const server = fileURLToPath(new URL("../../coder/run-outcome.mjs", import.meta.url));
-  const send = (input) => spawnSync("node", [server], { input, encoding: "utf8" }).stdout
-    .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
-
-  const initialized = send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }));
-  assert.equal(initialized[0].result.serverInfo.name, "run-outcome");
-
-  const listed = send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-  assert.ok(listed[0].result.tools.some((t) => t.name === "work_completed"));
-
-  const called = send(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "work_completed", arguments: { summary: "fixes pushed" } } }));
-  assert.match(called[0].result.content[0].text, /work is complete/);
-
-  const invalid = send(JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "work_completed", arguments: {} } }));
-  assert.equal(invalid[0].error.code, -32602);
+  rmSync(bareWorkspace, { recursive: true, force: true });
 });
 
 // ---- spool: durable append, coalescing, redelivery ----
@@ -466,17 +396,26 @@ test("EventMapper over the stub succeed stream: the canonical records map withou
   assert.deepEqual(
     emitted.find((e) => e.type === "assistant_output").payload,
     { text: "Analyzing the received prompt and publishing the result (stub)." });
-  // the observed completed calls (the Bridge's correlation set): every tool call of the run,
-  // under its original name — the consumer normalizes the server prefix
-  assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+  // the observed completed calls under their bare names — the completion mandate's set:
+  // every successful tool call of the run, server prefix normalized
+  assert.deepEqual([...observedToolNames(emitted)].sort(), [
     "bash",
-    "mcp__github__get_file_contents",
-    "mcp__communication__save_plan",
-    "mcp__communication__submit_pr_description",
-    "mcp__communication__report_completion",
+    "get_file_contents",
+    "report_completion",
+    "save_plan",
+    "submit_pr_description",
   ]);
   rmSync(workspace, { recursive: true, force: true });
 });
+
+/** The Bridge's completion-mandate set built from the mapper's emissions. */
+function observedToolNames(emitted) {
+  const names = new Set();
+  for (const body of emitted)
+    if (body.type === "tool_completed" && isSuccessfulToolEnd(body.payload))
+      names.add(normalizeToolName(body.payload.toolName));
+  return names;
+}
 
 test("stub no_completion behavior: the work settles WITHOUT report_completion (the nudge lever)", () => {
   const workspace = tempDir("ws-nocomp-");
@@ -542,12 +481,12 @@ test("stub bad_payload behavior: the isError end is observed but never a complet
     && e.payload.toolName === "mcp__communication__save_plan");
   assert.equal(badEnd.payload.isError, true);
   // ...but it joins no correlation set: only the corrected retry (and the completion) count
-  assert.deepEqual(mapper.completedToolCalls.map((call) => call.toolName), [
+  assert.deepEqual([...observedToolNames(emitted)].sort(), [
     "bash",
-    "mcp__github__get_file_contents",
-    "mcp__communication__save_plan", // the retry with the valid payload
-    "mcp__communication__submit_pr_description",
-    "mcp__communication__report_completion",
+    "get_file_contents",
+    "report_completion",
+    "save_plan", // the retry with the valid payload
+    "submit_pr_description",
   ]);
   assert.equal(isSuccessfulToolEnd(badEnd.payload), false); // no `tool` route event from it (ticket 06)
 });
@@ -963,102 +902,74 @@ test("bridge restart mid-run: the spool redelivers `tool` callbacks verbatim and
   e2eCleanup(dirs);
 });
 
-// ---- the run-outcome mandate (end-to-end: the previously-undetected branch lives here) ----
+// ---- the completion mandate (end-to-end): ONE loop, `report_completion` hardcoded ----
 
-// Skipped — ticket 07 replaces the outcome mandate (PI_OUTCOME_TOOL / STUB_OUTCOME_TOOL) with the
-// report_completion loop; the stub no longer emits the old `mcp__outcome__*` completion call.
-test("bridge end-to-end outcome mandate: the observed completion tool completes the run", { skip: "ticket 07: outcome mandate replaced by the report_completion loop" }, async () => {
-  const runId = "outcome-e2e-run";
+test("bridge end-to-end completion mandate: the observed report_completion settles the run completed with summary, git facts and session path — no artifacts, no outcome", async () => {
+  const runId = "completion-e2e-run";
   const dirs = e2eDirs();
   const fake = fakeRuntimeApi();
-  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
-  const port = fake.server.address().port;
+  const port = await listen(fake.server);
 
-  const bridge = spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
-    env: {
-      ...process.env,
-      PI_RUN_ID: runId,
-      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_RUN_TOKEN: "per-run-callback-token",
-      PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
-      PI_WORKSPACE: dirs.workspace,
-      PI_SESSION_DIR: dirs.sessionDir,
-      PI_LOGS_DIR: dirs.logsDir,
-      PI_SPOOL_DIR: dirs.spoolDir,
-      PI_AGENT_BIN: process.execPath,
-      PI_AGENT_ARGS: AGENT,
-      STUB_BEHAVIOR: "succeed",
-      STUB_STAY_ALIVE: "1", // answer the Bridge's nudges deterministically
-      STUB_OUTCOME_TOOL: "work_completed", // the stub calls the completion tool
-      PI_REQUIRED_OUTCOME: "1", // ... and the Bridge MANDATES the observed call
-      PI_OUTCOME_TOOL: "work_completed",
-      PI_REQUIRED_PUBLICATION_KINDS: "",
-      PI_HEARTBEAT_SECONDS: "300",
-      PI_EVENT_CADENCE_SECONDS: "1",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let bridgeStderr = "";
-  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
-
-  const exitCode = await Promise.race([
-    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
-  ]);
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed" }));
   fake.server.close();
 
-  assert.equal(exitCode, 0, bridgeStderr); // a ReferenceError here would crash the bridge before any terminal
-  assert.equal(fake.completedBodies.length, 1); // completed, not failed
+  assert.equal(exitCode, 0);
   assert.deepEqual(fake.failedBodies, []);
-  assert.equal("outcome" in fake.completedBodies[0], false); // the coder's marker is not a review verdict
+  assert.equal(fake.completedBodies.length, 1);
+  const completed = fake.completedBodies[0];
+  assert.equal(completed.eventId, `evt-${runId}-terminal`);
+  assert.match(completed.sessionFilePath ?? "", /\.jsonl$/); // the discovered session path rides along
+  assert.equal(typeof completed.result.summary, "string");
+  assert.ok(completed.result.summary.length > 0); // the last aggregated assistant_output
+  assert.equal(completed.result.branch, "agent/pipe-stub"); // the git facts: the pointer producers
+  assert.match(completed.result.commitSha, /^[0-9a-f]{40}$/);
+  assert.equal("artifacts" in completed.result, false); // the artifacts/ convention is dead
+  assert.equal("outcome" in completed, false);          // the review verdict is gone with the mandates
   e2eCleanup(dirs);
 });
 
-// Skipped — ticket 07 (same mandate removal as above); the no_completion stub behavior re-covers
-// this path once the completion loop itself lands.
-test("bridge end-to-end outcome mandate: a settle without the completion tool fails the run", { skip: "ticket 07: outcome mandate replaced by the report_completion loop" }, async () => {
-  const runId = "outcome-missing-e2e-run";
+test("bridge end-to-end completion mandate: a settle without report_completion is nudged once, exhausted nudges fail the run with outcome_missing", async () => {
+  const runId = "completion-missing-e2e-run";
   const dirs = e2eDirs();
   const fake = fakeRuntimeApi();
-  await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
-  const port = fake.server.address().port;
+  const port = await listen(fake.server);
 
-  const bridge = spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
-    env: {
-      ...process.env,
-      PI_RUN_ID: runId,
-      PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_RUN_TOKEN: "per-run-callback-token",
-      PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
-      PI_WORKSPACE: dirs.workspace,
-      PI_SESSION_DIR: dirs.sessionDir,
-      PI_LOGS_DIR: dirs.logsDir,
-      PI_SPOOL_DIR: dirs.spoolDir,
-      PI_AGENT_BIN: process.execPath,
-      PI_AGENT_ARGS: AGENT,
-      STUB_BEHAVIOR: "succeed", // settles WITHOUT the outcome call (STUB_OUTCOME_TOOL unset)
-      STUB_STAY_ALIVE: "1",
-      PI_REQUIRED_OUTCOME: "1",
-      PI_OUTCOME_TOOL: "work_completed",
-      PI_REQUIRED_PUBLICATION_KINDS: "",
-      PI_HEARTBEAT_SECONDS: "300",
-      PI_EVENT_CADENCE_SECONDS: "1",
+  const exitCode = await bridgeExit(spawnE2eBridge({
+    runId, dirs, port, behavior: "no_completion",
+    extraEnv: {
+      STUB_STAY_ALIVE: "1", // answer the Bridge's follow-up prompt deterministically
+      PI_COMPLETION_NUDGES: "1",
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let bridgeStderr = "";
-  bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
-
-  const exitCode = await Promise.race([
-    new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
-  ]);
+  }));
   fake.server.close();
 
-  assert.equal(exitCode, 0, bridgeStderr);
-  assert.equal(fake.failedBodies.length, 1); // the nudges are exhausted — the run fails
+  assert.equal(exitCode, 0);
   assert.deepEqual(fake.completedBodies, []);
-  assert.equal(fake.failedBodies[0].error.code, "outcome_missing"); // the completion tool never confirmed
+  assert.equal(fake.failedBodies.length, 1);
+  assert.equal(fake.failedBodies[0].error.code, "outcome_missing"); // the completion call never confirmed
+  // the ONE nudge loop: the first settle triggered exactly one follow-up prompt; the stub settled
+  // again still without the call — the run then failed
+  const settles = fake.eventBodies.filter((b) => b.type === "agent_settled");
+  assert.equal(settles.length, 2);
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end completion mandate: a permission-denied report_completion fails immediately with required_permission_denied", async () => {
+  const runId = "completion-denied-e2e-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "permission_denied" }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.completedBodies, []);
+  assert.equal(fake.failedBodies.length, 1);
+  assert.equal(fake.failedBodies[0].error.code, "required_permission_denied");
+  assert.match(fake.failedBodies[0].error.message, /report_completion/);
+  // a denial cannot be nudged away — no follow-up prompt ever restarted the turn
+  assert.equal(fake.eventBodies.filter((b) => b.type === "agent_settled").length, 1);
   e2eCleanup(dirs);
 });
 
@@ -1151,9 +1062,9 @@ test("EventMapper maps permission_denied to permission_blocked and collects the 
   const emitted = [];
   const mapper = new EventMapper((entry) => emitted.push(entry.body), 5);
   for (const line of [
-    JSON.stringify({ type: "agent_start", data: { sessionId: "s" } }),
-    JSON.stringify({ type: "permission_denied", data: { toolCallId: "call-1", toolName: "stub_publish", reason: "not allow-listed" } }),
-    JSON.stringify({ type: "agent_settled", data: {} }),
+    JSON.stringify({ type: "agent_start" }),
+    JSON.stringify({ type: "permission_denied", toolCallId: "call-1", toolName: "stub_publish", reason: "not allow-listed" }),
+    JSON.stringify({ type: "agent_settled", aborted: false }),
   ]) mapper.onLine(line);
 
   const blocked = emitted.find((e) => e.type === "permission_blocked");
@@ -1174,7 +1085,7 @@ test("stub agent permission_denied behavior denies a communication tool call (ca
   assert.equal(child.status, 0, child.stderr);
   const events = child.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   // the denial hits a communication tool (report_completion) — the Bridge records the
-  // `permission_blocked` RunEvent and collects the denied tool name for its toolcheck
+  // `permission_blocked` RunEvent and collects the denied tool name for the completion mandate
   const denied = events.find((e) => e.type === "permission_denied");
   assert.equal(denied.toolCallId, "call-1");
   assert.equal(denied.toolName, "mcp__communication__report_completion");
