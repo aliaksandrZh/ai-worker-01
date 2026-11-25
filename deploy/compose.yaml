@@ -1,8 +1,10 @@
 name: pi-agent-control-plane
 
-# Default composition: one Compose project on the single execution host.
-# Startup order: postgres → migrator → build-worker / runtime-api / host-monitor → orchestrator / poller / outbox-worker.
-# Amended: PostgreSQL additionally published on 127.0.0.1 only, for local pgAdmin access.
+# Event-driven composition (ADR-0002..0006): postgres → app-host (the single long-running
+# service: EventLog + Orchestrator + Publisher + GithubSync + RunWorker consumers, gated by
+# the Workers: section) + the backup/snapshot loops + the observability stack.
+# Schema is owned by the modules' idempotent bootstrap DDL (EnsureSchemaAsync at startup) —
+# no migrator step. PostgreSQL additionally published on 127.0.0.1 only, for local pgAdmin.
 
 services:
   postgres:
@@ -23,200 +25,49 @@ services:
       retries: 12
       start_period: 5s
 
-  migrator:
+  app-host:
     build:
       context: ../src
       dockerfile: Dockerfile
-      args: { SERVICE: Migrator }
+      args: { SERVICE: AppHost }
     init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: "no"
+    restart: unless-stopped
     environment:
       ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
+      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
+      # The single GitHub read PAT (sync) and the single write PAT (Publisher) — ADR-0001.
+      PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
+      PI_AGENT_GITHUB_WRITE_PAT_FILE: /etc/pi-agent/secrets/github-write-pat.txt
+      Publisher__PatFile: /etc/pi-agent/secrets/github-write-pat.txt
+      # Worker gates (docs/eventlog.md invariant 7): the consumers this instance runs.
+      Workers__Orchestrator__Enabled: "true"
+      Workers__Publisher__Enabled: "true"
+      Workers__GithubSync__Enabled: "true"
+      Workers__RunWorker__Enabled: "true"
+      # Run Worker provisioning (docs/run-worker.md).
+      RunWorker__WorkspaceRoot: /var/lib/pi-agent/runs
+      RunWorker__AgentNetwork: pi-agent-net
+      RunWorker__CallbackBaseUrl: http://app-host:8080
+    volumes:
+      # The Run Worker provisions agent containers — the Docker socket, read-write.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Per-Run trees (workspace + session + input).
+      - ${STORAGE_ROOT:-../runtime/runs}:/var/lib/pi-agent/runs
+      # Configuration plane (YAML is the source of desired configuration).
+      - ../deploy/config:/etc/pi-agent/config:ro
+      # Agent profiles (agents/<name>/) + the shared Runtime Bridge (agents/_runtime/bridge).
+      - ../agents:/etc/pi-agent/config/agents:ro
+      # Host-managed secrets (read-only).
+      - ${SECRETS_DIR:-../secrets}:/etc/pi-agent/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
-
-  runtime-api:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: RuntimeApi }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    ports:
-      - "${RUNTIME_API_HOST_PORT:-8080}:8080"
-    environment:
-      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
-      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
-      ServiceTokens__HostMonitor: ${SERVICE_TOKEN_HOST_MONITOR}
-      ServiceTokens__BuildWorker: ${SERVICE_TOKEN_BUILD_WORKER}
-      AgentContainer__CallbackBaseUrl: ${PI_CALLBACK_BASE_URL:-http://runtime-api:8080}
-      Storage__ManagedRoot: /var/lib/pi-agent/workflows
-      # Storage tree: the Runtime API creates the physical directories; the same HOST path must
-      # reach its own created agent containers via bind mounts (absolute host path of STORAGE_ROOT).
-      Storage__HostRoot: ${STORAGE_HOST_ROOT:-/var/lib/pi-agent/workflows}
-      Storage__SecretsManagedDir: /etc/pi-agent/secrets
-      Storage__SecretsHostDir: ${PI_AGENT_SECRETS_HOST_DIR:-/etc/pi-agent/secrets}
-      Storage__MaxLogMegabytes: ${PI_AGENT_MAX_LOG_MB:-50}
-      WorkerLoop__IntervalSeconds: 5
-      # The knobs (startup/idle/max_run_duration, orphan windows) come from the
-      # configuration plane's system.yaml, read by the reconcilers at startup.
-      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
-    volumes:
-      # The Runtime API provisions agent containers itself — the Docker socket, read-write
-      # (it creates/starts/stops/removes the pi-session-* containers on pi-agent-net).
-      - /var/run/docker.sock:/var/run/docker.sock
-      # The managed storage root — writable so /start provisioning can create trees.
-      - ${STORAGE_ROOT:-../runtime/storage}:/var/lib/pi-agent/workflows
-      # Profile-secret existence checks: read-only view of the host-managed files.
-      - ${SECRETS_DIR:-../secrets}:/etc/pi-agent/secrets:ro
-      # The configuration plane (system.yaml) for the reconcilers' knobs. Per-file mount:
-      # a read-only parent bind can't host nested mountpoints (docker mkdirat → EROFS).
-      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 12
       start_period: 10s
-
-  host-monitor:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: HostMonitor }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    environment:
-      Storage__ManagedRoot: /var/lib/pi-agent/workflows
-      # Telemetry destination + the dedicated host credential.
-      RuntimeApi__BaseUrl: ${RUNTIME_API_URL:-http://runtime-api:8080}
-      RuntimeApi__ServiceToken: ${SERVICE_TOKEN_HOST_MONITOR}
-      WorkerLoop__IntervalSeconds: 5
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${STORAGE_ROOT:-../runtime/storage}:/var/lib/pi-agent/workflows
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
-
-  build-worker:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: BuildWorker }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    environment:
-      WorkerLoop__IntervalSeconds: 5
-      # The build endpoints accept the caller's dedicated service credential
-      # (the Orchestrator presents its own token — same direction/shape as the Runtime API contour).
-      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
-      # Durable local build-job state (results retrievable after restarts; the
-      # worker has no database). Build logs + materialized pinned contexts live under the same root.
-      Build__StateRoot: /var/lib/pi-agent/builds
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${BUILD_STATE_ROOT:-../runtime/builds}:/var/lib/pi-agent/builds
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
-
-  orchestrator:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: Orchestrator }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    volumes:
-      # Configuration plane: YAML is the source of desired configuration, synced only at startup.
-      # Per-file mounts: a read-only parent bind can't host the nested agents/ mountpoint below.
-      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
-      - ../deploy/config/repositories.yaml:/etc/pi-agent/config/repositories.yaml:ro
-      - ../deploy/config/routing.yaml:/etc/pi-agent/config/routing.yaml:ro
-      # Board triggers (projects.yaml auto_plan): the project-event cycle reads them from the
-      # synchronized configuration state (the Poller mounts the whole config dir; per-file here).
-      - ../deploy/config/projects.yaml:/etc/pi-agent/config/projects.yaml:ro
-      # Agent assets (../agents): profile definitions (../agents/<name>/) + shared runtime
-      # implementation (../agents/_runtime/bridge). Mounted INSIDE the config root so the container
-      # tree keeps the pinned shape the parser and DB rows expect: {configRoot}/agents/<name>/.
-      - ../agents:/etc/pi-agent/config/agents:ro
-      # Host-managed secrets: the read-only sync PAT for the GET /user identity check.
-      # compose auto-creates ../secrets if absent; a missing PAT file is then a diagnosable config error.
-      - ../secrets:/etc/pi-agent/secrets:ro
-    environment:
-      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
-      ServiceTokens__Orchestrator: ${SERVICE_TOKEN_ORCHESTRATOR}
-      # The Runtime API the dispatcher calls + the service credential it presents.
-      RuntimeApi__BaseUrl: ${RUNTIME_API_URL:-http://runtime-api:8080}
-      RuntimeApi__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
-      # The Build Worker the dispatcher calls + the service credential it presents.
-      BuildWorker__BaseUrl: ${BUILD_WORKER_URL:-http://build-worker:8080}
-      BuildWorker__ServiceToken: ${SERVICE_TOKEN_ORCHESTRATOR}
-      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
-      # Shared Runtime Bridge implementation (single copy, merged into every profile's pinned snapshot).
-      PI_AGENT_RUNTIME_BRIDGE_DIR: /etc/pi-agent/config/agents/_runtime/bridge
-      PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
-      # Optional metadata pinned into agent profile versions (owner ruling: traceability only).
-      PI_AGENT_SOURCE_COMMIT: ${PI_AGENT_SOURCE_COMMIT:-}
-      WorkerLoop__IntervalSeconds: 5
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
-      runtime-api:
-        condition: service_started
-      build-worker:
-        condition: service_started
-
-  poller:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: Poller }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    volumes:
-      # Polling knobs (poll_interval / poll_overlap / per_page from system.yaml) and the
-      # Projects v2 boards (projects.yaml) the projects pass lists.
-      - ../deploy/config:/etc/pi-agent/config:ro
-      # Polling knobs (system.yaml only) — per-file mount (see runtime-api above).
-      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
-      # The one read-only polling PAT for ALL configured repositories —
-      # the same github-sync-pat.txt the Config Loader uses.
-      - ../secrets:/etc/pi-agent/secrets:ro
-    environment:
-      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
-      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
-      PI_AGENT_GITHUB_PAT_FILE: /etc/pi-agent/secrets/github-sync-pat.txt
-      WorkerLoop__IntervalSeconds: 5
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
-
-  outbox-worker:
-    build:
-      context: ../src
-      dockerfile: Dockerfile
-      args: { SERVICE: OutboxWorker }
-    init: true   # PID1 = docker-init: unhandled exceptions must terminate (signal semantics)
-    restart: unless-stopped
-    volumes:
-      # The one knob the outbox worker reads directly: outbox_retry_window.
-      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
-      # Host-managed write PAT: publishes orchestration-owned comments.
-      - ../secrets:/etc/pi-agent/secrets:ro
-    environment:
-      ConnectionStrings__DefaultDb: Host=postgres;Database=${POSTGRES_DB:-pi_agent};Username=${POSTGRES_USER:-pi_agent};Password=${POSTGRES_PASSWORD}
-      PI_AGENT_CONFIG_DIR: /etc/pi-agent/config
-      PI_AGENT_GITHUB_WRITE_PAT_FILE: /etc/pi-agent/secrets/github-write-pat.txt
-      WorkerLoop__IntervalSeconds: 5
-    depends_on:
-      migrator:
-        condition: service_completed_successfully
 
   backups:
     image: postgres:17
@@ -270,7 +121,7 @@ services:
     command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data"]
     volumes:
       - ./logging/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      # Docker API for log tailing (same read-only socket mount as host-monitor).
+      # Docker API for log tailing.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - alloy-data:/var/lib/alloy/data # tail positions: no re-ingested dupes after restarts
     depends_on:

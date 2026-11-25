@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using PiAgent.Platform.Logging;
-using PiAgent.Platform.Workers;
 
 namespace PiAgent.Platform.Http;
 
@@ -43,15 +42,10 @@ public static class PlatformEndpoints
         app.MapGet("/metrics", (IServiceProvider sp) =>
         {
             var service = sp.GetService<IOptions<PiJsonConsoleFormatterOptions>>()?.Value.ServiceName;
-            var metrics = new Dictionary<string, object?>();
-            foreach (var provider in sp.GetServices<IWorkerMetrics>())
-                foreach (var (key, value) in provider.Collect())
-                    metrics[key] = value;
             return Results.Json(new
             {
                 service,
                 generatedAtUtc = DateTimeOffset.UtcNow,
-                metrics,
             });
         });
 

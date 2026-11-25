@@ -30,13 +30,18 @@ app.MapRunWorker();
 app.Run();
 
 /// <summary>Idempotent event-log + orchestration DDL before any consumer starts.</summary>
-internal sealed class SchemaBootstrap(EventQueueStore eventStore, PostgresOrchestrationState orchestration, PostgresPublishMarkerStore markers) : IHostedService
+internal sealed class SchemaBootstrap(
+    EventQueueStore eventStore,
+    PostgresOrchestrationState orchestration,
+    PostgresPublishMarkerStore markers,
+    PiAgent.GithubSync.PostgresCursorStore cursors) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await eventStore.EnsureSchemaAsync(cancellationToken);
         await orchestration.EnsureSchemaAsync(cancellationToken);
         await markers.EnsureSchemaAsync(cancellationToken);
+        await cursors.EnsureSchemaAsync(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

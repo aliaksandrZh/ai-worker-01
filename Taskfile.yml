@@ -2,13 +2,13 @@ version: 3
 
 tasks:
   stack:
-    desc: Run the pi-agent control plane (postgres, migrator, runtime-api, host-monitor, build-worker, orchestrator, poller, outbox-worker; uses deploy/.env)
+    desc: Run the pi-agent control plane (postgres → app-host: EventLog + Orchestrator + Publisher + GithubSync + RunWorker; plus backup/snapshot loops and the logging stack; uses deploy/.env)
     cmds:
       - test -f deploy/.env || cp deploy/.env.example deploy/.env
       - docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --wait
 
   stack-rebuild:
-    desc: Rebuild all control-plane images from current src/ (build only — starts nothing; run `task stack` after)
+    desc: Rebuild control-plane images from current src/ (build only — starts nothing; run `task stack` after)
     cmds:
       - test -f deploy/.env || cp deploy/.env.example deploy/.env
       - docker compose --env-file deploy/.env -f deploy/compose.yaml build
@@ -29,18 +29,29 @@ tasks:
       - test -f deploy/.env || cp deploy/.env.example deploy/.env
       - docker compose --env-file deploy/.env -f deploy/compose.yaml up -d postgres --wait
 
-  dev-migrate:
-    desc: Apply DB migrations on the host (Migrator + dev/env/shared.env, the same env the Rider services get)
+  dev-app:
+    desc: Run the app host on the host (schema is bootstrapped idempotently at startup)
     deps: [dev-db]
-    vars:
-      # shared.env is a Rider .env — extract the value with sed (task's interpreter is not a
-      # real shell: sourcing/exporting values containing ';' breaks). Each cmds line is a
-      # separate process, so the value must ride in via `env:`, not an in-line export.
-      CONNECTION_STRING:
-        sh: sed -n 's/^ConnectionStrings__DefaultDb=//p' dev/env/shared.env
     env:
-      ConnectionStrings__DefaultDb: '{{.CONNECTION_STRING}}'
-    preconditions:
-      - sh -c 'test -f dev/env/shared.env || (echo "copy dev/env/shared.env.example to dev/env/shared.env first"; exit 1)'
+      ConnectionStrings__DefaultDb: Host=localhost;Database=pi_agent;Username=pi_agent;Password=change-me
+      PI_AGENT_CONFIG_DIR: deploy/config
+      PI_AGENT_GITHUB_PAT_FILE: secrets/github-sync-pat.txt
+      PI_AGENT_GITHUB_WRITE_PAT_FILE: secrets/github-write-pat.txt
+      Publisher__PatFile: secrets/github-write-pat.txt
+      RunWorker__WorkspaceRoot: runtime/runs
+      RunWorker__CallbackBaseUrl: http://localhost:8080
+      Workers__Orchestrator__Enabled: "true"
+      Workers__Publisher__Enabled: "true"
+      Workers__GithubSync__Enabled: "true"
+      Workers__RunWorker__Enabled: "false"
     cmds:
-      - dotnet run --project src/Migrator --no-launch-profile
+      - dotnet run --project src/Hosts/AppHost --no-launch-profile
+
+  build-agents:
+    desc: Build the agent profile images (agent-<profile>:v1) the Run Worker starts — deploy-time step until the build plane is reworked
+    cmds: |
+      for profile in agents/*/; do
+        name=$(basename "$profile")
+        [ "$name" = "_runtime" ] && continue
+        docker build -t "agent-$name:v1" "$profile"
+      done
