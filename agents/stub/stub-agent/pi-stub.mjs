@@ -44,6 +44,9 @@ const SAVE_PLAN = comm("save_plan");
 const SUBMIT_PR_DESCRIPTION = comm("submit_pr_description");
 const REPORT_BLOCKER = comm("report_blocker");
 const REPORT_COMPLETION = comm("report_completion");
+// an ordinary context MCP tool (NOT in the communication vocabulary — its calls stay on the
+// `events` route and never become `tool` route callbacks)
+const GITHUB_CONTEXT = "mcp__github__get_file_contents";
 
 const sessionFile = join(sessionDir, `${sessionId}.jsonl`);
 mkdirSync(sessionDir, { recursive: true });
@@ -142,6 +145,9 @@ function answerPrompt() {
     return;
   }
   say("Analyzing the received prompt and publishing the result (stub).");
+  // the ordinary tool work: never a `tool` route callback — only the communication vocabulary is
+  toolCall("bash", { command: "git status --short" });
+  toolCall(GITHUB_CONTEXT, { path: "README.md" });
   if (behavior === "bad_payload") {
     // the bad_payload lever: an invalid save_plan payload — the tool errors, the end is
     // isError:true and must produce NO `tool` route event; the corrected retry does
@@ -211,15 +217,19 @@ process.stdin.on("data", (chunk) => {
     }
     switch (rpc.type) {
       case "prompt":
-        // the /mcp probe (STUB_BEHAVIOR=mcp_failed): an extension command consumed the prompt —
-        // disposition "handled", a notify with the pi status format, and NO run started
-        if (behavior === "mcp_failed" && typeof rpc.message === "string" && rpc.message.startsWith("/mcp")) {
+        // the /mcp status probe (the Bridge's pre-prompt): an extension command consumes the
+        // prompt — disposition "handled" and a status notify, NO agent run (pi-native semantics).
+        // A failed MCP server reports the failure (the Bridge's fail-fast path); a healthy one
+        // reports the connected communication server.
+        if (typeof rpc.message === "string" && rpc.message.startsWith("/mcp")) {
           respond(rpc.id, "prompt", { disposition: "handled" });
           emit({
             type: "extension_ui_request",
             method: "notify",
             notifyType: "info",
-            message: "github: failed (direct)\n    Connection closed\n    boom: the stub mcp server died (exit 1)",
+            message: behavior === "mcp_failed"
+              ? "github: failed (direct)\n    Connection closed\n    boom: the stub mcp server died (exit 1)"
+              : "communication: connected (direct)",
           });
           return;
         }
