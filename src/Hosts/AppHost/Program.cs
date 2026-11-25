@@ -3,6 +3,7 @@ using PiAgent.Events.Delivery;
 using PiAgent.Events.Postgres;
 using PiAgent.GithubSync;
 using PiAgent.Orchestration;
+using PiAgent.RunWorker;
 using PiAgent.Orchestration.State.Postgres;
 using PiAgent.Publisher;
 using PiAgent.Publisher.Postgres;
@@ -19,11 +20,13 @@ builder.Services.AddEventLog(builder.Configuration);
 builder.Services.AddOrchestrator(builder.Configuration);
 builder.Services.AddPublisher(builder.Configuration);
 builder.Services.AddGithubSync(builder.Configuration);
+builder.Services.AddRunWorker(builder.Configuration);
 
 builder.Services.AddHostedService<SchemaBootstrap>();
 
 var app = builder.Build();
 app.MapPiEndpoints();
+app.MapRunWorker();
 app.Run();
 
 /// <summary>Idempotent event-log + orchestration DDL before any consumer starts.</summary>

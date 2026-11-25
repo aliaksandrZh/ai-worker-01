@@ -4,6 +4,7 @@
   <Project Path="Orchestration/PiAgent.Orchestration.csproj" />
   <Project Path="GithubSync/PiAgent.GithubSync.csproj" />
   <Project Path="Publisher/PiAgent.Publisher.csproj" />
+  <Project Path="RunWorker/PiAgent.RunWorker.csproj" />
   <Project Path="Platform/PiAgent.Platform.csproj" />
   <Project Path="Infrastructure/PiAgent.Infrastructure.csproj" />
   <Project Path="Migrator/PiAgent.Migrator.csproj" />
