@@ -43,6 +43,12 @@ public sealed class EventConsumerRunner<TConsumer>(
                     {
                         throw;
                     }
+                    catch (PermanentDeliveryException ex)
+                    {
+                        logger.LogError(ex, "consumer {consumer} poisoned {event}",
+                            consumer.Name, claimed.Event.GetType().Name);
+                        await queue.PoisonAsync(claimed.Id, ex.ToString(), stoppingToken);
+                    }
                     catch (Exception ex)
                     {
                         logger.LogWarning(ex, "consumer {consumer} failed {event} (attempt {attempt})",

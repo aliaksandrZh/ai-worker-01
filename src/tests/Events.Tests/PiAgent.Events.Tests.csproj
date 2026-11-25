@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Events\PiAgent.Events.csproj" />
     <ProjectReference Include="..\..\Orchestration\PiAgent.Orchestration.csproj" />
+    <ProjectReference Include="..\..\Publisher\PiAgent.Publisher.csproj" />
   </ItemGroup>
 
 </Project>
