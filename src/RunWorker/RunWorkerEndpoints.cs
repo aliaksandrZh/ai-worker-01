@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using PiAgent.Events;
@@ -26,11 +27,35 @@ public static class RunWorkerEndpoints
             if (payload is null)
                 return Results.BadRequest(new { error = "body required" });
 
-            await log.AppendAsync(new AgentCallback(entry.RunId, payload.Route, payload.Body), ct);
+            await log.AppendAsync(
+                new AgentCallback(entry.RunId, payload.Route, payload.Body, ParseEventId(payload.Body)), ct);
             return Results.Accepted();
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// The Bridge's deterministic eventId, promoted onto the callback row: spool redelivery
+    /// repeats it verbatim and the ingestion dedup index (type, payload->>'eventId') keys on
+    /// it (docs/run-worker.md route tool). A body without one simply does not participate.
+    /// </summary>
+    private static string? ParseEventId(string? body)
+    {
+        if (body is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("eventId", out var id)
+                   && id.ValueKind == JsonValueKind.String
+                ? id.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private sealed record CallbackRequest(string Route, string? Body);

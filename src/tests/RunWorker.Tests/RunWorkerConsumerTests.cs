@@ -124,25 +124,4 @@ public sealed class RunWorkerConsumerTests
         Assert.Null(completed.Branch);
         Assert.Null(completed.CommitSha);
     }
-
-    private sealed class RecordingProvisioner : IContainerProvisioner
-    {
-        public ContainerPlan? LastPlan { get; private set; }
-
-        public Task<string?> CreateContainerAsync(ContainerPlan plan, CancellationToken cancellationToken)
-        {
-            LastPlan = plan;
-            return Task.FromResult<string?>("container-1");
-        }
-
-        public Task<bool> StartAndWaitRunningAsync(string container, TimeSpan timeout, CancellationToken cancellationToken) =>
-            Task.FromResult(true);
-
-        public Task<ContainerSnapshot> GetContainerStateAsync(string container, CancellationToken cancellationToken) =>
-            Task.FromResult(new ContainerSnapshot("running", null, null));
-
-        public Task<bool> StopAsync(string container, CancellationToken cancellationToken) => Task.FromResult(true);
-
-        public Task<bool> RemoveAsync(string container, CancellationToken cancellationToken) => Task.FromResult(true);
-    }
 }

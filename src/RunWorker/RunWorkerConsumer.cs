@@ -52,7 +52,7 @@ public sealed class RunWorkerConsumer(
 
         var token = Guid.NewGuid().ToString("N");
         var containerName = $"pi-session-{scheduled.RunId}";
-        var entry = new RunEntry(scheduled.RunId, scheduled.TaskId, scheduled.Input,
+        var entry = new RunEntry(scheduled.RunId, scheduled.TaskId, scheduled.WorkflowId, scheduled.Input,
             containerName, token, DateTime.UtcNow);
         registry.Add(entry);
 
@@ -140,10 +140,47 @@ public sealed class RunWorkerConsumer(
             case "cancelled":
                 await SettleAsync(entry, "cancelled", null, null, null, ct);
                 break;
+            case "tool":
+                await HandleToolCallbackAsync(callback, entry, ct);
+                break;
             default:
                 logger.LogDebug("run {run} callback {route} recorded (no state)", callback.RunId, callback.Route);
                 break;
         }
+    }
+
+    /// <summary>
+    /// The route tool adapter (docs/run-worker.md): each communication tool call becomes
+    /// exactly one typed event on the root item's stream. Deterministic garbage (unknown
+    /// tool name, payload shape) fails the Run with the cause — the Orchestrator's
+    /// auto-retry policy schedules the fresh Run; transient failures throw so the EventLog
+    /// retries and eventually dead-letters. Non-communication routes stay opaque callbacks.
+    /// </summary>
+    private async Task HandleToolCallbackAsync(AgentCallback callback, RunEntry entry, CancellationToken ct)
+    {
+        ToolCallback tool;
+        try
+        {
+            tool = ToolEventAdapter.Parse(callback.Body);
+        }
+        catch (ToolCallbackException ex)
+        {
+            await SettleAsync(entry, "failed", ex.Message, null, null, ct);
+            return;
+        }
+
+        try
+        {
+            var evt = ToolEventAdapter.Translate(tool, entry);
+            await log.AppendAsync(evt, ct);
+            logger.LogInformation("run {run} tool {tool} → {event} on {stream}",
+                callback.RunId, tool.ToolName, evt.GetType().Name, evt.StreamKey);
+        }
+        catch (ToolCallbackException ex)
+        {
+            await SettleAsync(entry, "failed", ex.Message, null, null, ct);
+        }
+        // anything else propagates: the EventLog's redelivery → dead-letter covers it
     }
 
     /// <summary>Called by the watchdog when a container exits without a terminal callback.</summary>
