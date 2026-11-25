@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>PiAgent.AppHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Events\PiAgent.Events.csproj" />
+    <ProjectReference Include="..\..\Platform\PiAgent.Platform.csproj" />
+    <ProjectReference Include="..\..\Infrastructure\PiAgent.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

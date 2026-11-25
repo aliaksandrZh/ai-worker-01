@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="Events/PiAgent.Events.csproj" />
+  <Project Path="Hosts/AppHost/PiAgent.AppHost.csproj" />
   <Project Path="Platform/PiAgent.Platform.csproj" />
   <Project Path="Infrastructure/PiAgent.Infrastructure.csproj" />
   <Project Path="Migrator/PiAgent.Migrator.csproj" />
@@ -8,6 +10,7 @@
   <Project Path="Hosts/OutboxWorker/PiAgent.OutboxWorker.csproj" />
   <Project Path="Hosts/HostMonitor/PiAgent.HostMonitor.csproj" />
   <Project Path="Hosts/BuildWorker/PiAgent.BuildWorker.csproj" />
+  <Project Path="tests/Events.Tests/PiAgent.Events.Tests.csproj" />
   <Project Path="tests/Hosts.Tests/PiAgent.Hosts.Tests.csproj" />
   <Project Path="tests/Architecture.Tests/PiAgent.Architecture.Tests.csproj" />
   <Project Path="tests/Platform.Tests/PiAgent.Platform.Tests.csproj" />
