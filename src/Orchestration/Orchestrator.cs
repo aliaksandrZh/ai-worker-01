@@ -52,6 +52,8 @@ public sealed class Orchestrator(
         }
         else
         {
+            logger.LogInformation("command admitted: {command} on {item} by {author} → task {type}",
+                cmd.Command, workflow.Item.Key, cmd.Author, taskType);
             await StartTaskAsync(workflow, taskType, cmd.Text, uow, ct);
         }
 
@@ -500,9 +502,12 @@ public sealed class Orchestrator(
             IdempotencyKey: $"notification:{workflow.Id}:{body}",
             Body: body), uow.Events, ct);
 
-    private Task RejectAsync(string owner, string repo, long itemNumber, string reason, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
-        log.AppendAsync(new PublishComment(
+    private async Task RejectAsync(string owner, string repo, long itemNumber, string reason, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    {
+        logger.LogInformation("command rejected on {owner}/{repo}#{number}: {reason}", owner, repo, itemNumber, reason);
+        await log.AppendAsync(new PublishComment(
             PublishCommentKind.Notification, owner, repo, itemNumber,
             IdempotencyKey: $"rejected:{owner}/{repo}#{itemNumber}:{reason}",
             Body: $"command rejected: {reason}"), uow.Events, ct);
+    }
 }

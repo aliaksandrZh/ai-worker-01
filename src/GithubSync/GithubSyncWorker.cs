@@ -17,9 +17,11 @@ public sealed class GithubSyncWorker(
     ILogger<GithubSyncWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan Overlap = TimeSpan.FromMinutes(5);
+    private DateTime _startedUtc;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _startedUtc = DateTime.UtcNow;
         logger.LogInformation("github sync started for [{repos}] as bot {bot}",
             string.Join(", ", config.Repositories.Select(r => $"{r.Owner}/{r.Name}")), config.BotLogin);
 
@@ -48,6 +50,8 @@ public sealed class GithubSyncWorker(
     public async Task SyncRepoAsync(SyncConfig.RepoConfig repo, CancellationToken ct)
     {
         var repoKey = $"{repo.Owner}/{repo.Name}";
+        var commentsNew = 0;
+        var itemsNew = 0;
         await using var uow = await log.BeginTransactionAsync(ct);
 
         // 1. comments → comment_changed + derived user_command
@@ -57,6 +61,7 @@ public sealed class GithubSyncWorker(
             .ToList();
         foreach (var comment in comments)
         {
+            commentsNew++;
             await log.AppendAsync(new CommentChanged(
                 repo.Owner, repo.Name, comment.ItemNumber, comment.Id, comment.Author, comment.Body,
                 Deleted: false), uow, ct);
@@ -84,6 +89,7 @@ public sealed class GithubSyncWorker(
 
         foreach (var item in items)
         {
+            itemsNew++;
             await log.AppendAsync(new ItemChanged(
                 repo.Owner, repo.Name, item.Number, item.IsPullRequest,
                 item.Title, item.Body, item.State), uow, ct);
@@ -115,6 +121,8 @@ public sealed class GithubSyncWorker(
             await cursors.SetAsync(repoKey, "items", Watermark(newestItemUtc), uow, ct);
 
         await uow.CommitAsync(ct);
+        logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s) since {since:O}",
+            repoKey, commentsNew, itemsNew, itemsSince);
     }
 
     /// <summary>
@@ -126,7 +134,7 @@ public sealed class GithubSyncWorker(
     {
         var raw = await cursors.GetAsync(repoKey, stream, ct);
         if (raw is null)
-            return DateTime.UtcNow;
+            return _startedUtc; // first cycle: start at host start minus overlap — no history replay
 
         var watermark = new DateTime(long.Parse(raw), DateTimeKind.Utc);
         return watermark - Overlap;

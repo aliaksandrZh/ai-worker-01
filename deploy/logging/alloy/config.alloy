@@ -3,8 +3,10 @@
 // not the logging driver, so `docker compose logs` / `task stack-logs` keep working.
 //
 // Labels per stream: `service` = compose service name (non-compose containers, e.g. the
-// agent session containers carry only `container`). The log stack's own containers are dropped so
-// alloy→loki→grafana chatter never enters the log lake.
+// agent session containers carry only `container`), `logformat` = json | text. The log stack's
+// own containers are dropped so alloy→loki→grafana chatter never enters the log lake.
+// JSON pipelines run only for the services that emit JSON (the app host); plain-text emitters
+// (postgres, backups, snapshots) pass through raw — no JSONParserErr anywhere downstream.
 
 discovery.docker "docker" {
   host             = "unix:///var/run/docker.sock"
@@ -30,12 +32,42 @@ discovery.relabel "docker" {
     regex         = "^(loki|alloy|grafana)$"
     action        = "drop"
   }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(.*)"
+    target_label  = "logformat"
+    replacement   = "text"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "app-host"
+    target_label  = "logformat"
+    replacement   = "json"
+  }
+}
+
+loki.process "docker" {
+  stage.match {
+    selector = "{logformat=\"json\"}"
+
+    stage.json {
+      expressions = { level = "level" }
+    }
+
+    stage.labels {
+      values = { level = "level" }
+    }
+  }
+
+  forward_to = [loki.write.loki.receiver]
 }
 
 loki.source.docker "docker" {
   host       = "unix:///var/run/docker.sock"
   targets    = discovery.relabel.docker.output
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [loki.process.docker.receiver]
 }
 
 loki.write "loki" {

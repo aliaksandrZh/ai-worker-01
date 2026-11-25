@@ -15,8 +15,10 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
         var url = $"repos/{owner}/{repo}/issues?state=all&per_page=100&sort=updated&direction=asc" + since;
         var array = await GetArrayAsync(url, ct);
         var items = new List<GithubItem>();
+        System.Console.Error.WriteLine("[dbg] items parsed start: " + array.Count);
         foreach (var item in array)
         {
+            System.Console.Error.WriteLine("[dbg] parsing item " + item.GetProperty("number").GetInt64());
             items.Add(new GithubItem(
                 item.GetProperty("number").GetInt64(),
                 item.TryGetProperty("pull_request", out _),
@@ -90,7 +92,9 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
 
     private async Task<IReadOnlyList<JsonElement>> GetArrayAsync(string url, CancellationToken ct)
     {
+        System.Console.Error.WriteLine($"[dbg] GET {url}");
         using var response = await httpClient.GetAsync(url, ct);
+        System.Console.Error.WriteLine($"[dbg] GET done {response.StatusCode}");
         response.EnsureSuccessStatusCode();
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
         return json.RootElement.EnumerateArray().ToList();
