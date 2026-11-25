@@ -22,13 +22,17 @@ import { openSpool } from "./spool.mjs";
 import { EventMapper, isSuccessfulToolEnd } from "./events.mjs"; // the mapper owns the observed-tool-call stream
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
-import { pollStopRequest, gracefulStopSequence, cancelledTerminal, POLL_INTERVAL_MS } from "./stop.mjs";
+import { gracefulStopSequence, cancelledTerminal } from "./stop.mjs";
 import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, outcomeNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal, normalizeToolName } from "./toolcheck.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
-const baseUrl = (env.PI_CALLBACK_BASE_URL || "http://runtime-api:8080").replace(/\/$/, "");
-const tokenFile = env.PI_CALLBACK_TOKEN_FILE || fail("callback token file (PI_CALLBACK_TOKEN_FILE) is required");
+const baseUrl = (env.PI_CALLBACK_BASE_URL || "http://app-host:8080").replace(/\/$/, "");
+// the per-run token minted by the Run Worker at run_scheduled: the only credential the
+// container holds — it authorizes appending events for this run and nothing else (ADR-0001)
+const runToken = env.PI_RUN_TOKEN || fail("PI_RUN_TOKEN is required");
+// the run input (docs/run-worker.md): pointers written by the worker into the run tree
+const inputFile = env.PI_INPUT_FILE || "/run/input.json";
 const workspace = env.PI_WORKSPACE || "/workspace";
 const sessionDir = env.PI_SESSION_DIR || "/session";
 // the image is the sole source of the runtime configuration — the baked env picks the
@@ -114,16 +118,16 @@ if (existsSync(terminalMarker)) {
 
 const headers = () => ({
   "content-type": "application/json",
-  authorization: `Bearer ${readFileSync(tokenFile, "utf8").trim()}`,
+  "x-run-token": runToken,
 });
 
-/** One HTTP call to the Runtime API; resolves {ok, status, retryable, detail} — never throws. */
+/** One HTTP call to the app host's events endpoint; resolves {ok, status, retryable, detail} — never throws. */
 async function post(route, body) {
   try {
-    const response = await fetch(`${baseUrl}/internal/runtime/runs/${runId}/${route}`, {
+    const response = await fetch(`${baseUrl}/events`, {
       method: "post",
       headers: headers(),
-      body: JSON.stringify(body),
+      body: JSON.stringify({ route, body }),
       signal: AbortSignal.timeout(30_000),
     });
     if (response.ok) return { ok: true, status: response.status };
@@ -218,23 +222,17 @@ async function senderLoop() {
   }
 }
 
-/** Bridge pull channel: the frozen RunContextSnapshot, retried while the API is down. */
+/** The run input is a file in the run tree — the worker writes it before the container starts. */
 async function pullInput() {
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
-      const response = await fetch(`${baseUrl}/internal/runtime/runs/${runId}/input`, {
-        headers: headers(),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (response.ok) return await response.json();
-      log(`input pull answered ${response.status}\n`);
-      if (response.status === 401 || response.status === 403) fail("input pull unauthorized");
+      return JSON.parse(readFileSync(inputFile, "utf8"));
     } catch (error) {
-      log(`input pull failed: ${error?.message ?? error}\n`);
+      log(`input read failed: ${error?.message ?? error}\n`);
     }
-    await sleep(5_000);
+    await sleep(1_000);
   }
-  fail("input pull retries exhausted");
+  fail("input read retries exhausted");
 }
 
 // ---- run state shared across the launch/lifecycle/terminal stages ----
@@ -348,26 +346,21 @@ async function main() {
   const flushTimer = setInterval(() => mapper.flushAggregated(), eventCadenceSeconds * 1000);
 
   // ---- graceful stop control ----
-  // The signal lives in PostgreSQL (`run.stop_requested_at`); this Bridge pulls it every 2 s once the
-  // agent is spawned. Once observed, the stop path owns the terminal: every other lifecycle branch
-  // below defers to it and must never post another terminal around it.
+  // The signal is SIGTERM: the Run Worker stops the container on run_stop_requested (docs/run-worker.md)
+  // — docker stop → SIGTERM to PID1 → the bridge. Once observed, the stop path owns the terminal:
+  // every other lifecycle branch below defers to it and must never post another terminal around it.
   let stopSignal = null; // { reason } once requested
   let promptStageRelease = () => {}; // resolved when the RPC channel is free of the prompt handshake
   const promptStageDone = new Promise((resolve) => { promptStageRelease = resolve; });
   let stopSequenceStarted = false;
   let cancelledPosted = false;
 
-  async function pollStopSignal() {
-    if (stopSignal) return;
-    const { requested, reason } = await pollStopRequest({ runId, baseUrl, tokenFile, log });
-    if (!requested || stopSignal) return;
-    stopSignal = { reason: reason ?? "stop_requested" };
-    clearInterval(stopWatch);
-    log(`stop signal observed (${stopSignal.reason})\n`);
+  process.on("SIGTERM", () => {
+    if (stopSignal || stopSequenceStarted) return;
+    stopSignal = { reason: "container stopped" };
+    log("stop signal observed (SIGTERM)\n");
     startStopSequence();
-  }
-
-  const stopWatch = setInterval(() => void pollStopSignal(), POLL_INTERVAL_MS);
+  });
 
   function startStopSequence() {
     if (stopSequenceStarted) return;
@@ -394,7 +387,6 @@ async function main() {
       cancelledPosted = true;
       clearInterval(heartbeatTimer);
       clearInterval(flushTimer);
-      clearInterval(stopWatch);
       mapper.flushAggregated();
       spool.append(cancelledTerminal(runId, stopSignal?.reason ?? "stop_requested", sessionFilePath));
     }

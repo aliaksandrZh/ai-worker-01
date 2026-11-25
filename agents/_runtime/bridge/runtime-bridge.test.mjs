@@ -527,51 +527,33 @@ test("stub agent: abort settles an in-flight run with aborted=true; clear_queue/
   assert.match(session, /"aborted":true/);
 });
 
-/** Minimal fake of the Runtime API surface the Bridge touches during a stop. */
-function fakeRuntimeApi(stopReason) {
+/** Minimal fake of the events endpoint surface the Bridge touches (docs/run-worker.md). */
+function fakeRuntimeApi() {
   const cancelledBodies = [];
   const completedBodies = [];
   const failedBodies = [];
-  let stopPolls = 0;
+  const otherRoutes = [];
   const server = createServer((request, response) => {
-    const respond = (status, body = { persisted: true }) => {
+    const respond = (status, body = {}) => {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(body));
     };
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
     request.on("end", () => {
-      if (request.method === "GET" && request.url.endsWith("/input")) {
-        respond(200, {});
+      if (request.method === "POST" && request.url === "/events") {
+        const parsed = JSON.parse(raw);
+        if (parsed.route === "cancelled") cancelledBodies.push(parsed.body);
+        else if (parsed.route === "completed") completedBodies.push(parsed.body);
+        else if (parsed.route === "failed") failedBodies.push(parsed.body);
+        else otherRoutes.push(parsed.route);
+        respond(202);
         return;
       }
-      if (request.method === "GET" && request.url.endsWith("/stop-request")) {
-        stopPolls += 1;
-        // "never" = the stop signal never fires (the outcome-mandate e2e tests); otherwise the stop
-        // is requested only after a couple of 2 s polls
-        const requested = stopReason !== "never" && stopPolls > 2;
-        respond(200, { requested, reason: requested ? stopReason : null });
-        return;
-      }
-      if (request.method === "POST" && request.url.endsWith("/cancelled")) {
-        cancelledBodies.push(JSON.parse(raw));
-        respond(200);
-        return;
-      }
-      if (request.method === "POST" && request.url.endsWith("/completed")) {
-        completedBodies.push(JSON.parse(raw));
-        respond(200);
-        return;
-      }
-      if (request.method === "POST" && request.url.endsWith("/failed")) {
-        failedBodies.push(JSON.parse(raw));
-        respond(200);
-        return;
-      }
-      respond(200); // events, heartbeat
+      respond(200);
     });
   });
-  return { server, cancelledBodies, completedBodies, failedBodies };
+  return { server, cancelledBodies, completedBodies, failedBodies, otherRoutes };
 }
 
 test("bridge end-to-end stop: signal observed → clear_queue/abort settle → terminal cancelled delivered", async () => {
@@ -582,8 +564,10 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   const spoolDir = tempDir("spool-e2e-");
   const tokenFile = join(tempDir("tok-"), "callback-token");
   writeFileSync(tokenFile, "per-run-callback-token");
+  writeFileSync(join(dirname(tokenFile), "input.json"), JSON.stringify({}));
+  rmSync(tokenFile, { force: true }); // the token is env now; keep the dir for the input file
 
-  const fake = fakeRuntimeApi("stop_requested");
+  const fake = fakeRuntimeApi();
   await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
   const port = fake.server.address().port;
 
@@ -594,7 +578,8 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
       ...process.env,
       PI_RUN_ID: runId,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_CALLBACK_TOKEN_FILE: tokenFile,
+      PI_RUN_TOKEN: "per-run-callback-token",
+      PI_INPUT_FILE: join(dirname(tokenFile), "input.json"),
       PI_WORKSPACE: workspace,
       PI_SESSION_DIR: sessionDir,
       PI_LOGS_DIR: logsDir,
@@ -610,10 +595,14 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   let bridgeStderr = "";
   bridge.stderr.on("data", (chunk) => { bridgeStderr += chunk; });
 
+  // the Run Worker stops the container on run_stop_requested: docker stop → SIGTERM to the bridge
+  const stopTimer = setTimeout(() => bridge.kill("SIGTERM"), 5_000);
+
   const exitCode = await Promise.race([
     new Promise((resolve) => bridge.on("exit", (code) => resolve(code))),
     new Promise((_, reject) => setTimeout(() => reject(new Error(`bridge did not exit; stderr: ${bridgeStderr}`)), 30_000).unref()),
   ]);
+  clearTimeout(stopTimer);
   fake.server.close();
 
   assert.equal(exitCode, 0, bridgeStderr);
@@ -622,7 +611,7 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   assert.deepEqual(fake.completedBodies, []);
   const cancelled = fake.cancelledBodies[0];
   assert.equal(cancelled.eventId, `evt-${runId}-cancelled`);
-  assert.equal(cancelled.reason, "stop_requested");
+  assert.equal(cancelled.reason, "container stopped");
   assert.match(cancelled.sessionFilePath ?? "", /\.jsonl$/); // the discovered session path rides along
   // the abort settled the agent: the session history carries it
   const session = readFileSync(join(sessionDir, `${runId}.jsonl`), "utf8");
@@ -641,7 +630,7 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
 test("bridge end-to-end outcome mandate: the observed completion tool completes the run", async () => {
   const runId = "outcome-e2e-run";
   const dirs = e2eDirs();
-  const fake = fakeRuntimeApi("never");
+  const fake = fakeRuntimeApi();
   await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
   const port = fake.server.address().port;
 
@@ -650,7 +639,8 @@ test("bridge end-to-end outcome mandate: the observed completion tool completes 
       ...process.env,
       PI_RUN_ID: runId,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_CALLBACK_TOKEN_FILE: dirs.tokenFile,
+      PI_RUN_TOKEN: "per-run-callback-token",
+      PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
       PI_WORKSPACE: dirs.workspace,
       PI_SESSION_DIR: dirs.sessionDir,
       PI_LOGS_DIR: dirs.logsDir,
@@ -687,7 +677,7 @@ test("bridge end-to-end outcome mandate: the observed completion tool completes 
 test("bridge end-to-end outcome mandate: a settle without the completion tool fails the run", async () => {
   const runId = "outcome-missing-e2e-run";
   const dirs = e2eDirs();
-  const fake = fakeRuntimeApi("never");
+  const fake = fakeRuntimeApi();
   await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
   const port = fake.server.address().port;
 
@@ -696,7 +686,8 @@ test("bridge end-to-end outcome mandate: a settle without the completion tool fa
       ...process.env,
       PI_RUN_ID: runId,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_CALLBACK_TOKEN_FILE: dirs.tokenFile,
+      PI_RUN_TOKEN: "per-run-callback-token",
+      PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
       PI_WORKSPACE: dirs.workspace,
       PI_SESSION_DIR: dirs.sessionDir,
       PI_LOGS_DIR: dirs.logsDir,
@@ -736,6 +727,7 @@ function e2eDirs() {
   const spoolDir = tempDir("spool-outcome-");
   const tokenFile = join(tempDir("tok-outcome-"), "callback-token");
   writeFileSync(tokenFile, "per-run-callback-token");
+  writeFileSync(join(dirname(tokenFile), "input.json"), JSON.stringify({}));
   return { workspace, sessionDir, logsDir, spoolDir, tokenFile };
 }
 
@@ -754,8 +746,9 @@ test("bridge MCP probe: a failed server fails the run before the task prompt, wi
   const spoolDir = tempDir("spool-mcp-");
   const tokenFile = join(tempDir("tok-"), "callback-token");
   writeFileSync(tokenFile, "per-run-callback-token");
+  writeFileSync(join(dirname(tokenFile), "input.json"), JSON.stringify({}));
 
-  const fake = fakeRuntimeApi(null);
+  const fake = fakeRuntimeApi();
   await new Promise((resolve) => fake.server.listen(0, "127.0.0.1", resolve));
   const port = fake.server.address().port;
 
@@ -766,7 +759,8 @@ test("bridge MCP probe: a failed server fails the run before the task prompt, wi
       ...process.env,
       PI_RUN_ID: runId,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
-      PI_CALLBACK_TOKEN_FILE: tokenFile,
+      PI_RUN_TOKEN: "per-run-callback-token",
+      PI_INPUT_FILE: join(dirname(tokenFile), "input.json"),
       PI_WORKSPACE: workspace,
       PI_SESSION_DIR: sessionDir,
       PI_LOGS_DIR: logsDir,

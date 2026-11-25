@@ -1,7 +1,7 @@
 /**
- * Graceful stop: the Bridge control path for `/stop`.
- * The signal travels Orchestrator → Runtime API → PostgreSQL (`run.stop_requested_at`) → this Bridge's
- * pull channel (`GET /internal/runtime/runs/{runId}/stop-request`, per-Run bearer). On request the
+ * Graceful stop: the Bridge control path for cancellation.
+ * The signal is SIGTERM — the Run Worker stops the container on run_stop_requested (docs/run-worker.md).
+ * On request the
  * sequence runs: (1) RPC `clear_queue` first (an `abort` alone can continue queued messages), (2)
  * `abort` and `abort_bash`, (3) wait up to ~30 s for `agent_settled`, (4) close pi's stdin for a
  * graceful exit, (5) SIGTERM then SIGKILL if the process remains, (6) verify child processes stopped,
@@ -16,29 +16,6 @@ import { join } from "node:path";
 export const SETTLE_WAIT_MS = 30_000;
 export const STDIN_GRACE_MS = 10_000;
 export const SIGTERM_GRACE_MS = 5_000;
-export const POLL_INTERVAL_MS = 2_000;
-
-/** One stop-signal pull; resolves `{requested, reason}` and never throws (transport failures read as not requested). */
-export async function pollStopRequest({ runId, baseUrl, tokenFile, log }) {
-  try {
-    const response = await fetch(`${baseUrl}/internal/runtime/runs/${runId}/stop-request`, {
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${readFileSync(tokenFile, "utf8").trim()}`,
-      },
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) {
-      if (response.status !== 404) log(`stop-request poll answered ${response.status}\n`);
-      return { requested: false, reason: null };
-    }
-    const body = await response.json();
-    return { requested: body.requested === true, reason: body.reason ?? null };
-  } catch (error) {
-    log(`stop-request poll transport failure: ${error?.message ?? error}\n`);
-    return { requested: false, reason: null };
-  }
-}
 
 /**
  * Builds the terminal `cancelled` spool entry (step 7). Deterministic id: a redelivery after a bridge
