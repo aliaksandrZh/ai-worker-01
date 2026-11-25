@@ -8,10 +8,12 @@
  * communication tool call into a `tool` route callback (the 11-name vocabulary, deterministic
  * eventId — docs/run-worker.md 'Communication tool callbacks'), retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
- * runs the publication toolcheck after every `agent_settled` (each mandated publication kind must
- * have an OBSERVED error-free completed tool execution; a missing mandate is nudged back to the
- * agent at most PI_PUBLICATION_NUDGES times) and delivers the terminal `completed` (or `failed`)
- * callback — the delivery cycle ends only on the Runtime API's persistence acknowledgement. Before
+ * enforces the ONE completion mandate after every `agent_settled` (the hardcoded `report_completion`
+ * must have an OBSERVED error-free completed execution; a settle without it is nudged back into the
+ * same RPC session at most PI_COMPLETION_NUDGES times — a denied call fails immediately, exhausted
+ * nudges or an agent exit fail the run with `outcome_missing`) and delivers the terminal `completed`
+ * (or `failed`) callback — the delivery cycle ends only on the Runtime API's persistence
+ * acknowledgement. Before
  * the task prompt it probes pi's `/mcp` status (the FULL failure reason incl. the server's stderr
  * — `mcp_unavailable` on a failed server, before any work). It also captures Pi stdout/stderr plus
  * its own diagnostics into the per-Run log trio.
@@ -21,11 +23,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openSpool } from "./spool.mjs";
-import { EventMapper, isSuccessfulToolEnd } from "./events.mjs"; // the mapper owns the observed-tool-call stream
+import { EventMapper, isSuccessfulToolEnd, normalizeToolName } from "./events.mjs"; // the mapper owns the observed-tool-call stream
 import { RpcCorrelator, promptDisposition } from "./rpc.mjs";
 import { openLogs } from "./logs.mjs";
 import { gracefulStopSequence, cancelledTerminal } from "./stop.mjs";
-import { renderPrompt, gitFacts, checkPublications, nudgePrompt, verdictNudgePrompt, outcomeNudgePrompt, reviewVerdict, collectArtifacts, completedTerminal, normalizeToolName } from "./toolcheck.mjs";
+import { renderPrompt, completionNudgePrompt } from "./prompt.mjs";
+import { completedTerminal, gitFacts } from "./terminal.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
@@ -44,30 +47,14 @@ const sessionDir = env.PI_SESSION_DIR || "/session";
 const agentBin = env.PI_AGENT_BIN || "node";
 const defaultStubAgent = fileURLToPath(new URL("../stub-agent/pi-stub.mjs", import.meta.url));
 const agentArgs = (env.PI_AGENT_ARGS || defaultStubAgent).split(" ").filter(Boolean);
-// mandated publication kinds that MUST be observed as successful tool executions before `completed`
-// (comma-separated; empty = no mandate — the stub). The verification is the Bridge's publication
-// toolcheck against the event stream; the agent never self-reports (there is no result manifest).
-const requiredPublicationKinds = (env.PI_REQUIRED_PUBLICATION_KINDS || "")
-  .split(",").map((kind) => kind.trim()).filter(Boolean);
-// the review-verdict tool (the reviewer image only): an OBSERVED error-free execution of this tool
-// turns the terminal `completed` into `outcome: "changes_requested"` — the review demanded fixes;
-// its absence means the review passed. A verdict, not a publication: never nudged, never mandated.
-const changesTool = env.PI_REVIEW_OUTCOME_TOOL || "";
-// the review-verdict MANDATE (the reviewer image only): a definite verdict must be OBSERVED —
-// the `request_changes` call or a submit with event APPROVE / REQUEST_CHANGES; a COMMENT-only
-// submission (or silence) is nudged back at most PI_PUBLICATION_NUDGES times, then fails the run
-// with `verdict_missing`. The args of `tool_execution_start` make the submit's event observable.
-const verdictRequired = env.PI_REQUIRED_REVIEW_VERDICT === "1";
-// the run-outcome MANDATE (the coder image only): the agent MUST call the completion tool
-// (PI_OUTCOME_TOOL) before the run can settle — the observed call is the "work is done" signal the
-// control plane turns into the task's terminal state. A settle without the call is nudged back at
-// most PI_PUBLICATION_NUDGES times, then fails the run with `outcome_missing` (the task ends Failed).
-const outcomeTool = env.PI_OUTCOME_TOOL || "";
-const outcomeRequired = env.PI_REQUIRED_OUTCOME === "1";
-// how many times a settle with unconfirmed mandated publications is nudged back to the agent
-// (a follow-up prompt in the same session) before the run fails with `publication_missing`
-const publicationNudges = (() => {
-  const parsed = Number(env.PI_PUBLICATION_NUDGES);
+// the ONE completion mandate (docs/flows/tools.md completion rule): the agent MUST call the
+// hardcoded `report_completion` before the run can settle `completed` — the observed call is the
+// "work is done" signal the control plane turns into the task's terminal state. A settle without
+// the call is nudged back into the same RPC session (a follow-up prompt) at most PI_COMPLETION_NUDGES
+// times, then fails the run with `outcome_missing` (the task ends Failed).
+const COMPLETION_TOOL = "report_completion";
+const completionNudges = (() => {
+  const parsed = Number(env.PI_COMPLETION_NUDGES);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 2;
 })();
 // the /mcp status probe waits for pi's status notify EVENT-DRIVEN; the deadline only bounds the
@@ -187,7 +174,7 @@ async function deliverNext() {
       return true;
     }
     if (!result.retryable) {
-      // A validation-class (4xx) rejection of the completed callback (e.g. 422 artifact_too_large): the API
+      // A validation-class (4xx) rejection of the completed callback: the API
       // persisted nothing from it — report the failure path instead, carrying the API's code.
       if (entry.route === "completed") {
         spool.remove(entry);
@@ -248,15 +235,13 @@ async function pullInput() {
 }
 
 // ---- run state shared across the launch/lifecycle/terminal stages ----
-const observedCompletedToolCalls = new Set(); // error-free completed tool ids
-const completedToolNames = new Set(); // tool names with an error-free completed end (the toolcheck)
+const completedToolNames = new Set(); // bare tool names with an error-free completed end (the completion mandate)
 const toolNameByCallId = new Map(); // tool_started fallback: ends whose payload omits the name
 let lastAssistantText = null; // the last aggregated assistant_output — the run's result summary
-let reviewOutcome = undefined; // the review verdict carried in the terminal completed callback
 let sessionFilePath = null; // the actual session path, discovered via `get_state`
 let mcpProbe = null; // active while the /mcp status probe is in flight: { lines, waiters }
 let settled = false;
-let resolveSettle = null; // resolves the settle wait (the toolcheck loop awaits it per turn)
+let resolveSettle = null; // resolves the settle wait (the completion-mandate loop awaits it per turn)
 let agentExited = false;
 let agentExitCode = null;
 
@@ -280,13 +265,13 @@ async function main() {
     if (type === "tool_started" && typeof payload.toolCallId === "string")
       toolNameByCallId.set(payload.toolCallId, payload.toolName);
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)) {
-      observedCompletedToolCalls.add(payload.toolCallId);
-      const toolName = typeof payload.toolName === "string"
+      const observed = typeof payload.toolName === "string"
         ? payload.toolName
         : toolNameByCallId.get(payload.toolCallId);
-      // store the NORMALIZED name (the last __ segment): every consumer — checkPublications,
-      // the outcome mandate — matches bare tool names against this set
-      if (typeof toolName === "string") completedToolNames.add(normalizeToolName(toolName));
+      // store the NORMALIZED name (the last __ segment): the consumers — the completion mandate
+      // and the `tool` route — match bare tool names against this set
+      const normalized = normalizeToolName(observed);
+      if (typeof normalized === "string") completedToolNames.add(normalized);
     }
     // The communication wire (docs/run-worker.md 'Communication tool callbacks'): each observed
     // completed, error-free vocabulary call becomes exactly ONE `tool` route callback, spooled like
@@ -295,10 +280,7 @@ async function main() {
     // produces no entry; ordinary tools keep flowing as `events` tool_started/tool_completed.
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)
         && !mapper.deniedToolCallIds.has(payload.toolCallId)) {
-      const observed = typeof payload.toolName === "string"
-        ? payload.toolName
-        : toolNameByCallId.get(payload.toolCallId);
-      const normalized = normalizeToolName(observed);
+      const normalized = normalizeToolName(payload.toolName ?? toolNameByCallId.get(payload.toolCallId));
       if (TOOL_ROUTE_VOCABULARY.has(normalized)) {
         const eventId = `${runId}-tool-${payload.toolCallId}`;
         spool.append({
@@ -361,7 +343,7 @@ async function main() {
         for (const wake of mcpProbe.waiters.splice(0)) wake(); // the probe stops waiting on the first notify
       }
       if (mapper.onLine(line) && mapper.settled && !settled) {
-        settled = true; // stdin stays open: a failed publication toolcheck nudges a follow-up prompt
+        settled = true; // stdin stays open: a missed completion call nudges a follow-up prompt
         if (resolveSettle) { resolveSettle(); resolveSettle = null; }
       }
     }
@@ -451,7 +433,7 @@ async function main() {
     // ---- MCP status probe (pi-native): pi keeps a failed server's stderr in `connection.error`
     // (up to 2000 chars) but its startup notice truncates to the first line ("MCP connection closed").
     // The /mcp command prints the FULL status (formatStatus → the stderr tail). A run without its
-    // publication tools is useless work — a failed server fails the run BEFORE the task prompt with
+    // communication tools is useless work — a failed server fails the run BEFORE the task prompt with
     // the exact cause; the agent process is stopped and no work is done.
     mcpProbe = { lines: [], waiters: [] };
     let probeDisposition = null;
@@ -517,12 +499,12 @@ async function main() {
     return await spoolFailure("runtime_failure", `agent launch failed — ${error.message}`);
   }
 
-  // ---- settle → publication toolcheck loop ----
-  // After every agent_settled the Bridge verifies the mandated publication kinds against the
-  // OBSERVED event stream (tool names with an error-free completed end) — the agent never
-  // self-reports. A missing mandate is nudged back into the same RPC session (at most
-  // PI_PUBLICATION_NUDGES times); a permission-denied mandate fails immediately (a nudge cannot
-  // help); exhausted nudges fail the run with `publication_missing`.
+  // ---- settle → completion mandate loop ----
+  // After every agent_settled the Bridge verifies the ONE mandate against the OBSERVED event
+  // stream: the hardcoded `report_completion` must have an error-free completed execution — the
+  // agent never self-reports. A settle without it is nudged back into the same RPC session (at
+  // most PI_COMPLETION_NUDGES times); a permission-denied call fails immediately (a nudge cannot
+  // help); exhausted nudges or an agent exit fail the run with `outcome_missing`.
   const failNow = (code, message) => {
     clearInterval(heartbeatTimer);
     clearInterval(flushTimer);
@@ -536,93 +518,37 @@ async function main() {
     // must resolve the first wait immediately, or the loop hangs forever on a still-alive agent
     if (settled && !confirmed) resolve();
   });
-  let nudgesLeft = publicationNudges;
+  let nudgesLeft = completionNudges;
   let confirmed = false;
   for (;;) {
     await Promise.race([settleWait(), onAgentExit]);
     if (stopSignal) break; // the stop path owns the terminal
     if (!settled) break; // the agent exited without settling — judged below
-    const check = checkPublications(requiredPublicationKinds, completedToolNames, mapper.deniedToolNames);
-    const verdict = verdictRequired ? reviewVerdict(mapper.completedToolCalls, changesTool) : { decided: true, changesRequested: false };
-    const outcomeDone = !outcomeRequired
-      || completedToolNames.has(normalizeToolName(outcomeTool));
-    if (check.ok && verdict.decided && outcomeDone) {
+    if (completedToolNames.has(COMPLETION_TOOL)) {
       confirmed = true;
-      reviewOutcome = verdict.changesRequested ? "changes_requested" : undefined;
       break;
     }
-    if (check.ok && outcomeDone && !verdict.decided) {
-      // the verdict mandate: the changes tool denied by policy cannot be nudged away either
-      if (changesTool && mapper.deniedToolNames.has(changesTool))
-        return await failNow("required_permission_denied",
-          `the review verdict tool was denied by the run's permission policy: ${changesTool}`);
-      if (agentExited || nudgesLeft <= 0)
-        return await failNow("verdict_missing",
-          "the review verdict was never confirmed: no request_changes call and no APPROVE/REQUEST_CHANGES submit");
-      nudgesLeft -= 1;
-      log(`review verdict undetermined — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
-      settled = false; // the nudge restarts the turn: heartbeats and the settle wait resume
-      mapper.settled = false;
-      mapper.flushAggregated();
-      try {
-        await Promise.race([
-          correlator.command("prompt", { message: verdictNudgePrompt(changesTool || "request_changes") }),
-          onAgentExit.then((code) => {
-            throw new Error(`agent exited during nudge acceptance (code ${code})`);
-          }),
-        ]);
-      } catch (error) {
-        return await failNow("runtime_failure", `verdict nudge failed — ${error.message}`);
-      }
-      continue;
-    }
-    if (check.ok && verdict.decided && !outcomeDone) {
-      // the run-outcome mandate: the completion tool cannot be nudged into existence when denied
-      if (outcomeTool && mapper.deniedToolNames.has(outcomeTool))
-        return await failNow("required_permission_denied",
-          `the run-outcome tool was denied by the run's permission policy: ${outcomeTool}`);
-      if (agentExited || nudgesLeft <= 0)
-        return await failNow("outcome_missing",
-          `the completion tool was never confirmed: ${outcomeTool} — the work is not reported done`);
-      nudgesLeft -= 1;
-      log(`run-outcome tool missing (${outcomeTool}) — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
-      settled = false;
-      mapper.settled = false;
-      mapper.flushAggregated();
-      try {
-        await Promise.race([
-          correlator.command("prompt", { message: outcomeNudgePrompt(outcomeTool) }),
-          onAgentExit.then((code) => {
-            throw new Error(`agent exited during nudge acceptance (code ${code})`);
-          }),
-        ]);
-      } catch (error) {
-        return await failNow("runtime_failure", `outcome nudge failed — ${error.message}`);
-      }
-      continue;
-    }
-    if (check.denied.length > 0) {
+    // the completion call denied by the permission policy cannot be nudged into existence
+    if (mapper.deniedToolNames.has(COMPLETION_TOOL))
       return await failNow("required_permission_denied",
-        `mandatory publication kind(s) denied by the run's permission policy: ${check.denied.join(", ")}`);
-    }
-    if (agentExited || nudgesLeft <= 0) {
-      return await failNow("publication_missing",
-        `mandatory publication kind(s) never confirmed: ${check.missing.join(", ")}`);
-    }
+        `the completion tool was denied by the run's permission policy: ${COMPLETION_TOOL}`);
+    if (agentExited || nudgesLeft <= 0)
+      return await failNow("outcome_missing",
+        `the completion tool was never confirmed: ${COMPLETION_TOOL} — the work is not reported done`);
     nudgesLeft -= 1;
-    log(`mandatory publication kind(s) missing (${check.missing.join(", ")}) — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
+    log(`completion tool missing (${COMPLETION_TOOL}) — nudging the agent (${nudgesLeft} nudge(s) left)\n`);
     settled = false; // the nudge restarts the turn: heartbeats and the settle wait resume
     mapper.settled = false;
     mapper.flushAggregated();
     try {
       await Promise.race([
-        correlator.command("prompt", { message: nudgePrompt(check.missing) }),
+        correlator.command("prompt", { message: completionNudgePrompt(COMPLETION_TOOL) }),
         onAgentExit.then((code) => {
           throw new Error(`agent exited during nudge acceptance (code ${code})`);
         }),
       ]);
     } catch (error) {
-      return await failNow("runtime_failure", `publication nudge failed — ${error.message}`);
+      return await failNow("runtime_failure", `completion nudge failed — ${error.message}`);
     }
   }
 
@@ -640,11 +566,7 @@ async function main() {
       `agent process exited (code ${agentExitCode}) without settling — reported by the Runtime Bridge`);
   }
 
-  // ---- all mandated publications confirmed: collect the run result ----
-  const collected = collectArtifacts(workspace);
-  if (collected.error) {
-    return await spoolFailure(collected.error.code, `artifact collection failed — ${collected.error.message}`);
-  }
+  // ---- completion confirmed: collect the run result (summary + git facts) ----
   const summary = (lastAssistantText ?? "").trim() || "run completed";
 
   // graceful agent exit: stdin EOF ends real pi; a one-shot stub exits by itself after settling
@@ -659,13 +581,13 @@ async function main() {
     }
     await onAgentExit;
   }
-  log(`agent lifecycle done (exit ${agentExitCode}, publications confirmed)\n`);
+  log(`agent lifecycle done (exit ${agentExitCode}, completion confirmed)\n`);
   if (agentExitCode !== 0) {
     return await spoolFailure("runtime_failure",
       `agent process exited (code ${agentExitCode}) after settling — reported by the Runtime Bridge`);
   }
 
-  spool.append(completedTerminal(runId, sessionFilePath, summary, collected.artifacts, gitFacts(workspace), reviewOutcome));
+  spool.append(completedTerminal(runId, sessionFilePath, summary, gitFacts(workspace)));
   await finishWait();
 }
 

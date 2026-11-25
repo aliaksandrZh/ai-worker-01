@@ -6,17 +6,14 @@
  *
  * Fail-closed: a `permission_denied` stream record (the unattended
  * permission policy's denial of a tool/MCP operation) maps to the `permission_blocked` RunEvent and
- * is collected in `deniedToolCallIds`/`deniedToolNames` — the publication toolcheck turns a REQUIRED
- * publication whose tool was denied into a terminal `required_permission_denied` failure. The denial
- * itself is answered to the agent by the permission layer (never a parked dialog); the Bridge only
- * records and verifies.
+ * is collected in `deniedToolCallIds`/`deniedToolNames` — the completion mandate turns a denied
+ * `report_completion` into a terminal `required_permission_denied` failure. The denial itself is
+ * answered to the agent by the permission layer (never a parked dialog); the Bridge only records
+ * and verifies.
  *
- * Two record shapes share this mapper (the image owns the agent):
- * - real Pi: `message_update` carries `usage` + the nested `assistantMessageEvent`
- *   (`{type:"text_delta", delta}`); tool/agent events carry their fields at the record top level
- *   (pi docs `json.md`), and `tool_execution_end` carries `isError`.
- * - the reference stub protocol (config/agents/stub/stub-agent/pi-stub.mjs) nests event fields under
- *   `data` and reports `status` instead of `isError`.
+ * One canonical record shape (pi docs `json.md`; the stub speaks it since ticket 05): stream
+ * fields live at the record top level, `message_update` carries the typed `assistantMessageEvent`,
+ * and `tool_execution_end` carries `isError`. No nested-`data` / `status` legacy shapes exist.
  */
 export class EventMapper {
   /**
@@ -30,8 +27,7 @@ export class EventMapper {
     this.pending = []; // [{id, text}] — deltas since the last flush
     this.settled = false;
     this.deniedToolCallIds = new Set(); // tool calls denied by the permission policy
-    this.deniedToolNames = new Set(); // tool NAMES denied by the permission policy (the toolcheck)
-    this.completedToolCalls = []; // [{tool: normalizedName, args}] — successful ends (the verdict toolcheck)
+    this.deniedToolNames = new Set(); // tool NAMES denied by the permission policy (bare, normalized)
     this.argsByCallId = new Map(); // toolCallId → the tool_execution_start args
   }
 
@@ -48,59 +44,54 @@ export class EventMapper {
     } catch {
       return false; // not protocol output; the caller logs it verbatim to stdout.log
     }
-    // real pi keeps stream fields top-level; the stub nests them under `data`
-    const data = rpc.data ?? rpc;
     switch (rpc.type) {
       case "agent_start":
-        this.push("agent_started", data);
+        this.push("agent_started", {});
         break;
       case "turn_start":
-        this.push("turn_started", data);
+        this.push("turn_started", {});
         break;
       case "turn_end":
         this.flushAggregated();
-        this.push("turn_completed", data);
+        this.push("turn_completed", {});
         break;
       case "message_update": {
-        // aggregated assistant output: non-empty text deltas only. Real pi wraps the
-        // streaming event in `assistantMessageEvent` and TYPES every event — only `text_delta` is
-        // assistant output (`thinking_delta` is never progress); the stub protocol omits the type.
-        const streamEvent = rpc.assistantMessageEvent ?? data;
-        const isTextDelta = streamEvent.type === undefined || streamEvent.type === "text_delta";
-        if (isTextDelta && typeof streamEvent.delta === "string" && streamEvent.delta.length > 0)
+        // aggregated assistant output: typed non-empty text deltas only. The typed streaming
+        // event is canonical — only `text_delta` is assistant output (`thinking_delta` and
+        // untyped records are never progress).
+        const streamEvent = rpc.assistantMessageEvent;
+        if (streamEvent?.type === "text_delta"
+            && typeof streamEvent.delta === "string" && streamEvent.delta.length > 0)
           this.pending.push(streamEvent.delta);
         break;
       }
       case "tool_execution_start":
         this.flushAggregated();
-        if (typeof data.toolCallId === "string") this.argsByCallId.set(data.toolCallId, data.args ?? {});
-        this.push("tool_started", { toolCallId: data.toolCallId, toolName: data.toolName });
+        if (typeof rpc.toolCallId === "string") this.argsByCallId.set(rpc.toolCallId, rpc.args ?? {});
+        this.push("tool_started", { toolCallId: rpc.toolCallId, toolName: rpc.toolName });
         break;
       case "tool_execution_update":
-        this.push("tool_progress", { toolCallId: data.toolCallId, toolName: data.toolName });
+        this.push("tool_progress", { toolCallId: rpc.toolCallId, toolName: rpc.toolName });
         break;
       case "tool_execution_end":
         this.flushAggregated();
-        if (isSuccessfulToolEnd(endPayload(data)) && typeof data.toolName === "string")
-          // keep the ORIGINAL name (the verifier normalizes the server-prefixed shape)
-          this.completedToolCalls.push({ toolName: data.toolName, args: this.argsByCallId.get(data.toolCallId) ?? {} });
-        this.push("tool_completed", endPayload(data));
+        this.push("tool_completed", { toolCallId: rpc.toolCallId, toolName: rpc.toolName, isError: rpc.isError === true });
         break;
       case "permission_denied":
         // recorded as `permission_blocked` (never progress, never a timer reset) and
-        // tracked so the publication toolcheck can fail the mandatory work as `required_permission_denied`
+        // tracked so the completion mandate can fail a denied `report_completion` immediately
         this.flushAggregated();
-        if (typeof data.toolCallId === "string") this.deniedToolCallIds.add(data.toolCallId);
-        if (typeof data.toolName === "string") this.deniedToolNames.add(data.toolName);
+        if (typeof rpc.toolCallId === "string") this.deniedToolCallIds.add(rpc.toolCallId);
+        if (typeof rpc.toolName === "string") this.deniedToolNames.add(normalizeToolName(rpc.toolName));
         this.push("permission_blocked", {
-          ...(typeof data.toolCallId === "string" ? { toolCallId: data.toolCallId } : {}),
-          ...(typeof data.toolName === "string" ? { toolName: data.toolName } : {}),
-          ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+          ...(typeof rpc.toolCallId === "string" ? { toolCallId: rpc.toolCallId } : {}),
+          ...(typeof rpc.toolName === "string" ? { toolName: rpc.toolName } : {}),
+          ...(typeof rpc.reason === "string" ? { reason: rpc.reason } : {}),
         });
         break;
       case "agent_settled":
         this.flushAggregated();
-        this.push("agent_settled", data); // real pi: {aborted}; stub: {}
+        this.push("agent_settled", { aborted: rpc.aborted === true });
         this.settled = true;
         break;
       case "error":
@@ -134,20 +125,21 @@ export class EventMapper {
   }
 }
 
-/** Sparse end payload: carries whichever of `status` (stub) / `isError` (pi) the stream provided. */
-function endPayload(data) {
-  const payload = { toolCallId: data.toolCallId, toolName: data.toolName };
-  if (data.status !== undefined) payload.status = data.status;
-  if (data.isError !== undefined) payload.isError = data.isError;
-  return payload;
+/**
+ * MCP tool records report the server-prefixed name (`mcp__github__add_issue_comment`) while the
+ * bridge's vocabulary and mandates match bare tool names. The normalized name is the last
+ * `__` segment; a bare name passes through.
+ */
+export function normalizeToolName(name) {
+  return typeof name === "string" && name.includes("__") ? name.split("__").pop() : name;
 }
 
 /**
- * Correlation helper: a `tool_execution_end` counts toward requiredPublications only when
- * the tool execution actually finished WITHOUT an error (pi carries `isError`; the stub `status`).
+ * Correlation helper: a `tool_execution_end` counts toward the observed call sets (the `tool`
+ * route and the completion mandate) only when the tool execution finished WITHOUT an error
+ * (the canonical `isError` field).
  */
 export function isSuccessfulToolEnd(payload) {
   if (!payload || typeof payload !== "object" || typeof payload.toolCallId !== "string") return false;
-  if (payload.isError === true) return false;
-  return payload.status === undefined || payload.status === "completed";
+  return payload.isError !== true;
 }
