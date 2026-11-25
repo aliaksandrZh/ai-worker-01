@@ -1,20 +1,28 @@
 {
   "title": "Pi Agent Logs",
   "uid": "pi-agent-logs",
-  "tags": ["logging"],
+  "tags": [
+    "logging"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
   "refresh": "10s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
         "name": "service",
         "label": "Service",
         "type": "query",
-        "datasource": { "type": "loki", "uid": "loki" },
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
         "definition": "label_values(service)",
         "query": "label_values(service)",
         "refresh": 2,
@@ -23,7 +31,11 @@
         "multi": true,
         "sort": 1,
         "options": [],
-        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
         "hide": 0
       }
     ]
@@ -33,14 +45,34 @@
       "id": 1,
       "type": "logs",
       "title": "All service logs",
-      "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 26, "w": 24, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 26,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "targets": [
         {
           "refId": "A",
           "queryType": "range",
-          "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "{service=~\"$service\"} | json | line_format `{{.service}} | {{.message}}`"
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=~\"$service\", logformat=\"json\"} | json | line_format `{{.service}} | {{.level}} | {{.message}}`"
+        },
+        {
+          "refId": "B",
+          "queryType": "range",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service=~\"$service\", logformat=\"text\"}"
         }
       ],
       "options": {
