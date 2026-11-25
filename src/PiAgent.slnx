@@ -9,4 +9,5 @@
   <Project Path="tests/Events.Tests/PiAgent.Events.Tests.csproj" />
   <Project Path="tests/Architecture.Tests/PiAgent.Architecture.Tests.csproj" />
   <Project Path="tests/Platform.Tests/PiAgent.Platform.Tests.csproj" />
+  <Project Path="tests/RunWorker.Tests/PiAgent.RunWorker.Tests.csproj" />
 </Solution>

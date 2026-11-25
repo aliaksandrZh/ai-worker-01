@@ -11,7 +11,9 @@ public sealed record WorkflowRow(
     string Status,
     string? NodeId,
     bool PlanApproved,
-    int ReviewRounds)
+    int ReviewRounds,
+    string? AgentBranch,
+    string? HeadSha)
 {
     public ItemRef Item => new(Owner, Repo, ItemNumber);
 }

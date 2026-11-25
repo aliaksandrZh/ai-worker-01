@@ -2,7 +2,12 @@ namespace PiAgent.Events;
 
 /// <summary>events.md "Run lifecycle events" — each transition is an event (docs/run-worker.md).</summary>
 
-/// <summary>Pointers-only run input (ADR-0006: agents read GitHub themselves).</summary>
+/// <summary>
+/// Pointers-only run input v2 (ADR-0006: agents read GitHub themselves;
+/// docs/run-worker.md "Run input (pointers v2)"). The Orchestrator fills every pointer
+/// from Workflow/Task state at run_scheduled; the worker exports the entry-facing subset
+/// as container env and the Bridge renders the task prompt from the same file.
+/// </summary>
 public sealed record RunInput(
     string Owner,
     string Repo,
@@ -10,7 +15,10 @@ public sealed record RunInput(
     long? PrNumber,
     string Command,
     long PlanCommentId,
-    string Profile) : IEvent
+    string Profile,
+    string? AgentBranch,
+    string DefaultBranch,
+    string? ReviewHeadSha) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -33,8 +41,20 @@ public sealed record RunStopRequested(long RunId, string Owner, string Repo, lon
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
-/// <summary>Run settled WITH report_completion — next flow stage or waiting_for_human.</summary>
-public sealed record RunCompleted(long RunId, long TaskId, string Owner, string Repo, long ItemNumber) : IEvent
+/// <summary>
+/// Run settled WITH report_completion — next flow stage or waiting_for_human. Branch and
+/// CommitSha are the completed callback's git facts (docs/run-worker.md terminal payload);
+/// the Orchestrator records them as Workflow pointers (the agent branch a fix round
+/// continues, the head commit a review round pins).
+/// </summary>
+public sealed record RunCompleted(
+    long RunId,
+    long TaskId,
+    string Owner,
+    string Repo,
+    long ItemNumber,
+    string? Branch = null,
+    string? CommitSha = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }

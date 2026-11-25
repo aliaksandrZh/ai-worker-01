@@ -22,4 +22,14 @@ public sealed class OrchestrationOptions
 
     /// <summary>Auto-retries of a failed Run before the Task parks.</summary>
     public int MaxRunRetries { get; set; } = 2;
+
+    /// <summary>
+    /// Default (PR-base) branch per repository, key "owner/name" — read from the config
+    /// plane's repositories.yaml (optional default_branch per entry) at wiring time.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> DefaultBranches { get; set; } =
+        new Dictionary<string, string>();
+
+    /// <summary>The default branch for a repository with no config entry.</summary>
+    public string DefaultBranchFallback { get; set; } = "main";
 }

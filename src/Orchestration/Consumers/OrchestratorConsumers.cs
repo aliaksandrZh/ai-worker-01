@@ -57,7 +57,7 @@ public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEv
         typeof(PlanSaved), typeof(BlockerReported), typeof(ReviewDecisionRequested),
         typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
         typeof(ReviewCommentsSubmitted), typeof(BugReported), typeof(TestsPassed),
-        typeof(ProjectItemChanged), typeof(LabelsChanged),
+        typeof(ProjectItemChanged), typeof(LabelsChanged), typeof(PrUpdated),
     ];
 
     public string Name => "OrchestratorWorkflow";
@@ -78,6 +78,7 @@ public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEv
         CriteriaClarificationRequested c => core.HandleEscalationAsync(c,
             $"acceptance criteria need clarification: {c.Question}", ct),
         LabelsChanged labels => IgnoreLabelTriggersAsync(labels, ct),
+        PrUpdated updated => core.HandlePrUpdatedAsync(updated, ct),
         _ => Task.CompletedTask,
     };
 

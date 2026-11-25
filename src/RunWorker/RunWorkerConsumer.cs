@@ -56,15 +56,25 @@ public sealed class RunWorkerConsumer(
             containerName, token, DateTime.UtcNow);
         registry.Add(entry);
 
+        // entry env from the run input pointers (docs/run-worker.md "Run input (pointers v2)"):
+        // one input contract — the Bridge renders the prompt from the same input.json
+        var env = new List<string>
+        {
+            $"PI_RUN_ID={scheduled.RunId}",
+            $"PI_RUN_TOKEN={token}",
+            $"PI_CALLBACK_BASE_URL={runOptions.CallbackBaseUrl}",
+            $"GIT_CLONE_REPO={scheduled.Input.Owner}/{scheduled.Input.Repo}",
+            $"GIT_CLONE_BRANCH={scheduled.Input.AgentBranch ?? scheduled.Input.DefaultBranch}",
+        };
+        if (scheduled.Input.ReviewHeadSha is { } headSha)
+            env.Add($"REVIEW_HEAD_SHA={headSha}");
+        if (scheduled.Input.PrNumber is { } prNumber)
+            env.Add($"REVIEW_PR_NUMBER={prNumber}");
+
         var plan = new ContainerPlan(
             Name: containerName,
             Image: $"{entry.Image}:{runOptions.ImageTag}",
-            Env:
-            [
-                $"PI_RUN_ID={scheduled.RunId}",
-                $"PI_RUN_TOKEN={token}",
-                $"PI_CALLBACK_BASE_URL={runOptions.CallbackBaseUrl}",
-            ],
+            Env: [.. env],
             Binds: [$"{runDir}:/run"],
             Labels: new Dictionary<string, string> { ["pi.run.id"] = scheduled.RunId.ToString() },
             Cpus: null,
@@ -117,13 +127,18 @@ public sealed class RunWorkerConsumer(
         switch (callback.Route)
         {
             case "completed":
-                await SettleAsync(entry, "succeeded", null, ct);
+            {
+                // the terminal payload's git facts (branch + head commit) are the Workflow's
+                // pointers: the agent branch a fix round continues, the revision a review pins
+                var facts = ParseGitFacts(callback.Body);
+                await SettleAsync(entry, "succeeded", null, facts.Branch, facts.CommitSha, ct);
                 break;
+            }
             case "failed":
-                await SettleAsync(entry, "failed", callback.Body ?? "bridge reported failure", ct);
+                await SettleAsync(entry, "failed", callback.Body ?? "bridge reported failure", null, null, ct);
                 break;
             case "cancelled":
-                await SettleAsync(entry, "cancelled", null, ct);
+                await SettleAsync(entry, "cancelled", null, null, null, ct);
                 break;
             default:
                 logger.LogDebug("run {run} callback {route} recorded (no state)", callback.RunId, callback.Route);
@@ -133,9 +148,9 @@ public sealed class RunWorkerConsumer(
 
     /// <summary>Called by the watchdog when a container exits without a terminal callback.</summary>
     internal async Task SettleOnWatchdogAsync(RunEntry entry, string cause, CancellationToken ct) =>
-        await SettleAsync(entry, "failed", cause, ct);
+        await SettleAsync(entry, "failed", cause, null, null, ct);
 
-    private async Task SettleAsync(RunEntry entry, string status, string? cause, CancellationToken ct)
+    private async Task SettleAsync(RunEntry entry, string status, string? cause, string? branch, string? commitSha, CancellationToken ct)
     {
         registry.Remove(entry.RunId);
         await docker.StopAsync(entry.ContainerName, ct);
@@ -146,7 +161,8 @@ public sealed class RunWorkerConsumer(
         IEvent terminal = status switch
         {
             "succeeded" => new RunCompleted(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber),
+                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber,
+                Branch: branch, CommitSha: commitSha),
             "cancelled" => new RunCancelled(
                 entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber),
             _ => new RunFailed(
@@ -155,5 +171,33 @@ public sealed class RunWorkerConsumer(
         };
         await log.AppendAsync(terminal, ct);
         logger.LogInformation("run {run} settled as {status}", entry.RunId, status);
+    }
+
+    /// <summary>
+    /// The terminal completed payload's git facts — { result: { branch, commitSha } } —
+    /// parsed tolerantly: an old-shaped or fact-less body settles without pointers.
+    /// </summary>
+    private static (string? Branch, string? CommitSha) ParseGitFacts(string? body)
+    {
+        if (body is null)
+            return (null, null);
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var result = doc.RootElement;
+            if (result.TryGetProperty("result", out var nested) && nested.ValueKind == JsonValueKind.Object)
+                result = nested;
+            return (
+                result.TryGetProperty("branch", out var branch) && branch.ValueKind == JsonValueKind.String
+                    ? branch.GetString()
+                    : null,
+                result.TryGetProperty("commitSha", out var sha) && sha.ValueKind == JsonValueKind.String
+                    ? sha.GetString()
+                    : null);
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
     }
 }

@@ -54,7 +54,7 @@ public sealed class Orchestrator(
         {
             logger.LogInformation("command admitted: {command} on {item} by {author} → task {type}",
                 cmd.Command, workflow.Item.Key, cmd.Author, taskType);
-            await StartTaskAsync(workflow, taskType, cmd.Text, uow, ct);
+            await StartTaskAsync(workflow, taskType, cmd.Text, agentBranch: null, uow, ct);
         }
 
         await uow.Events.CommitAsync(ct);
@@ -175,6 +175,11 @@ public sealed class Orchestrator(
             return;
         }
         await state.SetTaskStatusAsync(task.Id, TaskStatuses.Succeeded, uow, ct);
+
+        // the Coder run's git facts are the Workflow's pointers: the agent branch a fix
+        // round continues and the head commit a review round pins (docs/run-worker.md)
+        if (task.Type is TaskTypes.Implement)
+            await state.SetWorkflowPointersAsync(workflow.Id, evt.Branch, evt.CommitSha, uow, ct);
 
         switch (task.Type)
         {
@@ -386,29 +391,56 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    // ---- internals ---------------------------------------------------------------
-
-    private async Task StartTaskAsync(WorkflowRow workflow, string taskType, string? commandText, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    /// <summary>
+    /// New commits on the PR pin the revision the next review round reviews
+    /// (docs/flows events.md pr_updated): the head sha becomes the Workflow's review pin.
+    /// </summary>
+    public async Task HandlePrUpdatedAsync(PrUpdated evt, CancellationToken ct)
     {
-        var taskId = await state.CreateTaskAsync(workflow.Id, taskType, uow, ct);
-        await CreateRunAndScheduleAsync(workflow, taskId, commandText, uow, ct);
+        await using var uow = await state.Factory.BeginAsync(ct);
+        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.PrNumber), uow, ct);
+        if (workflow is not null)
+            await state.SetWorkflowPointersAsync(workflow.Id, agentBranch: null, headSha: evt.HeadSha, uow, ct);
+
+        await uow.Events.CommitAsync(ct);
     }
 
-    private async Task CreateRunAndScheduleAsync(WorkflowRow workflow, long taskId, string? commandText, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    // ---- internals ---------------------------------------------------------------
+
+    private async Task StartTaskAsync(WorkflowRow workflow, string taskType, string? commandText, string? agentBranch, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    {
+        var taskId = await state.CreateTaskAsync(workflow.Id, taskType, uow, ct);
+        await CreateRunAndScheduleAsync(workflow, taskId, commandText, agentBranch, uow, ct);
+    }
+
+    /// <summary>
+    /// RunInput v2 (docs/run-worker.md "Run input (pointers v2)"): every pointer is filled
+    /// from Workflow/Task state at run_scheduled — the PR a review runs against, the agent
+    /// branch a fix round continues, the configured default branch, and the review head pin.
+    /// </summary>
+    private async Task CreateRunAndScheduleAsync(WorkflowRow workflow, long taskId, string? commandText, string? agentBranch, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
         var task = await state.GetTaskAsync(taskId, uow, ct);
         var input = new RunInput(workflow.Owner, workflow.Repo, workflow.ItemNumber,
             PrNumber: task.Type is TaskTypes.Review ? workflow.ItemNumber : null,
             Command: commandText ?? task.Type, PlanCommentId: 0,
-            Profile: CommandRegistry.ProfileFor(task.Type));
+            Profile: CommandRegistry.ProfileFor(task.Type),
+            AgentBranch: task.Type is TaskTypes.Implement ? agentBranch : null,
+            DefaultBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
+            ReviewHeadSha: task.Type is TaskTypes.Review ? workflow.HeadSha : null);
         var runId = await state.CreateRunAsync(taskId, input, uow, ct);
         await log.AppendAsync(new RunScheduled(runId, taskId, workflow.Id, input), uow.Events, ct);
     }
 
+    private string DefaultBranchFor(string owner, string repo) =>
+        Options.DefaultBranches.TryGetValue($"{owner}/{repo}", out var branch)
+            ? branch
+            : Options.DefaultBranchFallback;
+
     private async Task CreateNextTaskAsync(WorkflowRow workflow, TaskRow current, string nextType, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
         var nextId = await state.CreateTaskAsync(workflow.Id, nextType, uow, ct);
-        await CreateRunAndScheduleAsync(workflow, nextId, null, uow, ct);
+        await CreateRunAndScheduleAsync(workflow, nextId, null, agentBranch: null, uow, ct);
         logger.LogInformation("workflow {workflow}: {current} succeeded → {next} task {task}",
             workflow.Id, current.Type, nextType, nextId);
     }
@@ -417,7 +449,8 @@ public sealed class Orchestrator(
     {
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
         await state.SetTaskStatusAsync(task.Id, TaskStatuses.Queued, uow, ct);
-        await CreateRunAndScheduleAsync(workflow, task.Id, null, uow, ct);
+        // a resumed Task continues where it parked — an Implement Task continues the agent branch
+        await CreateRunAndScheduleAsync(workflow, task.Id, null, workflow.AgentBranch, uow, ct);
     }
 
     private async Task RestartPlanAsync(WorkflowRow workflow, UserDecision decision, IOrchestrationUnitOfWork uow, CancellationToken ct)
@@ -429,7 +462,7 @@ public sealed class Orchestrator(
         }
 
         await state.SetWorkflowPlanAsync(workflow.Id, approved: false, 0, uow, ct);
-        await StartTaskAsync(workflow, TaskTypes.Plan, null, uow, ct);
+        await StartTaskAsync(workflow, TaskTypes.Plan, null, agentBranch: null, uow, ct);
     }
 
     private async Task StartFixingRoundAsync(WorkflowRow workflow, UserDecision? _decision, IOrchestrationUnitOfWork uow, CancellationToken ct)
@@ -442,7 +475,8 @@ public sealed class Orchestrator(
         }
 
         await state.IncrementReviewRoundsAsync(workflow.Id, uow, ct);
-        await StartTaskAsync(workflow, TaskTypes.Implement, null, uow, ct);
+        // a fixing round continues the agent branch the previous Coder run pushed
+        await StartTaskAsync(workflow, TaskTypes.Implement, null, workflow.AgentBranch, uow, ct);
     }
 
     private async Task ContinueAfterReviewAsync(WorkflowRow workflow, IOrchestrationUnitOfWork uow, CancellationToken ct)

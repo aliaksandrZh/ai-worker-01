@@ -69,9 +69,13 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
                 status         text   NOT NULL,
                 plan_approved  boolean NOT NULL DEFAULT false,
                 review_rounds  int    NOT NULL DEFAULT 0,
+                agent_branch   text,
+                head_sha       text,
                 created_at     timestamptz NOT NULL DEFAULT now(),
                 UNIQUE (owner, repo, item_number)
             );
+            ALTER TABLE orch_workflow ADD COLUMN IF NOT EXISTS agent_branch text;
+            ALTER TABLE orch_workflow ADD COLUMN IF NOT EXISTS head_sha text;
             CREATE TABLE IF NOT EXISTS orch_task (
                 id          bigserial PRIMARY KEY,
                 workflow_id bigint NOT NULL REFERENCES orch_workflow,
@@ -126,11 +130,12 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
 
     private static WorkflowRow MapWorkflow(NpgsqlDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetInt64(3),
-        r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetBoolean(6), r.GetInt32(7));
+        r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetBoolean(6), r.GetInt32(7),
+        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9));
 
     public Task<WorkflowRow?> FindWorkflowAsync(ItemRef item, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         QueryOptionalAsync(uow,
-            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds FROM orch_workflow WHERE owner = @owner AND repo = @repo AND item_number = @number",
+            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha FROM orch_workflow WHERE owner = @owner AND repo = @repo AND item_number = @number",
             p =>
             {
                 p.AddWithValue("owner", item.Owner);
@@ -144,7 +149,7 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
             INSERT INTO orch_workflow (owner, repo, item_number, status)
             VALUES (@owner, @repo, @number, 'active')
             ON CONFLICT (owner, repo, item_number) DO UPDATE SET owner = EXCLUDED.owner
-            RETURNING id, owner, repo, item_number, status, node_id, plan_approved, review_rounds
+            RETURNING id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha
             """,
             p =>
             {
@@ -156,7 +161,7 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
 
     public Task<WorkflowRow> GetWorkflowAsync(long workflowId, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         QueryRequiredAsync(uow,
-            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds FROM orch_workflow WHERE id = @id",
+            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha FROM orch_workflow WHERE id = @id",
             p => p.AddWithValue("id", workflowId), MapWorkflow, $"workflow {workflowId} not found", ct);
 
     public Task SetWorkflowStatusAsync(long workflowId, string status, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
@@ -186,6 +191,21 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
     public Task IncrementReviewRoundsAsync(long workflowId, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         ExecAsync(uow, "UPDATE orch_workflow SET review_rounds = review_rounds + 1 WHERE id = @id",
             p => p.AddWithValue("id", workflowId), ct);
+
+    public Task SetWorkflowPointersAsync(long workflowId, string? agentBranch, string? headSha, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
+        // pointers are facts of the current revision: non-null overwrites, null preserves
+        ExecAsync(uow, """
+            UPDATE orch_workflow
+            SET agent_branch = COALESCE(@agent_branch, agent_branch),
+                head_sha     = COALESCE(@head_sha, head_sha)
+            WHERE id = @id
+            """,
+            p =>
+            {
+                p.AddWithValue("agent_branch", (object?)agentBranch ?? DBNull.Value);
+                p.AddWithValue("head_sha", (object?)headSha ?? DBNull.Value);
+                p.AddWithValue("id", workflowId);
+            }, ct);
 
     public async Task<long> CreateTaskAsync(long workflowId, string type, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
