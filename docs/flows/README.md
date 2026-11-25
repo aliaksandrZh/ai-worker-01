@@ -4,7 +4,8 @@
 > ([tools.md](tools.md)), and the events that drive them ([events.md](events.md)).
 > Flow order is fixed: **plan → development → review → testing**; review and fixing may
 > cycle — a round cap exists, the Orchestrator owns it, and it is not modeled in the
-> diagrams.
+> diagrams. The component that drives all four flows is described in
+> [../orchestrator.md](../orchestrator.md).
 
 | # | Flow | Agent | Doc | Entry | Exit signal |
 |---|---|---|---|---|---|

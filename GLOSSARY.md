@@ -6,12 +6,21 @@ Language of the agent orchestration docs (`docs/flows/`).
 
 ### Flows and runs
 
+**Workflow**:
+The work on one root item (issue); owns exactly one active Task at a time.
+_Avoid_: job, process
+
 **Flow**:
 One of the four ordered agent workflows — plan, development, review, testing.
 _Avoid_: stage, phase, pipeline
 
+**Task**:
+One unit of work in a Workflow: a single execution of a flow stage (plan, implement,
+review, test). Retries and resumes are new Runs of the same Task.
+_Avoid_: job, step
+
 **Run**:
-A single execution of an agent inside a flow. Every resume of a flow is a new Run.
+A single execution of an agent inside a Task.
 _Avoid_: session, execution
 
 **Run lifecycle**:
@@ -19,7 +28,7 @@ The state machine every Run passes through — scheduled, processing, completed,
 where each transition is an event the Orchestrator reacts to.
 
 **Waiting for Human**:
-A flow state paused until exactly one user event arrives.
+A Task state: the flow stage is paused until exactly one user event arrives.
 _Avoid_: blocked, on hold
 
 **Trigger**:
