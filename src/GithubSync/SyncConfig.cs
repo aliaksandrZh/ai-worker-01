@@ -14,33 +14,33 @@ public sealed class SyncConfig
 
     public static SyncConfig Read(string configDir)
     {
-        var repositories = ReadFile(Path.Combine(configDir, "repositories.yaml")) ?? [];
-        var system = ReadFile(Path.Combine(configDir, "system.yaml")) ?? new List<object>();
+        var repositoriesRoot = ReadFile(Path.Combine(configDir, "repositories.yaml"));
+        var systemRoot = ReadFile(Path.Combine(configDir, "system.yaml"));
+
         var bot = "";
-        if (system.FirstOrDefault() is IDictionary<object, object> root
-            && root.TryGetValue("github", out var gh)
-            && gh is IDictionary<object, object> ghMap
-            && ghMap.TryGetValue("bot_login", out var login))
-        {
+        if (systemRoot?["github"] is IDictionary<object, object> gh
+            && gh.TryGetValue("bot_login", out var login))
             bot = login.ToString() ?? "";
-        }
 
         var repos = new List<RepoConfig>();
-        foreach (var entry in repositories)
+        if (repositoriesRoot?["repositories"] is IEnumerable<object> list)
         {
-            if (entry is IDictionary<object, object> map
-                && map.TryGetValue("owner", out var owner)
-                && map.TryGetValue("name", out var name))
+            foreach (var entry in list)
             {
-                var enabled = !map.TryGetValue("enabled", out var flag) || flag?.ToString() != "false";
-                if (enabled)
-                    repos.Add(new RepoConfig(owner.ToString()!, name.ToString()!));
+                if (entry is IDictionary<object, object> map
+                    && map.TryGetValue("owner", out var owner)
+                    && map.TryGetValue("name", out var name))
+                {
+                    var enabled = !map.TryGetValue("enabled", out var flag) || flag?.ToString() != "false";
+                    if (enabled)
+                        repos.Add(new RepoConfig(owner.ToString()!, name.ToString()!));
+                }
             }
         }
 
         return new SyncConfig { Repositories = [.. repos], BotLogin = bot };
 
-        static List<object>? ReadFile(string path)
+        static Dictionary<object, object>? ReadFile(string path)
         {
             if (!File.Exists(path))
                 return null;
@@ -48,7 +48,7 @@ public sealed class SyncConfig
             return new DeserializerBuilder()
                 .WithNamingConvention(UnderscoredNamingConvention.Instance)
                 .Build()
-                .Deserialize<List<object>>(yaml);
+                .Deserialize<Dictionary<object, object>>(yaml);
         }
     }
 }

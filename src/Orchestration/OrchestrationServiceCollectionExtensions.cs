@@ -49,10 +49,10 @@ public static class OrchestrationServiceCollectionExtensions
             ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured");
 
         services.AddSingleton(new NpgsqlDataSourceBuilder(connectionString).Build());
-        services.AddSingleton(sp => sp.GetRequiredService<EventQueueStore>());
-        services.AddSingleton<IOrchestrationState>(sp => new PostgresOrchestrationState(
+        services.AddSingleton(sp => new PostgresOrchestrationState(
             sp.GetRequiredService<NpgsqlDataSource>(),
             sp.GetRequiredService<EventQueueStore>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<PostgresOrchestrationState>()));
+        services.AddSingleton<IOrchestrationState>(sp => sp.GetRequiredService<PostgresOrchestrationState>());
     }
 }

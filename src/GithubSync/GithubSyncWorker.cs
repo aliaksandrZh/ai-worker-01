@@ -52,7 +52,9 @@ public sealed class GithubSyncWorker(
 
         // 1. comments → comment_changed + derived user_command
         var commentsSince = await PollSinceAsync(repoKey, "comments", uow, ct);
-        var comments = await github.ListCommentsSinceAsync(repo.Owner, repo.Name, commentsSince, ct);
+        var comments = (await github.ListCommentsSinceAsync(repo.Owner, repo.Name, commentsSince, ct))
+            .Where(c => c.ItemNumber > 0)
+            .ToList();
         foreach (var comment in comments)
         {
             await log.AppendAsync(new CommentChanged(
@@ -115,12 +117,16 @@ public sealed class GithubSyncWorker(
         await uow.CommitAsync(ct);
     }
 
-    /// <summary>The since-anchor of a stream: the stored watermark, rewound for clock skew.</summary>
+    /// <summary>
+    /// The since-anchor of a stream: the stored watermark, rewound for clock skew. With no
+    /// cursor yet the sync starts from NOW — the backlog is not replayed, only live
+    /// activity is reacted to (the orchestrator's history is the repo's, not the log's).
+    /// </summary>
     private async Task<DateTime> PollSinceAsync(string repoKey, string stream, IEventTransaction uow, CancellationToken ct)
     {
         var raw = await cursors.GetAsync(repoKey, stream, ct);
         if (raw is null)
-            return DateTime.MinValue;
+            return DateTime.UtcNow;
 
         var watermark = new DateTime(long.Parse(raw), DateTimeKind.Utc);
         return watermark - Overlap;

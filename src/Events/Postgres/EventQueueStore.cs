@@ -17,6 +17,7 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
 
     public EventQueueStore(IOptions<EventLogOptions> options, ILogger<EventQueueStore> logger)
     {
+        Console.Error.Flush();
         _dataSource = NpgsqlDataSource.Create(options.Value.ConnectionString);
         _logger = logger;
     }

@@ -11,14 +11,18 @@ public static class CommandRegistry
 {
     public static readonly IReadOnlyDictionary<string, string> CommandToTaskType = new Dictionary<string, string>
     {
-        ["/plan"] = TaskTypes.Plan,
-        ["/code"] = TaskTypes.Implement,
-        ["/review"] = TaskTypes.Review,
-        ["/test"] = TaskTypes.TestDesign,
+        ["plan"] = TaskTypes.Plan,
+        ["code"] = TaskTypes.Implement,
+        ["review"] = TaskTypes.Review,
+        ["test"] = TaskTypes.TestDesign,
     };
 
-    public static string? TaskTypeFor(string command) =>
-        CommandToTaskType.TryGetValue(command.ToLowerInvariant(), out var type) ? type : null;
+    public static string? TaskTypeFor(string command)
+    {
+        var name = command.Trim().ToLowerInvariant();
+        if (name.StartsWith('/')) name = name[1..];
+        return CommandToTaskType.TryGetValue(name, out var type) ? type : null;
+    }
 
     /// <summary>Agent profile per flow stage (the container's agent).</summary>
     public static string ProfileFor(string taskType) => taskType switch
