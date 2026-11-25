@@ -2,6 +2,7 @@
   <Project Path="Events/PiAgent.Events.csproj" />
   <Project Path="Hosts/AppHost/PiAgent.AppHost.csproj" />
   <Project Path="Orchestration/PiAgent.Orchestration.csproj" />
+  <Project Path="GithubSync/PiAgent.GithubSync.csproj" />
   <Project Path="Publisher/PiAgent.Publisher.csproj" />
   <Project Path="Platform/PiAgent.Platform.csproj" />
   <Project Path="Infrastructure/PiAgent.Infrastructure.csproj" />
