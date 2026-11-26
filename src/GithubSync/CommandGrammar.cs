@@ -3,10 +3,12 @@ using System.Text.RegularExpressions;
 namespace PiAgent.GithubSync;
 
 /// <summary>
-/// The command grammar (simplified port of the approved design, 2026-11-20): directives
-/// inside blockquotes, fenced/indented code blocks and inline code are not usable; the
-/// bot login (case-sensitive, word-bounded) must appear on the first non-empty line with
-/// only whitespace before it and ≥1 space before the slash token.
+/// The command grammar (simplified port of the approved design, 2026-11-20, extended to
+/// multiple directives per comment): directives inside blockquotes, fenced/indented code
+/// blocks and inline code are not usable; every directive LINE carries the bot login
+/// (case-sensitive, word-bounded, only whitespace before it) and ≥1 space before the slash
+/// token. A comment may hold several directives — one per line (`@bot /approve` then
+/// `@bot /code`); each becomes its own command.
 /// </summary>
 public static partial class CommandGrammar
 {
@@ -18,10 +20,13 @@ public static partial class CommandGrammar
     [GeneratedRegex("`[^`]*`")]
     private static partial Regex InlineCodeSpanRegex();
 
-    [GeneratedRegex(@"(?<!\w)")]
-    private static partial Regex WordBoundaryPrefixRegex();
+    [GeneratedRegex(@"^\s*(?<mention>\S+)\s+/(?<command>\S+)(?<trailing>.*)$")]
+    private static partial Regex DirectiveRegex();
 
-    public static Parsed? Parse(string body, string botLogin)
+    /// <summary>Every directive line of the comment, in order. The bot login must appear in
+    /// the FIRST non-empty line (the comment is addressed to the bot) — a login arriving
+    /// later, on a comment that does not open with it, is not a directive.</summary>
+    public static IReadOnlyList<Parsed> ParseAll(string body, string botLogin)
     {
         var masked = InlineCodeSpanRegex().Replace(body, m => new string(' ', m.Length));
         var lines = masked.Split('\n');
@@ -29,6 +34,7 @@ public static partial class CommandGrammar
         var inFence = false;
         var firstLine = (string?)null;
         var mentionSeen = false;
+        var commands = new List<Parsed>();
 
         foreach (var raw in lines)
         {
@@ -49,26 +55,29 @@ public static partial class CommandGrammar
             {
                 firstLine = line;
                 mentionSeen = ContainsLogin(line, botLogin);
+                if (!mentionSeen)
+                    break; // the first non-empty line is what matters — not addressed to the bot
             }
-            else if (!mentionSeen && ContainsLogin(line, botLogin))
+            else if (!ContainsLogin(line, botLogin))
             {
-                // the login arrived later — the first non-empty line is what matters
-                mentionSeen = false;
-                break;
+                continue; // a non-directive line (e.g. a paragraph under /plan) — not a command
             }
+
+            var match = DirectiveRegex().Match(line);
+            if (!match.Success || !match.Groups["mention"].Value.Contains(botLogin, StringComparison.Ordinal))
+                continue;
+
+            commands.Add(new Parsed(
+                match.Groups["command"].Value.ToLowerInvariant(),
+                match.Groups["trailing"].Value.Trim()));
         }
 
-        if (firstLine is null || !mentionSeen)
-            return null;
-
-        var match = Regex.Match(firstLine, @"^\s*\S+\s+/(\S+)(.*)$");
-        if (!match.Success)
-            return null;
-
-        var command = match.Groups[1].Value.ToLowerInvariant();
-        var trailing = match.Groups[2].Value.Trim();
-        return new Parsed(command, trailing);
+        return commands;
     }
+
+    /// <summary>The first directive (the historical single-command shape).</summary>
+    public static Parsed? Parse(string body, string botLogin) =>
+        ParseAll(body, botLogin).FirstOrDefault();
 
     private static bool ContainsLogin(string line, string botLogin) =>
         !string.IsNullOrEmpty(botLogin) &&
