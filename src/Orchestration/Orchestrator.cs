@@ -255,8 +255,11 @@ public sealed class Orchestrator(
         {
             // auto-retry: a new Run of the same Task (docs/orchestrator.md §4)
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.Queued, uow, ct);
-            var newRunId = await state.CreateRunAsync(task.Id, run.Input, uow, ct);
-            await log.AppendAsync(new RunScheduled(newRunId, task.Id, workflow.Id, run.Input,
+            // auto-retry regenerates the session id: a retry must not inherit (and on a reused
+            // tree, resume) the failed run's pi session — one id for the row AND the event
+            var retryInput = run.Input with { SessionId = Guid.NewGuid().ToString("N") };
+            var newRunId = await state.CreateRunAsync(task.Id, retryInput, uow, ct);
+            await log.AppendAsync(new RunScheduled(newRunId, task.Id, workflow.Id, retryInput,
                 SecretsFor(run.Input.Profile)), uow.Events, ct);
             logger.LogWarning("run {run} failed ({cause}); retrying as run {new} (attempt {n})",
                 evt.RunId, evt.Cause, newRunId, attempts + 1);
@@ -447,6 +450,9 @@ public sealed class Orchestrator(
             AgentBranch: task.Type is TaskTypes.Implement ? agentBranch : null,
             DefaultBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
             ReviewHeadSha: task.Type is TaskTypes.Review ? workflow.HeadSha : null);
+        // the globally unique pi session id (docs/run-session-id.md): generated here, persisted on
+        // the run row and the run_scheduled event — they must agree
+        input = input with { SessionId = Guid.NewGuid().ToString("N") };
         var runId = await state.CreateRunAsync(taskId, input, uow, ct);
         await log.AppendAsync(new RunScheduled(runId, taskId, workflow.Id, input,
             SecretsFor(input.Profile)), uow.Events, ct);
