@@ -1,31 +1,30 @@
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
-using PiAgent.Events.Delivery;
+using PiAgent.Events;
 using PiAgent.Events.Postgres;
-using Testcontainers.PostgreSql;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.Events.Tests;
 
 /// <summary>
-/// The Postgres adapter against real postgres: schema bootstrap, claim/redelivery,
-/// dead-letter, replay (docker required).
+/// The Postgres adapter's claim mechanics directly: claim holds an event back until the
+/// visibility window passes, ack drains it, failure rides to dead-letter and replays with a
+/// reset attempt counter. (Shared real-postgres fixture; the higher-level delivery semantics
+/// live in DeliverySemanticsTests.)
 /// </summary>
+[Collection("PostgresLog")]
 public sealed class PostgresEventQueueTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:17").Build();
-    private EventQueueStore _store = null!;
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _store;
 
-    public async Task InitializeAsync()
+    public PostgresEventQueueTests(PostgresFixture fx)
     {
-        await _container.StartAsync();
-        _store = new EventQueueStore(
-            Options.Create(new EventLogOptions { ConnectionString = _container.GetConnectionString() }),
-            NullLogger<EventQueueStore>.Instance);
-        await _store.EnsureSchemaAsync(CancellationToken.None);
+        _fx = fx;
+        _store = fx.Log;
     }
 
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private static readonly string[] CommentType = ["CommentChanged"];
 
@@ -57,8 +56,10 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {
-            await _store.ClaimAsync(CommentType, 10, TimeSpan.FromSeconds(1), CancellationToken.None);
+            var batch = await _store.ClaimAsync(CommentType, 10, TimeSpan.FromSeconds(1), CancellationToken.None);
+            Assert.Single(batch); // not expired yet between attempts
             await _store.FailAsync(id, "boom", 3, CancellationToken.None);
+            await _fx.ExpireClaimsAsync();
         }
 
         var dead = await _store.ListDeadLettersAsync(10, CancellationToken.None);

@@ -4,33 +4,30 @@ using PiAgent.Events;
 using PiAgent.Events.Delivery;
 using PiAgent.Events.Postgres;
 using PiAgent.RunWorker;
-using Testcontainers.PostgreSql;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.RunWorker.Tests;
 
 /// <summary>
-/// The route tool delivery contract against real Postgres (docker required): ingestion
-/// dedup on the deterministic eventId, and the transient-failure path — repeated handler
-/// exceptions ride the EventLog's redelivery into the dead-letter store, payload intact.
+/// The route tool delivery contract against real Postgres: ingestion dedup on the
+/// deterministic eventId, and the transient-failure path — repeated handler exceptions ride
+/// the EventLog's redelivery into the dead-letter store, payload intact.
 /// </summary>
+[Collection("PostgresLog")]
 public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:17").Build();
-    private EventQueueStore _store = null!;
-    private string _connectionString = null!;
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _store;
 
-    public async Task InitializeAsync()
+    public ToolCallbackDeliveryTests(PostgresFixture fx)
     {
-        await _container.StartAsync();
-        _connectionString = _container.GetConnectionString();
-        _store = new EventQueueStore(
-            Options.Create(new EventLogOptions { ConnectionString = _connectionString }),
-            NullLogger<EventQueueStore>.Instance);
-        await _store.EnsureSchemaAsync(CancellationToken.None);
+        _fx = fx;
+        _store = fx.Log;
     }
 
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private static AgentCallback ToolCallback(string eventId) => new(
         RunId: 7, Route: "tool",
@@ -98,8 +95,7 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
 
     private async Task<int> CountRowsAsync(string? eventId)
     {
-        await using var conn = Npgsql.NpgsqlDataSource.Create(_connectionString);
-        await using var cmd = conn.CreateCommand();
+        await using var cmd = _fx.DataSource.CreateCommand();
         if (eventId is null)
         {
             cmd.CommandText = "SELECT COUNT(*) FROM events WHERE type = 'AgentCallback' AND payload->>'eventId' IS NULL";
@@ -114,8 +110,7 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
 
     private async Task<string?> DeadLetterPayloadAsync(long id)
     {
-        await using var conn = Npgsql.NpgsqlDataSource.Create(_connectionString);
-        await using var cmd = conn.CreateCommand();
+        await using var cmd = _fx.DataSource.CreateCommand();
         cmd.CommandText = "SELECT payload::text FROM dead_letter WHERE id = @id";
         cmd.Parameters.AddWithValue("id", id);
         return await cmd.ExecuteScalarAsync() as string;
