@@ -1,5 +1,7 @@
 namespace PiAgent.Events;
 
+using System.Text.Json;
+
 /// <summary>events.md "Agent tool events" — every communication tool call produces exactly one event.</summary>
 
 /// <summary>save_plan → the plan is published as an issue comment, approval step runs.</summary>
@@ -11,7 +13,7 @@ public sealed record PlanSaved(
     string Goals,
     string Scope,
     string AcceptanceCriteria,
-    IReadOnlyList<string> Steps) : IEvent
+    JsonElement? Steps) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -146,7 +148,9 @@ public sealed record PlanPayload
     public required string Goals { get; init; }
     public required string Scope { get; init; }
     public required string AcceptanceCriteria { get; init; }
-    public required IReadOnlyList<string> Steps { get; init; }
+    /// <summary>Raw steps array — the planner may send strings or structured steps; the plan
+    /// comment is published from Goals/Scope/AcceptanceCriteria, steps ride for audit.</summary>
+    public JsonElement? Steps { get; init; }
 }
 
 /// <summary>request_clarification / request_criteria_clarification args (shared question form).</summary>
