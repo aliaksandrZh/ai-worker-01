@@ -61,6 +61,8 @@ public sealed class GithubSyncWorker(
     public async Task SyncRepoAsync(SyncConfig.RepoConfig repo, CancellationToken ct)
     {
         var repoKey = $"{repo.Owner}/{repo.Name}";
+        var itemsProcessed = 0;
+        var commentsProcessed = 0;
         await using var uow = await log.BeginTransactionAsync(ct);
 
         // ---- items first: their watermark anchors the comments' fresh start, and item_changed
@@ -74,6 +76,7 @@ public sealed class GithubSyncWorker(
         {
             if (item.UpdatedAtUtc < itemsFloor)
                 break; // newest-first: everything below the floor was seen in an earlier pass
+            itemsProcessed++;
 
             var at = Unix(item.UpdatedAtUtc);
             var itemId = $"item:{item.Number}:{at}";
@@ -132,6 +135,7 @@ public sealed class GithubSyncWorker(
         {
             if (comment.UpdatedAtUtc < commentsFloor)
                 break; // newest-first: below the floor was seen earlier
+            commentsProcessed++;
 
             if (comment.ItemNumber <= 0)
             {
@@ -189,8 +193,8 @@ public sealed class GithubSyncWorker(
             await cursors.SetAsync(repoKey, "comments", Watermark(commentsPositionNew), uow, ct);
 
         await uow.CommitAsync(ct);
-        logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s), position {position:O}",
-            repoKey, comments.Count, items.Count, commentsPositionNew);
+        logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s) processed, position {position:O}",
+            repoKey, commentsProcessed, itemsProcessed, commentsPositionNew);
     }
 
     /// <summary>The stored POSITION (the newest updated_at already detected), or null.</summary>
