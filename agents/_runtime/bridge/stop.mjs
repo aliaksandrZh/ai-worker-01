@@ -18,16 +18,19 @@ export const STDIN_GRACE_MS = 10_000;
 export const SIGTERM_GRACE_MS = 5_000;
 
 /**
- * Builds the terminal `cancelled` spool entry (step 7). Deterministic id: a redelivery after a bridge
- * restart can never duplicate (the spool/runtime API both key on it).
+ * Builds the terminal `cancelled` spool entry (step 7). Deterministic id, scoped by the pi session
+ * id (docs/run-session-id.md): a redelivery after a bridge restart can never duplicate (the
+ * spool/runtime API both key on it), and a stale spool terminal from a previous DB lifetime of the
+ * same run id gets a different id — and carries its sessionId for the worker's guard to reject.
  */
-export function cancelledTerminal(runId, reason, sessionFilePath = null) {
+export function cancelledTerminal(sessionId, reason, sessionFilePath = null) {
   return {
-    id: `evt-${runId}-cancelled`,
+    id: `evt-${sessionId}-cancelled`,
     route: "cancelled",
     body: {
-      eventId: `evt-${runId}-cancelled`,
+      eventId: `evt-${sessionId}-cancelled`,
       occurredAt: new Date().toISOString(),
+      sessionId,
       ...(reason ? { reason } : {}),
       ...(sessionFilePath ? { sessionFilePath } : {}),
     },

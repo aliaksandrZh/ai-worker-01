@@ -84,6 +84,8 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         var env = _docker.LastPlan!.Env;
         Assert.Contains("GIT_CLONE_REPO=o/r", env);
         Assert.Contains("GIT_CLONE_BRANCH=main", env);
+        // rows without a SessionId stay bootable: the run id is the legacy session identity
+        Assert.Contains("PI_SESSION_ID=7", env);
         // the default branch as its own pointer: the reviewer entry derives the review base itself
         Assert.Contains("GIT_DEFAULT_BRANCH=main", env);
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_HEAD_SHA="));
@@ -181,6 +183,58 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         // the reviewer derives the base itself: the default branch travels, a base SHA never does
         Assert.Contains("GIT_DEFAULT_BRANCH=main", env);
         Assert.DoesNotContain(env, e => e.StartsWith("REVIEW_BASE_SHA="));
+    }
+
+    [Fact]
+    public async Task The_session_id_rides_the_entry_env()
+    {
+        await StartRunAsync(PlannerInput() with { SessionId = "abc123" });
+
+        Assert.Contains("PI_SESSION_ID=abc123", _docker.LastPlan!.Env);
+    }
+
+    [Fact]
+    public async Task A_callback_from_another_session_is_skipped_entirely()
+    {
+        // the stale-spool scenario (docs/run-session-id.md "Instance-scoped callbacks"): a
+        // previous DB lifetime's terminal must not settle the fresh run
+        await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
+
+        await _consumer.HandleAsync(new AgentCallback(7, "completed",
+            """{"sessionId":"stale","result":{"branch":"old","commitSha":"dead"}}"""),
+            attempt: 1, CancellationToken.None);
+
+        Assert.DoesNotContain(await _fx.AppendedAsync(),
+            e => e is RunCompleted or RunCancelled or RunFailed); // nothing settled
+        Assert.NotNull(_registry.Get(7)); // the run stays in flight
+    }
+
+    [Fact]
+    public async Task A_callback_from_the_current_session_settles_normally()
+    {
+        await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
+
+        await _consumer.HandleAsync(new AgentCallback(7, "completed",
+            """{"sessionId":"fresh","result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
+            attempt: 1, CancellationToken.None);
+
+        var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
+        Assert.Equal("ai/task-1", completed.Branch);
+    }
+
+    [Fact]
+    public async Task A_callback_without_a_sessionId_is_skipped_too()
+    {
+        // strict guard: after the session-id rollout a session-less body has no legitimate
+        // sender (docs/run-session-id.md) — pre-fix spool entries included
+        await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
+
+        await _consumer.HandleAsync(new AgentCallback(7, "completed",
+            """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
+            attempt: 1, CancellationToken.None);
+
+        Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunCompleted);
+        Assert.NotNull(_registry.Get(7));
     }
 
     [Fact]

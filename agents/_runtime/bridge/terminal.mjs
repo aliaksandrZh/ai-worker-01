@@ -3,17 +3,20 @@
  * assistant_output), git facts (branch/commitSha — the pointer producers for
  * RunCompleted.Branch/CommitSha) and the discovered session file path. The artifacts/
  * convention and the review outcome are gone with the old mandates; the worker parses the
- * git facts tolerantly from `result`.
+ * git facts tolerantly from `result`. The id and body carry the pi session id
+ * (docs/run-session-id.md): terminal ids are instance-scoped, and the worker's callback
+ * guard reads the body's sessionId.
  */
 import { execFileSync } from "node:child_process";
 
-export function completedTerminal(runId, sessionFilePath, summary, facts) {
+export function completedTerminal(sessionId, sessionFilePath, summary, facts) {
   return {
-    id: `evt-${runId}-terminal`,
+    id: `evt-${sessionId}-terminal`,
     route: "completed",
     body: {
-      eventId: `evt-${runId}-terminal`,
+      eventId: `evt-${sessionId}-terminal`,
       occurredAt: new Date().toISOString(),
+      sessionId,
       ...(sessionFilePath ? { sessionFilePath } : {}),
       result: {
         summary,

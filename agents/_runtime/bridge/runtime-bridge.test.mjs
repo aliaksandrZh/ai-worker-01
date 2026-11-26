@@ -224,10 +224,11 @@ test("completedTerminal carries summary, git facts and session path — never ar
   const workspace = tempDir("ws-");
   execFileSync("git", ["init", "-q", "-b", "agent/pipe-stub", workspace]);
   execFileSync("git", ["-C", workspace, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-q", "-m", "k"]);
-  const terminal = completedTerminal("run-1", "/session/run-1.jsonl", "s", gitFacts(workspace));
+  const terminal = completedTerminal("sess-run-1", "/session/run-1.jsonl", "s", gitFacts(workspace));
   assert.equal(terminal.route, "completed");
-  assert.equal(terminal.id, "evt-run-1-terminal");
-  assert.equal(terminal.body.eventId, "evt-run-1-terminal");
+  assert.equal(terminal.id, "evt-sess-run-1-terminal");
+  assert.equal(terminal.body.eventId, "evt-sess-run-1-terminal");
+  assert.equal(terminal.body.sessionId, "sess-run-1"); // the guard key (docs/run-session-id.md)
   assert.equal(terminal.body.sessionFilePath, "/session/run-1.jsonl");
   assert.equal(terminal.body.result.summary, "s");
   assert.equal(terminal.body.result.branch, "agent/pipe-stub");
@@ -237,7 +238,7 @@ test("completedTerminal carries summary, git facts and session path — never ar
 
   // a fact-less workspace: null pointers, still a valid terminal without a session path
   const bareWorkspace = tempDir("ws-bare-");
-  const bare = completedTerminal("run-2", null, "run completed", gitFacts(bareWorkspace));
+  const bare = completedTerminal("sess-run-2", null, "run completed", gitFacts(bareWorkspace));
   assert.equal(bare.body.result.summary, "run completed");
   assert.equal(bare.body.result.branch, null);
   assert.equal(bare.body.result.commitSha, null);
@@ -535,14 +536,15 @@ import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 
 test("cancelledTerminal: deterministic id, reason and session path carried", () => {
-  const entry = cancelledTerminal("run-7", "stop_requested", "/session/2026-11-21T15-31-18-187Z_run-7.jsonl");
-  assert.equal(entry.id, "evt-run-7-cancelled");
+  const entry = cancelledTerminal("sess-run-7", "stop_requested", "/session/2026-11-21T15-31-18-187Z_run-7.jsonl");
+  assert.equal(entry.id, "evt-sess-run-7-cancelled");
   assert.equal(entry.route, "cancelled");
-  assert.equal(entry.body.eventId, "evt-run-7-cancelled");
+  assert.equal(entry.body.eventId, "evt-sess-run-7-cancelled");
+  assert.equal(entry.body.sessionId, "sess-run-7"); // the guard key (docs/run-session-id.md)
   assert.equal(entry.body.reason, "stop_requested");
   assert.equal(entry.body.sessionFilePath, "/session/2026-11-21T15-31-18-187Z_run-7.jsonl");
   // the session path is absent when the handshake never discovered one
-  const bare = cancelledTerminal("run-8", null);
+  const bare = cancelledTerminal("sess-run-8", null);
   assert.equal(bare.body.sessionFilePath, undefined);
   assert.equal(bare.body.reason, undefined);
 });
@@ -655,6 +657,7 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
     env: {
       ...process.env,
       PI_RUN_ID: runId,
+      PI_SESSION_ID: `sess-${runId}`,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
       PI_RUN_TOKEN: "per-run-callback-token",
       PI_INPUT_FILE: join(dirname(tokenFile), "input.json"),
@@ -688,11 +691,13 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
   assert.equal(fake.cancelledBodies.length, 1);
   assert.deepEqual(fake.completedBodies, []);
   const cancelled = fake.cancelledBodies[0];
-  assert.equal(cancelled.eventId, `evt-${runId}-cancelled`);
+  assert.equal(cancelled.eventId, `evt-sess-${runId}-cancelled`);
+  assert.equal(cancelled.sessionId, `sess-${runId}`); // the terminal is instance-scoped
   assert.equal(cancelled.reason, "container stopped");
   assert.match(cancelled.sessionFilePath ?? "", /\.jsonl$/); // the discovered session path rides along
-  // the abort settled the agent: the session history carries it
-  const session = readFileSync(join(sessionDir, `${runId}.jsonl`), "utf8");
+  // the abort settled the agent: the session history carries it — under the session id
+  // (docs/run-session-id.md): the pi session file is named by `--session-id`
+  const session = readFileSync(join(sessionDir, `sess-${runId}.jsonl`), "utf8");
   assert.match(session, /"aborted":true/);
   // the bridge recorded its terminal marker
   assert.ok(existsSync(join(spoolDir, ".terminal-delivered")));
@@ -711,6 +716,7 @@ function spawnE2eBridge({ runId, dirs, port, behavior, extraEnv = {} }) {
     env: {
       ...process.env,
       PI_RUN_ID: runId,
+      PI_SESSION_ID: `sess-${runId}`,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
       PI_RUN_TOKEN: "per-run-callback-token",
       PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
@@ -921,7 +927,8 @@ test("bridge end-to-end completion mandate: the observed report_completion settl
   assert.deepEqual(fake.failedBodies, []);
   assert.equal(fake.completedBodies.length, 1);
   const completed = fake.completedBodies[0];
-  assert.equal(completed.eventId, `evt-${runId}-terminal`);
+  assert.equal(completed.eventId, `evt-sess-${runId}-terminal`);
+  assert.equal(completed.sessionId, `sess-${runId}`); // the terminal is instance-scoped
   assert.match(completed.sessionFilePath ?? "", /\.jsonl$/); // the discovered session path rides along
   assert.equal(typeof completed.result.summary, "string");
   assert.ok(completed.result.summary.length > 0); // the last aggregated assistant_output
@@ -1015,6 +1022,7 @@ test("bridge MCP probe: a failed server fails the run before the task prompt, wi
     env: {
       ...process.env,
       PI_RUN_ID: runId,
+      PI_SESSION_ID: `sess-${runId}`,
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
       PI_RUN_TOKEN: "per-run-callback-token",
       PI_INPUT_FILE: join(dirname(tokenFile), "input.json"),

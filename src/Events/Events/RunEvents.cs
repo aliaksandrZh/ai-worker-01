@@ -7,6 +7,9 @@ namespace PiAgent.Events;
 /// docs/run-worker.md "Run input (pointers v2)"). The Orchestrator fills every pointer
 /// from Workflow/Task state at run_scheduled; the worker exports the entry-facing subset
 /// as container env and the Bridge renders the task prompt from the same file.
+/// SessionId is the Orchestrator's globally unique pi session id (docs/run-session-id.md):
+/// it scopes the Bridge's terminal eventIds and the worker's callback guard. Null on rows
+/// created before the field existed — the worker falls back to the run id.
 /// </summary>
 public sealed record RunInput(
     string Owner,
@@ -18,7 +21,8 @@ public sealed record RunInput(
     string Profile,
     string? AgentBranch,
     string DefaultBranch,
-    string? ReviewHeadSha) : IEvent
+    string? ReviewHeadSha,
+    string? SessionId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }

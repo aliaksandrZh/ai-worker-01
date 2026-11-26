@@ -32,6 +32,10 @@ import { completedTerminal, gitFacts } from "./terminal.mjs";
 
 const env = process.env;
 const runId = env.PI_RUN_ID || fail("PI_RUN_ID is required");
+// the Orchestrator's globally unique pi session id (docs/run-session-id.md): opens pi with
+// `--session-id` and scopes the terminal eventIds — a reused run tree can never reopen another
+// run's session, and the worker's callback guard keys on this id.
+const sessionId = env.PI_SESSION_ID || fail("PI_SESSION_ID is required");
 const baseUrl = (env.PI_CALLBACK_BASE_URL || "http://app-host:8080").replace(/\/$/, "");
 // the per-run token minted by the Run Worker at run_scheduled: the only credential the
 // container holds — it authorizes appending events for this run and nothing else (ADR-0001)
@@ -205,11 +209,14 @@ function terminalRejected(result) {
 
 function terminalBody(code, message) {
   return {
-    id: `evt-${runId}-failed`,
+    // terminal ids are scoped by the session id (docs/run-session-id.md): a stale spool
+    // terminal from a previous life of the same run id never collides with this run's
+    id: `evt-${sessionId}-failed`,
     route: "failed",
     body: {
-      eventId: `evt-${runId}-failed`,
+      eventId: `evt-${sessionId}-failed`,
       occurredAt: new Date().toISOString(),
+      sessionId,
       ...(sessionFilePath ? { sessionFilePath } : {}),
       error: { code, message },
     },
@@ -306,7 +313,7 @@ async function main() {
   const agent = spawn(agentBin, [
     ...agentArgs,
     "--session-dir", sessionDir,
-    "--session-id", runId,
+    "--session-id", sessionId,
   ], { cwd: workspace, env, stdio: ["pipe", "pipe", "pipe"] });
 
   // pi docs rpc.md: commands carry an id; the matching `response` repeats it. The correlator consumes
@@ -410,7 +417,7 @@ async function main() {
       clearInterval(heartbeatTimer);
       clearInterval(flushTimer);
       mapper.flushAggregated();
-      spool.append(cancelledTerminal(runId, stopSignal?.reason ?? "stop_requested", sessionFilePath));
+      spool.append(cancelledTerminal(sessionId, stopSignal?.reason ?? "stop_requested", sessionFilePath));
     }
     await finishWait();
   }
@@ -590,7 +597,7 @@ async function main() {
       `agent process exited (code ${agentExitCode}) after settling — reported by the Runtime Bridge`);
   }
 
-  spool.append(completedTerminal(runId, sessionFilePath, summary, gitFacts(workspace)));
+  spool.append(completedTerminal(sessionId, sessionFilePath, summary, gitFacts(workspace)));
   await finishWait();
 }
 

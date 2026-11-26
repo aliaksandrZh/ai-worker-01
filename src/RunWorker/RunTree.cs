@@ -21,7 +21,15 @@ public static class RunTree
         var workspace = Path.Combine(runDir, WorkspaceDirName);
         Directory.CreateDirectory(workspace);
         var logs = Directory.CreateDirectory(Path.Combine(runDir, "logs"));
-        var spool = Directory.CreateDirectory(Path.Combine(runDir, "spool"));
+        // a reprovision means the previous attempt never settled (else this Run would not be
+        // scheduled again) — its undelivered spool entries belong to a dead attempt. Entries
+        // written before the session-id fix carry no sessionId and would slip past the
+        // callback guard, so the wipe happens at the source, not in the guard (docs/run-session-id.md
+        // "Instance-scoped callbacks", fix B). The .terminal-delivered marker lives here too.
+        var spoolPath = Path.Combine(runDir, "spool");
+        if (Directory.Exists(spoolPath))
+            Directory.Delete(spoolPath, recursive: true);
+        var spool = Directory.CreateDirectory(spoolPath);
         var session = Directory.CreateDirectory(Path.Combine(runDir, "session"));
 
         File.WriteAllText(

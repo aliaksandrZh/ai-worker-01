@@ -86,6 +86,10 @@ public sealed class RunWorkerConsumer(
         var env = new List<string>
         {
             $"PI_RUN_ID={scheduled.RunId}",
+            // the globally unique pi session id (docs/run-session-id.md): the Bridge opens pi
+            // with it and scopes terminal eventIds by it. Rows created before the field existed
+            // carry null — the run id keeps them bootable on the legacy, run-id-scoped identity.
+            $"PI_SESSION_ID={scheduled.Input.SessionId ?? scheduled.RunId.ToString()}",
             $"PI_RUN_TOKEN={token}",
             $"PI_CALLBACK_BASE_URL={runOptions.CallbackBaseUrl}",
             $"GIT_CLONE_REPO={scheduled.Input.Owner}/{scheduled.Input.Repo}",
@@ -178,6 +182,19 @@ public sealed class RunWorkerConsumer(
         var entry = registry.Get(callback.RunId);
         if (entry is null)
             return; // the watchdog already settled this run
+
+        // instance-scoped callback guard (docs/run-session-id.md "Instance-scoped callbacks"):
+        // a callback settles this run only if it names the run's own session. Anything else —
+        // a mismatched or session-less body (pre-fix spool entries, foreign instances) — is not
+        // ours; skip it entirely (covers every route incl. `tool`, which would otherwise post
+        // events on the item stream).
+        var sessionId = ParseSessionId(callback.Body);
+        if (sessionId != entry.Input.SessionId)
+        {
+            logger.LogWarning("run {run}: callback from session {sid} skipped (current session {cur})",
+                callback.RunId, sessionId ?? "<none>", entry.Input.SessionId ?? "<none>");
+            return;
+        }
 
         switch (callback.Route)
         {
@@ -297,6 +314,28 @@ public sealed class RunWorkerConsumer(
         catch (JsonException)
         {
             return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// The callback body's sessionId (docs/run-session-id.md) — parsed tolerantly like the git
+    /// facts; the guard treats a missing one as "not ours".
+    /// </summary>
+    private static string? ParseSessionId(string? body)
+    {
+        if (body is null)
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("sessionId", out var sid)
+                   && sid.ValueKind == JsonValueKind.String
+                ? sid.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }
