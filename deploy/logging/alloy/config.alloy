@@ -6,7 +6,7 @@
 // agent session containers carry only `container`), `logformat` = json | text. The log stack's
 // own containers are dropped so alloy→loki→grafana chatter never enters the log lake.
 // JSON pipelines run only for the services that emit JSON (the app host); plain-text emitters
-// (postgres, backups, snapshots) pass through raw — no JSONParserErr anywhere downstream.
+// (postgres) passes through raw — no JSONParserErr anywhere downstream.
 
 discovery.docker "docker" {
   host             = "unix:///var/run/docker.sock"

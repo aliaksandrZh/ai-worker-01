@@ -32,7 +32,7 @@ Outside `src/` (repo root):
 |---|---|
 |  `deploy/config/` | configuration-plane yamls: `system.yaml` (bot login + operational knobs), `repositories.yaml`, `routing.yaml` — mounted read-only at the config root |
 | `agents/` | all agent assets: profile definitions (`agents/<name>/profile.yaml` + Dockerfile + entry…) and the shared runtime implementation `agents/_runtime/bridge/` — the Runtime Bridge modules every profile bakes. Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only INSIDE the orchestrator's config root (`/etc/pi-agent/config/agents/`) so the pinned tree shape holds |
-| `deploy/` | `compose.yaml` (the control-plane stack, 13 services, private network `pi-agent-net`), `.env.example`, scheduled `pg_dump` + config-plane Git snapshot scripts (`backup/`), centralized logging config (`logging/`: loki/alloy/grafana) |
+| `deploy/` | `compose.yaml` (the control-plane stack, private network `pi-agent-net`), `.env.example`, centralized logging config (`logging/`: loki/alloy/grafana) |
 ## Quick start
 
 ```sh
