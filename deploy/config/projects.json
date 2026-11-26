@@ -1,0 +1,47 @@
+// Projects v2 boards the Poller syncs (items + field changes -> project_item_* events).
+// `owner` is the account owning the board (user-owned boards are addressed as
+// /users/{owner}/projectsV2/{number}); `number` comes from the board URL:
+// https://github.com/users/<owner>/projects/<number>/views/...
+// The sync PAT needs read access to each configured board.
+//
+// Board triggers (auto_plan / auto_code / auto_fix / auto_review): when an item's
+// `status_field` moves `from -> to`, the Orchestrator admits the system-owned Task —
+// equivalent to the human posting the command at that moment (no comment, no reply).
+// Guards: the work item open, the workflow not failed/closed, the profile ready; if another
+// Task is running the trigger defers until the Workflow is idle. `auto_code` also requires
+// the AI:Code label + a successful plan artifact; `auto_fix` (review -> fix round) continues
+// the EXISTING pull request branch and requires the AI:Code label; `auto_review` needs the
+// AI:Review label and targets the card's LINKED open pull request. Values are exact-case.
+//
+// ai_statuses: the columns the Orchestrator itself moves on the board — `processing` when a
+// run is handed off, `review` when an implement Task succeeds (the PR is up), `testing` when
+// a review Task succeeds. A null/absent key = "do not move the board for that state".
+// code_statuses are the columns the MANUAL /code is allowed in; review_statuses — the
+// columns a review launch is allowed in. An item not on the board is not verified (fail
+// open). Values are exact-case single-select option names.
+//
+// review_loop.max_rounds caps the automatic review->fix rounds per card. Cap reached while
+// a review demands changes: the card STAYS in the review column, the item is marked
+// `AI Failed`, a `review_loop_exhausted` comment explains, and a human takes over (any
+// manual task-producing command resets the counter). Default: 3.
+{
+  "projects": [
+    {
+      "owner": "aliaksandrZh",
+      "number": 7,
+      "auto_plan": { "status_field": "Status", "from": "Backlog", "to": "Clarifying" },
+      "auto_code": { "status_field": "Status", "from": "Clarifying", "to": "Ready" },
+      "auto_fix": { "status_field": "Status", "from": "In review", "to": "In progress" },
+      "auto_review": { "status_field": "Status", "from": "In progress", "to": "In review" },
+      "ai_statuses": {
+        "status_field": "Status",
+        "processing": "In progress",
+        "review": "In review",
+        "testing": "Testing",
+        "code_statuses": ["Ready", "In progress"],
+        "review_statuses": ["In review"]
+      },
+      "review_loop": { "max_rounds": 3 }
+    }
+  ]
+}

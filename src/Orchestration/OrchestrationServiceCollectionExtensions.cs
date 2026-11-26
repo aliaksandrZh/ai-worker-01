@@ -10,8 +10,7 @@ using PiAgent.Events.Postgres;
 using PiAgent.Orchestration.Consumers;
 using PiAgent.Orchestration.State;
 using PiAgent.Orchestration.State.Postgres;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
+using PiAgent.Platform.Config;
 
 namespace PiAgent.Orchestration;
 
@@ -57,7 +56,7 @@ public static class OrchestrationServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Profile secret NAMES from the configuration plane's system.yaml (`profile_secrets:` —
+    /// Profile secret NAMES from the configuration plane's system.json (`profile_secrets:` —
     /// the frozen agents/&lt;name&gt;/profile.yaml `secrets:` lists): names only, values never
     /// enter configuration. An absent key = a profile without secret mounts; a malformed name
     /// fails startup (the config plane is the schema authority). The name grammar mirrors
@@ -65,16 +64,11 @@ public static class OrchestrationServiceCollectionExtensions
     /// </summary>
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadProfileSecrets(string configDir)
     {
-        var path = Path.Combine(configDir, "system.yaml");
-        if (!File.Exists(path))
+        // the Orchestrator reads a NARROW subset of system.json (github:, knobs… belong to
+        // other modules) — unknown properties are ignored by the shared reader
+        var root = ConfigJson.Read<SystemJsonRoot>(Path.Combine(configDir, "system.json"));
+        if (root is null)
             return new Dictionary<string, IReadOnlyList<string>>();
-
-        var root = new DeserializerBuilder()
-            .WithNamingConvention(UnderscoredNamingConvention.Instance)
-            .IgnoreUnmatchedProperties() // the Orchestrator reads a NARROW subset of system.yaml
-                                         // (github:, rate limits… belong to other modules)
-            .Build()
-            .Deserialize<SystemYamlRoot>(File.ReadAllText(path));
 
         var secrets = new Dictionary<string, IReadOnlyList<string>>();
         foreach (var (profile, names) in root.ProfileSecrets)
@@ -91,8 +85,8 @@ public static class OrchestrationServiceCollectionExtensions
         return secrets;
     }
 
-    /// <summary>The narrow system.yaml subset the Orchestrator reads (profile_secrets).</summary>
-    private sealed class SystemYamlRoot
+    /// <summary>The narrow system.json subset the Orchestrator reads (profile_secrets).</summary>
+    private sealed class SystemJsonRoot
     {
         public Dictionary<string, List<string>> ProfileSecrets { get; init; } = [];
     }

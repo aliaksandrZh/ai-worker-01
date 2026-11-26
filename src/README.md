@@ -32,7 +32,7 @@ Outside `src/` (repo root):
 
 | path | what |
 |---|---|
-| `deploy/config/` | configuration-plane yamls: `system.yaml`, `repositories.yaml`, `routing.yaml`, `projects.yaml` — mounted read-only at the config root |
+| `deploy/config/` | configuration-plane JSON: `system.json`, `repositories.json`, `routing.json`, `projects.json` (`//` comments allowed) — mounted read-only at the config root |
 | `agents/` | the agents: per-agent `agent.json` (name, clone_mode, tools, prompt) + baked prompt; `agents/_runtime/` is the shared runtime — the Runtime Bridge modules, the communication-channel server, the ONE entry, the base Dockerfile |
 | `deploy/` | `compose.yaml` (postgres + app-host + the observability stack, private network `pi-agent-net`), `.env.example`, logging config (`logging/`) |
 | `secrets/` | host-managed secret files (gitignored), mounted read-only into app-host and bound into agent containers at provisioning |
@@ -62,11 +62,11 @@ YAML in `deploy/config/` is the desired configuration; PostgreSQL holds the runt
 (the EventLog + orchestration state + cursors + dead-letter + Publisher markers — nothing
 else; there is no GitHub mirror, agents read GitHub themselves per ADR-0006).
 
-- `system.yaml` — `github.bot_login` + operational knobs.
-- `repositories.yaml` — registered repositories (allowlist semantics) + the default-branch
+- `system.json` — `github.bot_login` + operational knobs.
+- `repositories.json` — registered repositories (allowlist semantics) + the default-branch
   map the Orchestrator reads for `RunInput.DefaultBranch`.
-- `routing.yaml` — routing rules; the referenced version is pinned on the Task at creation.
-- `projects.yaml` — Projects v2 boards: column/label triggers (`auto_plan`/`auto_code`/
+- `routing.json` — routing rules; the referenced version is pinned on the Task at creation.
+- `projects.json` — Projects v2 boards: column/label triggers (`auto_plan`/`auto_code`/
   `auto_review`/`auto_fix`) and the review-loop cap.
 - `agents/<name>/agent.json` — the agent's full tool catalog + clone_mode + prompt path;
   the single source for the generated `mcp.json` (built into the image).
@@ -75,7 +75,7 @@ Before `task stack`: create the secret files and align identities
 
 ```sh
 mkdir -p secrets && printf '<your-pat>' > secrets/github-sync-pat.txt   # gitignored
-#   → the PAT's login (GET /user) must equal github.bot_login in deploy/config/system.yaml
+#   → the PAT's login (GET /user) must equal github.bot_login in deploy/config/system.json
 printf '<your-write-pat>' > secrets/github-write-pat.txt               # the Publisher's single write path
 ```
 

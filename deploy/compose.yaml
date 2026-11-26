@@ -64,9 +64,9 @@ services:
       # Per-Run trees (workspace + session + input).
       - ${STORAGE_ROOT:-../runtime/runs}:/var/lib/pi-agent/runs
       # Configuration plane — per-file mounts (a read-only parent bind can't host nested
-      # mountpoints; compose mkdirat → EROFS). The sync reads repositories.yaml + system.yaml.
-      - ../deploy/config/system.yaml:/etc/pi-agent/config/system.yaml:ro
-      - ../deploy/config/repositories.yaml:/etc/pi-agent/config/repositories.yaml:ro
+      # mountpoints; compose mkdirat → EROFS). The sync reads repositories.json + system.json.
+      - ../deploy/config/system.json:/etc/pi-agent/config/system.json:ro
+      - ../deploy/config/repositories.json:/etc/pi-agent/config/repositories.json:ro
       # Host-managed secrets (read-only).
       - ${SECRETS_DIR:-../secrets}:/etc/pi-agent/secrets:ro
     depends_on:

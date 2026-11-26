@@ -10,11 +10,11 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
     <PackageReference Include="Npgsql" />
-    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Events\PiAgent.Events.csproj" />
+    <ProjectReference Include="..\Platform\PiAgent.Platform.csproj" />
   </ItemGroup>
 
 </Project>

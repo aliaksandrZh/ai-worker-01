@@ -1,0 +1,12 @@
+// Global default routing rules (repository_id = NULL); per-repo overrides win — add
+// { "repository": "owner/name", ... } entries. The referenced version is pinned on the
+// Task at creation. /plan routes to the REAL planner profile; the stub profile stays for
+// the dev/testing levers (flipping a rule back to `stub` re-enables the deterministic
+// pipeline scenarios).
+{
+  "rules": [
+    { "task_type": "plan", "profile": "planner", "priority": 1, "enabled": true },
+    { "task_type": "implement", "profile": "coder", "priority": 1, "enabled": true },
+    { "task_type": "review", "profile": "reviewer", "priority": 1, "enabled": true }
+  ]
+}
