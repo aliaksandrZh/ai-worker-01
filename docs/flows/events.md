@@ -32,20 +32,12 @@ comments. Stream key: the root item, else the repo.
 
 | Event | Carries |
 |---|---|
-| `item_changed` | issue/PR: title, body, state |
+| `item_changed` | issue/PR: title, body, state, labels — the item's whole visible state; the eventId fingerprints all of it |
 | `item_closed` | explicit terminal beat when the root item closes — closes the Workflow; in-flight runs stop, as on `user_cancel` |
 | `comment_changed` | added / edited / **deleted** (tombstone flag) |
 | `review_added` | submitted review: verdict + inline comments |
 | `pr_updated` | new commits on the PR — starts the next review round |
 | `project_item_changed` | board card: column, link to its item |
-| `labels_changed` | AI-scope labels — read-only, trigger material |
-
-## Board / label events (Projects v2)
-
-| Event | Produced by | Effect |
-|---|---|---|
-| `card_status_changed` | board column transition | matched against the `auto_plan` / `auto_code` / `auto_review` / `auto_fix` triggers configured in `projects.yaml` |
-| `label_added` | an AI-scope label appears (`AI:Plan` / `AI:Code` / `AI:Review` / `AI:Test`) | starts the mapped flow when all trigger conditions converge |
 
 ## Agent tool events
 

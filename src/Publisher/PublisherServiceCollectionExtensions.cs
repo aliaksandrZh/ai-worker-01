@@ -31,9 +31,8 @@ public static class PublisherServiceCollectionExtensions
 
         services.AddSingleton<IGithubWriteApi>(sp =>
         {
-            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<PublisherOptions>>().Value;
-            var pat = PatFile.Read(options.PatFile, "PI_AGENT_GITHUB_WRITE_PAT_FILE",
-                "the Publisher publishes with a repo-scoped contents+write PAT (ADR-0001)");
+            var pat = PatFile.Read(configuration["PI_AGENT_GITHUB_PAT_FILE"], "PI_AGENT_GITHUB_WRITE_PAT_FILE",
+                "the Publisher publishes with a repo-scoped contents+write PAT");
             return new RestGithubWriteApi(GitHubHttp.Initialize(new HttpClient
             {
                 BaseAddress = new Uri("https://api.github.com/"),

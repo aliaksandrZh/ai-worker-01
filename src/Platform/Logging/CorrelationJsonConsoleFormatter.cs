@@ -46,7 +46,7 @@ public sealed class CorrelationJsonConsoleFormatter(IOptions<PiJsonConsoleFormat
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    /// <summary>The category's short name: what emitted the line (e.g. WorkflowEventsConsumer).</summary>
+    /// <summary>The category's short name: what emitted the line (e.g. OrchestratorAgent).</summary>
     private static string ShortCategory(string category)
     {
         var lastDot = category.LastIndexOf('.');

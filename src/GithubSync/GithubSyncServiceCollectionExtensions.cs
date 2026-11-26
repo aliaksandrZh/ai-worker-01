@@ -12,22 +12,16 @@ namespace PiAgent.GithubSync;
 public static class GithubSyncServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the GitHub sync adapter: cursors, the read client (a read-only PAT),
-    /// and the worker under the Workers:GithubSync gate. The sync holds no GitHub-shaped
-    /// tables — cursors only (docs/github-sync.md).
+    /// Registers the GitHub sync adapter: the read client (a read-only PAT) and the worker
+    /// under the Workers:GithubSync gate. Detection is stateless — no cursor tables; the
+    /// EventLog's unique (type, eventId) index is the sync's only memory (docs/github-sync.md).
     /// </summary>
     public static IServiceCollection AddGithubSync(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton(sp => SyncConfig.Read(
             configuration["PI_AGENT_CONFIG_DIR"] ?? "config"));
-        services.AddSingleton(sp => new PostgresCursorStore(
-            new Npgsql.NpgsqlDataSourceBuilder(configuration.GetConnectionString("DefaultDb")
-                ?? throw new InvalidOperationException("ConnectionStrings:DefaultDb is not configured")).Build(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger<PostgresCursorStore>()));
-        services.AddSingleton<ICursorStore>(sp => sp.GetRequiredService<PostgresCursorStore>());
-        services.AddHostedService<CursorSchemaBootstrap>();
 
-        if (configuration.GetValue<bool?>($"Workers:GithubSync:Enabled") is not true)
+        if (configuration.GetValue<bool?>("Workers:GithubSync:Enabled") is not true)
             return services;
 
         services.AddSingleton<IGithubReadApi>(sp =>
@@ -43,12 +37,4 @@ public static class GithubSyncServiceCollectionExtensions
         services.AddHostedService<GithubSyncWorker>();
         return services;
     }
-}
-
-/// <summary>Idempotent cursor-table DDL before the worker starts.</summary>
-internal sealed class CursorSchemaBootstrap(PostgresCursorStore cursors) : IHostedService
-{
-    public Task StartAsync(CancellationToken cancellationToken) => cursors.EnsureSchemaAsync(cancellationToken);
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

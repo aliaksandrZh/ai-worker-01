@@ -2,22 +2,24 @@ namespace PiAgent.GithubSync;
 
 /// <summary>
 /// The GitHub read seam of the sync adapter (docs/github-sync.md): every call is a read;
-/// the shape knowledge (paging, since-params) stays inside the implementation.
+/// the shape knowledge (paging, sort orders) stays inside the implementation.
 /// </summary>
 public interface IGithubReadApi
 {
-    /// <summary>Issues/PRs, newest update first (state, title, body, labels, isPr) — the worker
-    /// walks down to its own overlap floor; no `since` (inclusive + second-precision: a watermark
-    /// pairing refetches forever).</summary>
+    /// <summary>Issues/PRs, newest update first (state, title, body, labels, isPr) — page 1 only:
+    /// the open set is the working set; the just-closed item lingers near the top and witnesses
+    /// its own terminal beat. No `since`, no cursor — detection is stateless.</summary>
     Task<IReadOnlyList<GithubItem>> ListItemsAsync(string owner, string repo, CancellationToken ct);
 
-    /// <summary>Repo-wide comments, newest update first (issues and PRs).</summary>
-    Task<IReadOnlyList<GithubComment>> ListCommentsAsync(string owner, string repo, CancellationToken ct);
+    /// <summary>Comments on one item (issues and PRs — a PR's conversation comments are issue
+    /// comments), newest update first.</summary>
+    Task<IReadOnlyList<GithubComment>> ListCommentsAsync(
+        string owner, string repo, long itemNumber, CancellationToken ct);
 
     /// <summary>Head sha of a pull request.</summary>
     Task<string?> GetPullHeadShaAsync(string owner, string repo, long prNumber, CancellationToken ct);
 
-    /// <summary>Reviews on a PR, chronological (the worker applies its own floor).</summary>
+    /// <summary>Reviews on a PR, newest last.</summary>
     Task<IReadOnlyList<GithubReview>> ListReviewsAsync(
         string owner, string repo, long prNumber, CancellationToken ct);
 
@@ -34,6 +36,6 @@ public sealed record GithubItem(
     IReadOnlyList<string> Labels,
     DateTime UpdatedAtUtc);
 
-public sealed record GithubComment(long Id, long ItemNumber, string Author, string Body, DateTime CreatedAtUtc, DateTime UpdatedAtUtc);
+public sealed record GithubComment(long Id, string Author, string Body, DateTime CreatedAtUtc, DateTime UpdatedAtUtc);
 
 public sealed record GithubReview(long Id, long PrNumber, string Author, string Verdict, string Body, DateTime CreatedAtUtc);

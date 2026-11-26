@@ -1,38 +1,36 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System.Security.Cryptography;
-using System.Text;
 using PiAgent.Events;
 
 namespace PiAgent.GithubSync;
 
 /// <summary>
-/// The sync adapter worker (docs/github-sync.md): polls the configured repositories and
-/// appends sync events — the mechanics are the proven main-poller design adapted to the
-/// event-log world. No `since` parameter (GitHub's is inclusive and second-precision —
-/// a watermark + since pairing re-fetched the same record every cycle forever): each stream
-/// fetches a newest-first page, walks it down to the overlap floor, and dedups by
-/// CONTENT-FINGERPRINTED EventId — a re-fetched identical change maps to the same eventId
-/// and the EventLog's unique (type, eventId) index silently drops it. The cursor POSITION
-/// is monotonic: `max(previous, max(updated seen))`, capped at any unresolvable record
-/// (never skip past one — the next window re-fetches it). With no cursor yet the stream
-/// anchors ≈NOW (a fresh repo's backlog is not replayed; the orchestrator's history is the
-/// repo's, not the log's) — except comments, which anchor at the item watermark: an item
-/// updated during downtime witnesses a command typed while the plane was down.
+/// The sync adapter (docs/github-sync.md): polls the configured repositories and appends sync
+/// events. Detection carries no state of its own — no cursors, no time windows, no overlap
+/// floors, no anchoring rules. Each cycle re-reads the whole working set — page 1 of the repo's
+/// items, newest update first — and appends content-fingerprinted events: an unchanged item
+/// re-detects to the same eventId and the EventLog's unique (type, eventId) index silently drops
+/// the repeat, so the fingerprint IS the cursor. Only open items are synced: state=open gets the
+/// full derivation (item, PR sha, reviews, comments, commands); a closed item — out of the
+/// working set — gets only its ItemClosed terminal beat while it lingers on page 1. One instance
+/// only: there is no cursor-claim machinery to distribute repositories across instances.
+///
+/// The event building itself is Derivation (pure); this worker is the walking half — API reads,
+/// the one permission lookup, and the appends. Appends are fire-and-commit, no unit of work
+/// around the cycle: a cycle is not atomic and doesn't need to be — a half-done cycle is
+/// re-detected next cycle, and the fingerprint dedup drops the repeats. (The transaction was the
+/// cursor era's requirement: cursor advance atomic with its events. There is no cursor.) Holding
+/// one open across the cycle's HTTP reads would idle a connection in-transaction for its whole
+/// duration.
 /// </summary>
 public sealed class GithubSyncWorker(
     SyncConfig config,
     IGithubReadApi github,
     IEventLog log,
-    ICursorStore cursors,
     ILogger<GithubSyncWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan Overlap = TimeSpan.FromMinutes(5);
-    private DateTime _startedUtc = DateTime.UtcNow;
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _startedUtc = DateTime.UtcNow;
         logger.LogInformation("github sync started for [{repos}] as bot {bot}",
             string.Join(", ", config.Repositories.Select(r => $"{r.Owner}/{r.Name}")), config.BotLogin);
 
@@ -63,151 +61,49 @@ public sealed class GithubSyncWorker(
         var repoKey = $"{repo.Owner}/{repo.Name}";
         var itemsProcessed = 0;
         var commentsProcessed = 0;
-        await using var uow = await log.BeginTransactionAsync(ct);
 
-        // ---- items first: their watermark anchors the comments' fresh start, and item_changed
-        // precedes comment_changed on the same item stream. ----
-        var itemsPosition = await PollPositionAsync(repoKey, "items", ct);
-        var itemsFloor = (itemsPosition ?? _startedUtc) - Overlap;
-        var items = await github.ListItemsAsync(repo.Owner, repo.Name, ct);
-        var itemsPositionNew = itemsPosition ?? _startedUtc;
-
-        foreach (var item in items)
+        foreach (var item in await github.ListItemsAsync(repo.Owner, repo.Name, ct))
         {
-            if (item.UpdatedAtUtc < itemsFloor)
-                break; // newest-first: everything below the floor was seen in an earlier pass
+            var (changed, closed) = Derivation.ItemEvents(repo.Owner, repo.Name, item);
+
+            if (closed is { } beat)
+            {
+                await log.AppendAsync(beat, ct);
+                continue;
+            }
+
             itemsProcessed++;
+            await log.AppendAsync(changed!, ct);
 
-            var at = Unix(item.UpdatedAtUtc);
-            var itemId = $"item:{item.Number}:{at}";
-            await log.AppendAsync(new ItemChanged(
-                repo.Owner, repo.Name, item.Number, item.IsPullRequest,
-                item.Title, item.Body, item.State, EventId: itemId), uow, ct);
-            await log.AppendAsync(new LabelsChanged(
-                repo.Owner, repo.Name, item.Number, item.Labels,
-                EventId: $"{itemId}:labels:{Sha8(string.Join(',', item.Labels))}"), uow, ct);
-            if (item.State == "closed")
-                await log.AppendAsync(new ItemClosed(
-                    repo.Owner, repo.Name, item.Number, EventId: $"{itemId}:closed"), uow, ct);
-            if (itemsPositionNew < item.UpdatedAtUtc)
-                itemsPositionNew = item.UpdatedAtUtc;
-
-            if (!item.IsPullRequest)
-                continue;
-
-            if (await github.GetPullHeadShaAsync(repo.Owner, repo.Name, item.Number, ct) is { } sha)
-                await log.AppendAsync(new PrUpdated(
-                    repo.Owner, repo.Name, item.Number, sha,
-                    EventId: $"pr:{item.Number}:{at}:{sha[..Math.Min(12, sha.Length)]}"), uow, ct);
-
-            var reviewsPosition = await PollPositionAsync(repoKey, $"reviews:{item.Number}", ct);
-            var reviewsFloor = (reviewsPosition ?? _startedUtc) - Overlap;
-            var reviews = await github.ListReviewsAsync(repo.Owner, repo.Name, item.Number, ct);
-            foreach (var review in reviews)
+            if (item.IsPullRequest)
             {
-                if (review.CreatedAtUtc < reviewsFloor)
-                    break; // reviews come chronological — below the floor, done
-                await log.AppendAsync(new ReviewAdded(
-                    repo.Owner, repo.Name, item.Number, review.Id,
-                    review.Author, review.Verdict, review.Body,
-                    EventId: $"review:{review.Id}"), uow, ct);
-                if (reviewsPosition is null || reviewsPosition < review.CreatedAtUtc)
-                    reviewsPosition = review.CreatedAtUtc;
+                if (await github.GetPullHeadShaAsync(repo.Owner, repo.Name, item.Number, ct) is { } sha)
+                    await log.AppendAsync(
+                        Derivation.PrEvent(repo.Owner, repo.Name, item.Number, item.UpdatedAtUtc, sha)!, ct);
+
+                foreach (var review in await github.ListReviewsAsync(repo.Owner, repo.Name, item.Number, ct))
+                    await log.AppendAsync(
+                        Derivation.ReviewEvent(repo.Owner, repo.Name, item.Number, review)!, ct);
             }
 
-            if (reviewsPosition is { } rp && rp > (await PollPositionAsync(repoKey, $"reviews:{item.Number}", ct) ?? DateTime.MinValue))
-                await cursors.SetAsync(repoKey, $"reviews:{item.Number}", Watermark(rp), uow, ct);
-        }
-
-        if (itemsPosition is null || itemsPositionNew > itemsPosition)
-            await cursors.SetAsync(repoKey, "items", Watermark(itemsPositionNew), uow, ct);
-
-        // ---- comments → comment_changed + derived commands/decisions. Fresh start anchors at
-        // the item watermark (the downtime witness), everything else at ≈NOW. ----
-        var commentsPosition = await PollPositionAsync(repoKey, "comments", ct);
-        var commentsAnchor = commentsPosition ?? (await PollPositionAsync(repoKey, "items", ct) ?? _startedUtc);
-        var commentsFloor = commentsAnchor - Overlap;
-        var comments = await github.ListCommentsAsync(repo.Owner, repo.Name, ct);
-        var commentsPositionNew = commentsPosition ?? _startedUtc;
-        var minUnresolvable = DateTime.MaxValue;
-
-        foreach (var comment in comments)
-        {
-            if (comment.UpdatedAtUtc < commentsFloor)
-                break; // newest-first: below the floor was seen earlier
-            commentsProcessed++;
-
-            if (comment.ItemNumber <= 0)
+            foreach (var comment in await github.ListCommentsAsync(repo.Owner, repo.Name, item.Number, ct))
             {
-                // main's boundary rule: never advance past an unresolvable comment — the next
-                // window re-fetches it once it becomes resolvable
-                if (minUnresolvable > comment.UpdatedAtUtc)
-                    minUnresolvable = comment.UpdatedAtUtc;
-                continue;
-            }
+                commentsProcessed++;
+                var derived = Derivation.CommentEvents(repo.Owner, repo.Name, item.Number, comment, config.BotLogin);
+                await log.AppendAsync(derived.Comment, ct);
 
-            var at = Unix(comment.UpdatedAtUtc);
-            await log.AppendAsync(new CommentChanged(
-                repo.Owner, repo.Name, comment.ItemNumber, comment.Id, comment.Author, comment.Body,
-                Deleted: false,
-                EventId: $"comment:{comment.Id}:{at}:{Sha8(comment.Body)}"), uow, ct);
+                foreach (var decision in derived.Decisions)
+                    await log.AppendAsync(decision, ct);
 
-            if (comment.Author.Equals(config.BotLogin, StringComparison.Ordinal))
-                continue; // the bot's own comments are noise
-
-            foreach (var parsed in CommandGrammar.ParseAll(comment.Body, config.BotLogin))
-            {
-                switch (parsed.Command)
+                foreach (var draft in derived.Commands)
                 {
-                    // decisions at the edge (docs/flows events.md "user_decision"): plan approval
-                    // / changes requested — the Orchestrator consumes the typed event
-                    case "approve":
-                        await log.AppendAsync(new UserDecision(DecisionKind.PlanApproved,
-                            repo.Owner, repo.Name, comment.ItemNumber, comment.Author,
-                            parsed.TrailingContext,
-                            EventId: $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}"), uow, ct);
-                        break;
-                    case "changes":
-                        await log.AppendAsync(new UserDecision(DecisionKind.PlanChangesRequested,
-                            repo.Owner, repo.Name, comment.ItemNumber, comment.Author,
-                            parsed.TrailingContext,
-                            EventId: $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}"), uow, ct);
-                        break;
-                    default:
-                        var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, comment.Author, ct) ?? "read";
-                        await log.AppendAsync(new UserCommand(
-                            parsed.Command, repo.Owner, repo.Name, comment.ItemNumber, comment.Id,
-                            comment.Author, permission, parsed.TrailingContext,
-                            EventId: $"command:{comment.Id}:{at}:{parsed.Command}:{Sha8(comment.Body)}"), uow, ct);
-                        break;
+                    var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, draft.Author, ct) ?? "read";
+                    await log.AppendAsync(draft.Build(permission), ct);
                 }
             }
-
-            if (commentsPositionNew < comment.UpdatedAtUtc)
-                commentsPositionNew = comment.UpdatedAtUtc;
         }
 
-        if (minUnresolvable < DateTime.MaxValue && minUnresolvable < commentsPositionNew)
-            commentsPositionNew = minUnresolvable; // the boundary cap
-        if (commentsPosition is null || commentsPositionNew > commentsPosition)
-            await cursors.SetAsync(repoKey, "comments", Watermark(commentsPositionNew), uow, ct);
-
-        await uow.CommitAsync(ct);
-        logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s) processed, position {position:O}",
-            repoKey, commentsProcessed, itemsProcessed, commentsPositionNew);
+        logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s) processed",
+            repoKey, commentsProcessed, itemsProcessed);
     }
-
-    /// <summary>The stored POSITION (the newest updated_at already detected), or null.</summary>
-    private async Task<DateTime?> PollPositionAsync(string repoKey, string stream, CancellationToken ct)
-    {
-        var raw = await cursors.GetAsync(repoKey, stream, ct);
-        return raw is null ? null : new DateTime(long.Parse(raw), DateTimeKind.Utc);
-    }
-
-    private static string Watermark(DateTime utc) => utc.Ticks.ToString();
-    private static long Unix(DateTime utc) => new DateTimeOffset(utc, TimeSpan.Zero).ToUnixTimeSeconds();
-
-    /// <summary>main's Sha8: a content fingerprint that distinguishes edits within the same second.</summary>
-    private static string Sha8(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..8].ToLowerInvariant();
 }

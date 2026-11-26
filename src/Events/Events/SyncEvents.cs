@@ -6,7 +6,8 @@ namespace PiAgent.Events;
 /// window re-fetches by design; the fingerprint makes the re-fetch harmless — main poller's
 /// CommentKey idea, ported to the log).</summary>
 
-/// <summary>Issue/PR: title, body, state.</summary>
+/// <summary>Issue/PR: title, body, state, labels — the item's whole visible state in one
+/// record; the eventId fingerprints all of it, so a label change is an item change.</summary>
 public sealed record ItemChanged(
     string Owner,
     string Repo,
@@ -15,6 +16,7 @@ public sealed record ItemChanged(
     string Title,
     string Body,
     string State,
+    IReadOnlyList<string> Labels,
     string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, Number).Key;
@@ -84,13 +86,3 @@ public sealed record ProjectItemChanged(
         : new ItemRef(LinkedOwner, LinkedRepo!, LinkedItemNumber!.Value).Key;
 }
 
-/// <summary>AI-scope labels — read-only, trigger material.</summary>
-public sealed record LabelsChanged(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    IReadOnlyList<string> Labels,
-    string? EventId = null) : IEvent
-{
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
-}
