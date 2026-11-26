@@ -3,5 +3,6 @@
   "clone_mode": "plain",
   "tools": ["issue_read", "report_completion", "save_plan", "request_clarification"],
   "prompt": "/opt/pi-agent/profile/APPEND_SYSTEM.md",
+  "forward_progress_events": [],
   "resources": { "cpu": 2.0, "memory": "2GiB" }
 }

@@ -710,8 +710,15 @@ test("bridge end-to-end stop: signal observed → clear_queue/abort settle → t
 
 // ---- the communication-tool wire (ticket 06): route `tool` callbacks ----
 
-/** Spawns the real bridge against the real stub with the standard e2e env. */
-function spawnE2eBridge({ runId, dirs, port, behavior, extraEnv = {} }) {
+/** Spawns the real bridge against the real stub with the standard e2e env. The profile manifest
+ * baked into dirs.profileDir carries the route-`events` forward allow-list (empty by default —
+ * the bridge forwards nothing on route `events` unless the manifest lists the types) and the
+ * `tools` array that gates the route-`tool` callbacks. */
+function spawnE2eBridge({ runId, dirs, port, behavior, forwardEvents = [],
+                          tools = ["save_plan", "submit_pr_description", "report_completion"],
+                          manifest, extraEnv = {} }) {
+  writeFileSync(join(dirs.profileDir, "agent.json"),
+    JSON.stringify(manifest ?? { name: "stub", forward_progress_events: forwardEvents, tools }));
   return spawn(process.execPath, [fileURLToPath(new URL("./bridge.mjs", import.meta.url))], {
     env: {
       ...process.env,
@@ -720,6 +727,7 @@ function spawnE2eBridge({ runId, dirs, port, behavior, extraEnv = {} }) {
       PI_CALLBACK_BASE_URL: `http://127.0.0.1:${port}`,
       PI_RUN_TOKEN: "per-run-callback-token",
       PI_INPUT_FILE: join(dirname(dirs.tokenFile), "input.json"),
+      PI_CODING_AGENT_DIR: dirs.profileDir,
       PI_WORKSPACE: dirs.workspace,
       PI_SESSION_DIR: dirs.sessionDir,
       PI_LOGS_DIR: dirs.logsDir,
@@ -750,7 +758,7 @@ async function listen(server) {
   return server.address().port;
 }
 
-/** The `succeed` run's deterministic call plan: the ordinary work first, then the vocabulary —
+/** The `succeed` run's deterministic call plan: the ordinary work first, then the manifest tools —
  * the completion mandate call (call-5) is the settle signal, never a `tool` callback. */
 function expectedToolRoute(runId) {
   return [
@@ -780,7 +788,7 @@ test("bridge end-to-end tool route: each completed communication call becomes on
   assert.equal(exitCode, 0);
   assert.deepEqual(fake.failedBodies, []);
   assert.equal(fake.completedBodies.length, 1); // the run still settles completed
-  // exactly one `tool` callback per vocabulary call EXCEPT the completion mandate — the observed
+  // exactly one `tool` callback per manifest-listed tool EXCEPT the completion mandate — the observed
   // report_completion is the settle signal, rendered as the terminal `completed` callback only
   // (eventId <runId>-tool-<callId>, args intact)
   const received = fake.toolBodies.map(({ eventId, occurredAt, toolName, args }) =>
@@ -825,7 +833,10 @@ test("bridge end-to-end tool route: ordinary tool calls stay on route `events` a
   const fake = fakeRuntimeApi();
   const port = await listen(fake.server);
 
-  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed" }));
+  const exitCode = await bridgeExit(spawnE2eBridge({
+    runId, dirs, port, behavior: "succeed",
+    forwardEvents: ["tool_started", "tool_completed"], // the opaque progress echo needs these two
+  }));
   fake.server.close();
 
   assert.equal(exitCode, 0);
@@ -836,12 +847,33 @@ test("bridge end-to-end tool route: ordinary tool calls stay on route `events` a
   assert.ok(started.includes("mcp__github__get_file_contents"));
   assert.ok(completed.includes("bash"));
   assert.ok(completed.includes("mcp__github__get_file_contents"));
-  // the tool route carries ONLY the payload-carrying vocabulary — never the ordinary calls,
+  // the tool route carries ONLY the manifest-listed tools — never the ordinary calls,
   // never the completion mandate (the settle signal renders as the terminal `completed` callback)
   assert.deepEqual(fake.toolBodies.map((b) => b.toolName).sort(),
     ["save_plan", "submit_pr_description"]);
   assert.equal(fake.toolBodies.some((b) => b.toolName === "bash"
     || b.toolName === "get_file_contents"), false);
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end tool route: the manifest `tools` array gates the callbacks — a listed tool's call produces one, an unlisted tool's call does not", async () => {
+  const runId = "manifest-tools-gate-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({
+    runId, dirs, port, behavior: "succeed",
+    tools: ["save_plan", "report_completion"], // submit_pr_description deliberately unlisted
+  }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.equal(fake.completedBodies.length, 1); // the completion mandate is observed regardless of the gate
+  // only the listed tool produced the `tool` callback; the successful submit_pr_description call
+  // of the same run produced none — the manifest's `tools` array is the single source
+  assert.deepEqual(fake.toolBodies.map((b) => b.toolName), ["save_plan"]);
+  assert.equal(fake.toolBodies[0].eventId, `${runId}-tool-call-3`);
   e2eCleanup(dirs);
 });
 
@@ -875,7 +907,7 @@ test("bridge restart mid-run: the spool redelivers `tool` callbacks verbatim and
     firstToolBody,
     new Promise((_, reject) => setTimeout(() => reject(new Error("no tool callback arrived")), 20_000).unref()),
   ]);
-  assert.equal(heldBody.eventId, `${runId}-tool-call-3`); // the first vocabulary call of the run
+  assert.equal(heldBody.eventId, `${runId}-tool-call-3`); // the first manifest-tool call of the run
   assert.equal(heldBody.toolName, "save_plan");
   await new Promise((resolve) => setTimeout(resolve, 1_500)); // grace: the stub run finishes spooling
   bridge1.kill("SIGKILL");
@@ -896,7 +928,7 @@ test("bridge restart mid-run: the spool redelivers `tool` callbacks verbatim and
   // (same eventId, same occurredAt, same args)
   assert.deepEqual(fake.toolBodies[0], heldBody);
   // the deterministic eventId: across the redelivered backlog AND the re-run's re-observation,
-  // each vocabulary call's eventId exists exactly twice — delivered or still spool-pending;
+  // each manifest-tool call's eventId exists exactly twice — delivered or still spool-pending;
   // dedup at ingestion (ticket 03) collapses them to one, never the Bridge
   const pendingToolBodies = readdirSync(dirs.spoolDir)
     .filter((name) => /^\d+-.*\.json$/.test(name))
@@ -947,6 +979,7 @@ test("bridge end-to-end completion mandate: a settle without report_completion i
 
   const exitCode = await bridgeExit(spawnE2eBridge({
     runId, dirs, port, behavior: "no_completion",
+    forwardEvents: ["agent_settled"], // the nudge-loop assertion observes the settles on route `events`
     extraEnv: {
       STUB_STAY_ALIVE: "1", // answer the Bridge's follow-up prompt deterministically
       PI_COMPLETION_NUDGES: "1",
@@ -971,7 +1004,8 @@ test("bridge end-to-end completion mandate: a permission-denied report_completio
   const fake = fakeRuntimeApi();
   const port = await listen(fake.server);
 
-  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "permission_denied" }));
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "permission_denied",
+    forwardEvents: ["agent_settled"] }));
   fake.server.close();
 
   assert.equal(exitCode, 0);
@@ -984,19 +1018,109 @@ test("bridge end-to-end completion mandate: a permission-denied report_completio
   e2eCleanup(dirs);
 });
 
+// ---- the route-`events` forward allow-list (the profile manifest's forward_progress_events) ----
+
+test("bridge end-to-end forward_progress_events: only the listed types reach route `events`, the rest never leaves the bridge", async () => {
+  const runId = "forward-events-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed",
+    forwardEvents: ["tool_started", "agent_settled"] }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.failedBodies, []);
+  assert.equal(fake.completedBodies.length, 1); // the run still settles completed
+  // route `events` carries ONLY the listed types — agent_started, turn_started, turn_completed,
+  // tool_progress, tool_completed, assistant_output are dropped before the spool
+  assert.deepEqual([...new Set(fake.eventBodies.map((b) => b.type))].sort(),
+    ["agent_settled", "tool_started"]);
+  // the mapper kept running: the aggregate `tool` route and the terminal are unaffected
+  assert.deepEqual(fake.toolBodies.map((b) => b.toolName).sort(), ["save_plan", "submit_pr_description"]);
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end forward_progress_events: an empty list forwards NOTHING on route `events` — routes `tool`/`completed` always pass", async () => {
+  const runId = "forward-events-empty-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed",
+    forwardEvents: [] }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.failedBodies, []);
+  assert.deepEqual(fake.eventBodies, []); // nothing on route `events`
+  assert.deepEqual(fake.toolBodies.map((b) => b.toolName).sort(), ["save_plan", "submit_pr_description"]);
+  assert.equal(fake.completedBodies.length, 1); // the terminal is out of scope for the filter
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end forward_progress_events: a missing or non-array field forwards nothing on route `events`", async () => {
+  const runId = "forward-events-invalid-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  // a non-array field is tolerated as empty (an absent field behaves the same)
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "succeed",
+    manifest: { name: "stub", forward_progress_events: "tool_started" } }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.eventBodies, []);
+  assert.equal(fake.completedBodies.length, 1);
+  e2eCleanup(dirs);
+});
+
+test("bridge end-to-end forward_progress_events: an unlisted entry redelivered from an earlier lifetime is dropped at the send boundary", async () => {
+  const runId = "forward-events-redelivery-run";
+  const dirs = e2eDirs();
+  // a stale spool from a previous lifetime: one listed, one unlisted route-`events` entry
+  writeFileSync(join(dirs.spoolDir, "000001-stale-unlisted.json"), JSON.stringify({
+    id: "stale-unlisted", route: "events",
+    body: { eventId: "stale-unlisted", type: "agent_started", occurredAt: "t0", payload: {} },
+  }));
+  writeFileSync(join(dirs.spoolDir, "000002-stale-listed.json"), JSON.stringify({
+    id: "stale-listed", route: "events",
+    body: { eventId: "stale-listed", type: "tool_started", occurredAt: "t0", payload: { toolName: "bash" } },
+  }));
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  // the stale entries are delivered by the sender loop; the run itself fails fast (mcp_failed —
+  // it never starts an agent run, so it spools no route-`events` entries of its own)
+  const exitCode = await bridgeExit(spawnE2eBridge({ runId, dirs, port, behavior: "mcp_failed",
+    forwardEvents: ["tool_started"] }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  // the unlisted stale entry is NEVER sent — the listed one is
+  assert.deepEqual(fake.eventBodies.map((b) => b.eventId), ["stale-listed"]);
+  assert.equal(fake.eventBodies[0].type, "tool_started");
+  assert.equal(fake.failedBodies.length, 1); // the terminal (out of scope) still delivered
+  assert.equal(fake.failedBodies[0].error.code, "mcp_unavailable");
+  e2eCleanup(dirs);
+});
+
 function e2eDirs() {
   const workspace = tempDir("ws-outcome-");
   const sessionDir = tempDir("session-outcome-");
   const logsDir = tempDir("logs-outcome-");
   const spoolDir = tempDir("spool-outcome-");
+  const profileDir = tempDir("profile-outcome-");
   const tokenFile = join(tempDir("tok-outcome-"), "callback-token");
   writeFileSync(tokenFile, "per-run-callback-token");
   writeFileSync(join(dirname(tokenFile), "input.json"), JSON.stringify({}));
-  return { workspace, sessionDir, logsDir, spoolDir, tokenFile };
+  return { workspace, sessionDir, logsDir, spoolDir, profileDir, tokenFile };
 }
 
 function e2eCleanup(dirs) {
-  for (const dir of [dirs.workspace, dirs.sessionDir, dirs.logsDir, dirs.spoolDir, dirname(dirs.tokenFile)])
+  for (const dir of [dirs.workspace, dirs.sessionDir, dirs.logsDir, dirs.spoolDir, dirs.profileDir, dirname(dirs.tokenFile)])
     rmSync(dir, { recursive: true, force: true });
 }
 

@@ -3,5 +3,6 @@
   "clone_mode": "none",
   "tools": [],
   "prompt": null,
+  "forward_progress_events": [],
   "resources": { "cpu": 1.0, "memory": "512MiB" }
 }
