@@ -29,7 +29,7 @@ src/**/*.user
 # pi-agent control plane — local env with secrets (keep deploy/.env.example tracked)
 deploy/.env
 
-# pi-agent control plane — runtime: host-storage mounts, build-worker state, backups, logs
+# pi-agent control plane — runtime: host-storage mounts, logs
 # (anchored to the repo root with a leading slash: unanchored names like `runtime/` would
 # also match src/tests/Hosts.Tests/Runtime/ etc.)
 /runtime/

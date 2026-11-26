@@ -2,7 +2,7 @@ name: pi-agent-control-plane
 
 # Event-driven composition (ADR-0002..0006): postgres → app-host (the single long-running
 # service: EventLog + Orchestrator + Publisher + GithubSync + RunWorker consumers, gated by
-# the Workers: section) + the backup/snapshot loops + the observability stack.
+# the Workers: section) + the observability stack.
 # Schema is owned by the modules' idempotent bootstrap DDL (EnsureSchemaAsync at startup) —
 # no migrator step. PostgreSQL additionally published on 127.0.0.1 only, for local pgAdmin.
 
@@ -79,37 +79,6 @@ services:
       retries: 12
       start_period: 10s
 
-  backups:
-    image: postgres:17
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-pi_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
-      POSTGRES_DB: ${POSTGRES_DB:-pi_agent}
-      BACKUP_DB_HOST: postgres
-      BACKUPS_DIR: /backups
-      BACKUP_INTERVAL_MINUTES: ${BACKUP_INTERVAL_MINUTES:-60}
-    volumes:
-      - ./backup/backup-loop.sh:/scripts/backup-loop.sh:ro
-      - backups:/backups
-    entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  config-snapshot:
-    # alpine/git latest is acceptable for the dev snapshot loop; pin when this ships
-    image: alpine/git:latest
-    restart: unless-stopped
-    environment:
-      CONFIG_SNAPSHOT_REPO_URL: ${CONFIG_SNAPSHOT_REPO_URL:-}
-      CONFIG_SNAPSHOT_INTERVAL_MINUTES: ${CONFIG_SNAPSHOT_INTERVAL_MINUTES:-1440}
-      BACKUPS_DIR: /backups
-    volumes:
-      - ./backup/config-snapshot-loop.sh:/scripts/config-snapshot-loop.sh:ro
-      - backups:/backups
-    entrypoint: ["/bin/sh", "/scripts/config-snapshot-loop.sh"]
-
   # Centralized logging (config in deploy/logging/): every service logs JSON to stdout and
   # Alloy ships it to Loki with a `service` label (compose service name); Grafana serves the
   # one provisioned log-list dashboard (Pi Agent Logs) on 127.0.0.1. No .NET or logging-driver
@@ -155,7 +124,6 @@ services:
 
 volumes:
   pgdata:
-  backups:
   loki-data:
   alloy-data:
   grafana-data:
