@@ -431,8 +431,25 @@ public sealed class Orchestrator(
 
     private async Task StartTaskAsync(WorkflowRow workflow, string taskType, string? commandText, string? agentBranch, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
         var taskId = await state.CreateTaskAsync(workflow.Id, taskType, uow, ct);
         await CreateRunAndScheduleAsync(workflow, taskId, commandText, agentBranch, uow, ct);
+    }
+
+    /// <summary>
+    /// The one-active-task invariant (docs/incident-2026-11-26-review-item27.md, Case A):
+    /// automatic transitions must not start a parallel task chain — a queued or processing
+    /// Task occupies the Workflow's single slot.
+    /// </summary>
+    private async Task<bool> SlotOccupiedAsync(WorkflowRow workflow, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    {
+        if (await state.GetActiveTaskAsync(workflow.Id, uow, ct)
+            is not { Status: TaskStatuses.Queued or TaskStatuses.Processing } task)
+            return false;
+        logger.LogWarning("workflow {workflow}: {type} task is {status}; the workflow runs one task at a time — not starting another",
+            workflow.Id, task.Type, task.Status);
+        return true;
     }
 
     /// <summary>
@@ -471,6 +488,8 @@ public sealed class Orchestrator(
 
     private async Task CreateNextTaskAsync(WorkflowRow workflow, TaskRow current, string nextType, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
         var nextId = await state.CreateTaskAsync(workflow.Id, nextType, uow, ct);
         await CreateRunAndScheduleAsync(workflow, nextId, null, agentBranch: null, uow, ct);
         logger.LogInformation("workflow {workflow}: {current} succeeded → {next} task {task}",
@@ -505,6 +524,9 @@ public sealed class Orchestrator(
             await NotifyAsync(workflow, "review round cap reached — review_loop_exhausted; a fresh command restarts the work", uow, ct);
             return;
         }
+
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
 
         await state.IncrementReviewRoundsAsync(workflow.Id, uow, ct);
         // a fixing round continues the agent branch the previous Coder run pushed

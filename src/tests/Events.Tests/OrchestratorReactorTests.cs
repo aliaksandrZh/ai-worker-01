@@ -82,6 +82,16 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
 
     private async Task<IReadOnlyList<IEvent>> AppendedAsync() => await _fx.AppendedAsync();
 
+    /// <summary>The invariant keeps a queued/processing Task in the slot; tests that drive
+    /// the next automatic transition settle it first (the reactor does this via run events).</summary>
+    private async Task SettleActiveTaskAsync(long workflowId)
+    {
+        var active = Assert.IsType<TaskRow>(await ActiveTaskAsync(workflowId));
+        await using var uow = await _state.Factory.BeginAsync(CancellationToken.None);
+        await _state.SetTaskStatusAsync(active.Id, TaskStatuses.Succeeded, uow, CancellationToken.None);
+        await uow.Events.CommitAsync(CancellationToken.None);
+    }
+
     private static UserCommand Command(string command = "/code", string permission = "write") =>
         new(command, "o", "r", 1, CommentId: 100, Author: "u", permission, Text: command);
 
@@ -171,6 +181,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         var workflow = await RunCommandAsync(Command());
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
+        await SettleActiveTaskAsync(workflow.Id); // the chained Review task frees the slot
 
         await _orchestrator.HandleReviewCommentsSubmittedAsync(
             new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2, Comments: []), CancellationToken.None);
@@ -316,6 +327,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         var workflow = await RunCommandAsync(Command("/review"));
         for (var round = 1; round <= 3; round++)
         {
+            await SettleActiveTaskAsync(workflow.Id); // the previous round's task frees the slot
             await _orchestrator.HandleReviewCommentsSubmittedAsync(
                 new ReviewCommentsSubmitted("o", "r", 1, 1, RunId: round,
                     Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
@@ -332,6 +344,53 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("review_loop_exhausted"));
         Assert.Equal(4, (await AppendedAsync()).OfType<PublishReview>().Count());
+    }
+
+    [Fact]
+    public async Task A_completed_run_does_not_chain_a_second_task_while_one_is_active()
+    {
+        var workflow = await RunCommandAsync(Command());
+        var evt = new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee");
+        await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
+        var runsAfterFirst = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        // a replayed (or racing) completion must not start a parallel chain: the Review
+        // task it chained occupies the slot
+        await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
+
+        Assert.Equal(runsAfterFirst, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.Equal(TaskTypes.Review, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Type);
+    }
+
+    [Fact]
+    public async Task Review_comments_with_an_active_task_start_no_fixing_round()
+    {
+        var workflow = await RunCommandAsync(Command()); // the Implement task occupies the slot
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _orchestrator.HandleReviewCommentsSubmittedAsync(
+            new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2, Comments: []), CancellationToken.None);
+
+        workflow = await WorkflowAsync(workflow.Id);
+        Assert.Equal(0, workflow.ReviewRounds); // the round was not consumed
+        Assert.Equal(runsBefore, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.Equal(TaskTypes.Implement, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Type);
+    }
+
+    [Fact]
+    public async Task A_parked_task_still_resumes_via_a_reply()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleEscalationAsync(
+            new BlockerReported("o", "r", 1, RunId: 1, "db missing", "no db", ["provide db"]),
+            "blocked", CancellationToken.None);
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _orchestrator.HandleUserReplyAsync(
+            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "here"), CancellationToken.None);
+
+        Assert.Equal(runsBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Status);
     }
 
     [Fact]
