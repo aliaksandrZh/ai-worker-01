@@ -267,8 +267,20 @@ public sealed class Orchestrator(
         else
         {
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.WaitingForHuman, uow, ct);
-            await NotifyAsync(workflow,
-                $"task {task.Type} failed after {attempts} attempts: {evt.Cause}", uow, ct);
+            if (IsImageMissingCause(evt.Cause))
+            {
+                // quiet park (incident 2026-11-26 Case C, Block 2): a notify comment would be
+                // observed by the poller and resume the parked task — the missing-image loop
+                // returns through that comment. No GitHub comment; a real user reply still
+                // resumes the task (HandleUserReplyAsync).
+                logger.LogWarning("task {task} parked silently after {attempts} attempts: {cause}",
+                    task.Id, attempts, evt.Cause);
+            }
+            else
+            {
+                await NotifyAsync(workflow,
+                    $"task {task.Type} failed after {attempts} attempts: {evt.Cause}", uow, ct);
+            }
         }
 
         await uow.Events.CommitAsync(ct);
@@ -600,6 +612,14 @@ public sealed class Orchestrator(
             workflow.Owner, 0, workflow.NodeId, column, runId,
             IdempotencyKey: $"board:{runId}:{column}"), uow.Events, ct);
     }
+
+    /// <summary>
+    /// The RunWorker's quiet-early-exit cause ("image missing for profile X: image"): the run
+    /// failed before provisioning, deterministically, and a GitHub comment would only feed the
+    /// poller's resume loop (docs/incident-2026-11-26-follow-ups.md Block 2.2.1).
+    /// </summary>
+    private static bool IsImageMissingCause(string? cause) =>
+        cause is not null && cause.StartsWith("image missing", StringComparison.Ordinal);
 
     private Task NotifyAsync(WorkflowRow workflow, string body, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         log.AppendAsync(new PublishComment(

@@ -7,6 +7,9 @@ public sealed class RecordingProvisioner : IContainerProvisioner
 {
     public ContainerPlan? LastPlan { get; private set; }
     public int StopCalls { get; private set; }
+    public bool ImageExists { get; set; } = true;
+    public int ImageChecks { get; private set; }
+    public string? LastCheckedImage { get; private set; }
 
     public Task<string?> CreateContainerAsync(ContainerPlan plan, CancellationToken cancellationToken)
     {
@@ -27,4 +30,11 @@ public sealed class RecordingProvisioner : IContainerProvisioner
     }
 
     public Task<bool> RemoveAsync(string container, CancellationToken cancellationToken) => Task.FromResult(true);
+
+    public Task<bool> ImageExistsAsync(string image, CancellationToken cancellationToken)
+    {
+        ImageChecks++;
+        LastCheckedImage = image;
+        return Task.FromResult(ImageExists);
+    }
 }

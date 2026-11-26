@@ -137,6 +137,22 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_missing_profile_image_fails_the_run_quietly_before_provisioning()
+    {
+        _docker.ImageExists = false;
+
+        await StartRunAsync(PlannerInput() with { Profile = "testing" });
+
+        var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
+        Assert.StartsWith("image missing for profile testing:", failed.Cause);
+        Assert.Contains("agent-testing:latest", failed.Cause);
+        Assert.Null(_docker.LastPlan);              // no container was created
+        Assert.Null(_registry.Get(7));              // nothing left in flight
+        Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunProcessing);
+        Assert.Equal("agent-testing:latest", _docker.LastCheckedImage);
+    }
+
+    [Fact]
     public async Task The_stub_behavior_lever_rides_the_entry_env()
     {
         var consumer = ConsumerWith(stubBehavior: "no_completion");

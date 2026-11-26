@@ -351,6 +351,43 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Image_missing_failures_retry_silently_then_park_without_a_notification()
+    {
+        // the quiet early exit (incident 2026-11-26 Case C, Block 2): the cause keeps the
+        // normal retry counting (2.3.1b) but a notify comment would feed the poller's resume
+        // loop, so the exhausted cap parks the task WITHOUT PublishComment (2.3.2a)
+        var workflow = await RunCommandAsync(Command());
+        var cause = "image missing for profile coder: agent-coder:latest";
+
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+
+        // 2 auto-retries done → third failure parks silently
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
+        Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
+        Assert.DoesNotContain(await AppendedAsync(), e => e is PublishComment);
+    }
+
+    [Fact]
+    public async Task A_silently_parked_task_still_resumes_via_a_reply()
+    {
+        var workflow = await RunCommandAsync(Command());
+        var cause = "image missing for profile coder: agent-coder:latest";
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _orchestrator.HandleUserReplyAsync(
+            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "image built"), CancellationToken.None);
+
+        var active = await ActiveTaskAsync(workflow.Id);
+        Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(active).Status);
+        Assert.Equal(runsBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
+    }
+
+    [Fact]
     public async Task Cancel_stops_the_workflow_and_its_runs()
     {
         var workflow = await RunCommandAsync(Command());
