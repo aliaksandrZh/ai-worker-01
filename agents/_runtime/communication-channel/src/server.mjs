@@ -23,14 +23,45 @@
  *   node dist/server.mjs /path/to/agent.json     (or env AGENT_MANIFEST)
  */
 import { createInterface } from "node:readline";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { ESCALATION_TOOLS, TOOLS, VOCABULARY, hint, jsonSchema, zodSchema } from "./spec.mjs";
 
 process.stdin.setEncoding("utf8");
 
+/**
+ * The workspace guard behind CC_COMPLETION_GUARD (set in the coder profile image): before the
+ * Orchestrator ever sees a delivery call, the workspace git state must be delivery-ready — the
+ * agent branch exists, is not the default branch, and its local HEAD is pushed to origin
+ * (docs/coder APPEND_SYSTEM "The agent branch"). A violation is a JSON-RPC error — an isError
+ * tool result the agent fixes in-run (create/switch/push), never a poisoned downstream event.
+ * `defaultBranch` comes from GIT_DEFAULT_BRANCH; without it only the repository is checked.
+ */
+export function workspaceGuard(workspace, defaultBranch) {
+  return () => {
+    try {
+      const branch = execFileSync("git", ["-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
+        { encoding: "utf8" }).trim();
+      if (!defaultBranch || branch !== defaultBranch) {
+        const head = execFileSync("git", ["-C", workspace, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        const remote = execFileSync("git", ["-C", workspace, "ls-remote", "origin", `refs/heads/${branch}`],
+          { encoding: "utf8" }).trim();
+        if (remote.split("\t")[0] !== head)
+          return `branch '${branch}' is missing on origin or HEAD is unpushed — git push, then call again`;
+      } else {
+        return `workspace is on the default branch '${branch}' — create the agent branch ` +
+          "agent/<issue-number>-<short-slug>, commit, push, then call again";
+      }
+      return null;
+    } catch {
+      return `no git repository state in ${workspace} — cannot verify the agent branch`;
+    }
+  };
+}
+
 /** agent.json -> registered tools. Only manifest names inside the vocabulary register. */
-export function registerTools(manifest) {
+export function registerTools(manifest, guard) {
   const listed = manifest?.tools;
   if (!Array.isArray(listed) || listed.some((t) => typeof t !== "string"))
     throw new Error("agent.json: 'tools' must be an array of tool names");
@@ -42,7 +73,7 @@ export function registerTools(manifest) {
       name,
       description: spec.description,
       inputSchema: jsonSchema(spec),
-      schema: zodSchema(spec),
+      schema: zodSchema({ ...spec, name }, guard),
     });
   }
   return registered;
@@ -96,7 +127,10 @@ function start() {
   }
   let registered;
   try {
-    registered = registerTools(JSON.parse(readFileSync(manifestPath, "utf8")));
+    const guard = process.env.CC_COMPLETION_GUARD
+      ? workspaceGuard(process.env.CC_COMPLETION_GUARD, process.env.GIT_DEFAULT_BRANCH)
+      : undefined;
+    registered = registerTools(JSON.parse(readFileSync(manifestPath, "utf8")), guard);
   } catch (e) {
     console.error(`communication-channel: cannot load manifest ${manifestPath}: ${e.message}`);
     process.exit(1);

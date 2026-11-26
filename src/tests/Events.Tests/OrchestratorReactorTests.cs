@@ -97,6 +97,25 @@ public sealed class OrchestratorReactorTests
         workflow = await _state.GetWorkflowAsync(workflow.Id, null!, CancellationToken.None);
         Assert.Equal("ai/task-1", workflow.AgentBranch);
         Assert.Equal("c0ffee", workflow.HeadSha);
+
+        // the PR publication carries the branch the run actually pushed, not a synthesized name
+        var publish = Assert.Single(_log.Appended.OfType<PublishPr>());
+        Assert.Equal("ai/task-1", publish.HeadBranch);
+        Assert.Equal("main", publish.BaseBranch); // fallback: no config entry
+    }
+
+    [Fact]
+    public async Task Run_completed_without_git_facts_parks_the_task_and_skips_the_pr_publication()
+    {
+        var workflow = await RunCommandAsync(Command());
+
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(1, 1, "o", "r", 1, Branch: null, CommitSha: null), CancellationToken.None);
+
+        Assert.DoesNotContain(_log.Appended, e => e is PublishPr);
+        var task = await _state.GetTaskAsync(1, null!, CancellationToken.None);
+        Assert.Equal(TaskStatuses.WaitingForHuman, task.Status);
+        Assert.Contains(_log.Appended, e => e is PublishComment); // the notify comment
     }
 
     [Fact]
@@ -195,7 +214,7 @@ public sealed class OrchestratorReactorTests
     {
         var workflow = await RunCommandAsync(Command());
         await _orchestrator.HandleRunCompletedAsync(
-            new RunCompleted(1, 1, "o", "r", 1), CancellationToken.None);
+            new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
 
         Assert.Contains(_log.Appended, e => e is PublishPr { Kind: PublishPrKind.Create });
         var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
