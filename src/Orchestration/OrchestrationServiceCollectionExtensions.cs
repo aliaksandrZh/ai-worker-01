@@ -42,16 +42,16 @@ public static class OrchestrationServiceCollectionExtensions
             return services;
 
         // concrete + interface registrations: the runner resolves the concrete consumer
-        services.AddSingleton<OrchestratorConsumer>();
-        services.AddSingleton<RunLifecycleConsumer>();
-        services.AddSingleton<WorkflowEventsConsumer>();
-        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<OrchestratorConsumer>());
-        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<RunLifecycleConsumer>());
-        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<WorkflowEventsConsumer>());
+        services.AddSingleton<OrchestratorInbound>();
+        services.AddSingleton<OrchestratorRuns>();
+        services.AddSingleton<OrchestratorAgent>();
+        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<OrchestratorInbound>());
+        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<OrchestratorRuns>());
+        services.AddSingleton<IEventConsumer>(sp => sp.GetRequiredService<OrchestratorAgent>());
 
-        services.AddHostedService<EventConsumerRunner<OrchestratorConsumer>>();
-        services.AddHostedService<EventConsumerRunner<RunLifecycleConsumer>>();
-        services.AddHostedService<EventConsumerRunner<WorkflowEventsConsumer>>();
+        services.AddHostedService<EventConsumerRunner<OrchestratorInbound>>();
+        services.AddHostedService<EventConsumerRunner<OrchestratorRuns>>();
+        services.AddHostedService<EventConsumerRunner<OrchestratorAgent>>();
         return services;
     }
 

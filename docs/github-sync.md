@@ -7,7 +7,10 @@
 
 ## What it does
 
-Polls the configured repositories, diffs against per-stream cursors, and appends:
+Polls the configured repositories and appends (detection is stateless — each cycle re-reads
+the working set and appends content-fingerprinted events; the EventLog's unique
+`(type, eventId)` index silently drops an unchanged re-detection, so the fingerprint is the
+cursor — there is no cursor table):
 
 1. **Sync events** — raw normalized GitHub state changes (vocabulary below);
 2. **`user_command`** — the derived event when a `comment_changed` carries a slash
@@ -19,21 +22,22 @@ Polls the configured repositories, diffs against per-stream cursors, and appends
 
 | Event | Carries |
 |---|---|
-| `item_changed` | issue/PR: title, body, state (open/closed) |
+| `item_changed` | issue/PR: title, body, state (open/closed), labels — the item's whole visible state; the eventId fingerprints all of it, so a label change is an item change |
 | `item_closed` | explicit terminal beat when state → closed |
 | `comment_changed` | added / edited / **deleted** (tombstone flag — deletions stay visible) |
 | `review_added` | submitted review: verdict + inline comments |
 | `pr_updated` | new commits on the PR (head sha) |
 | `project_item_changed` | board card: column, link to its item |
-| `labels_changed` | AI-scope labels — **read-only**, trigger material |
 
 Stream key: the root item when derivable, otherwise a repo-level stream.
 
 ## Invariants
 
-1. **Cursors, not mirrors.** Detection is a diff against cursors (new comments since
-   `id`, head sha change, column change, label change) — the Poller never stores
-   GitHub content, and Postgres gains no GitHub-shaped tables.
+1. **Fingerprints, not mirrors.** Detection is stateless: every emitted event carries a
+   content-fingerprinted `eventId` (id + timestamp + content hash), and the EventLog's unique
+   `(type, eventId)` index drops an unchanged re-detection. The sync never stores GitHub
+   content, and Postgres gains no GitHub-shaped tables. Only open items are synced — a closed
+   item leaves the working set and gets only its `item_closed` terminal beat.
 2. **Deletions are events.** A removed comment is a tombstone `comment_changed`,
    never a silent absence.
 3. **Permission travels in the event.** `user_command` carries the author's resolved
@@ -42,8 +46,8 @@ Stream key: the root item when derivable, otherwise a repo-level stream.
    separately from the flows; when it changes, this module is the only code that
    notices.
 5. **Read-only module.** Every GitHub call it makes is a read.
-6. **Multi-instance safe.** Repositories distribute across instances through cursor
-   claims (implementation detail behind the interface).
+6. **Single instance.** There is no cursor-claim machinery to distribute repositories
+   across instances — running a second sync worker would double-append commands.
 
 ## Configuration knobs
 

@@ -5,7 +5,7 @@ using PiAgent.Orchestration.State;
 namespace PiAgent.Orchestration.Consumers;
 
 /// <summary>Commands, replies, decisions, cancellation, closure — the admission side.</summary>
-public sealed class OrchestratorConsumer(Orchestrator core) : IEventConsumer
+public sealed class OrchestratorInbound(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
@@ -13,7 +13,7 @@ public sealed class OrchestratorConsumer(Orchestrator core) : IEventConsumer
         typeof(ItemClosed), typeof(CommentChanged),
     ];
 
-    public string Name => "OrchestratorCommands";
+    public string Name => "OrchestratorInbound";
 
     public Task HandleAsync(IEvent evt, int attempt, CancellationToken ct) => evt switch
     {
@@ -22,15 +22,13 @@ public sealed class OrchestratorConsumer(Orchestrator core) : IEventConsumer
         UserDecision decision => core.HandleUserDecisionAsync(decision, ct),
         UserCancel cancel => core.HandleUserCancelAsync(cancel, ct),
         ItemClosed closed => core.HandleItemClosedAsync(closed, ct),
-        // a non-command comment on an item with a parked Task is the User's reply:
-        // commands were already derived by the Poller (docs/github-sync.md)
         CommentChanged comment => core.HandleCommentChangedAsync(comment, ct),
         _ => Task.CompletedTask,
     };
 }
 
 /// <summary>Run lifecycle: the state machine's spine (docs/orchestrator.md §3).</summary>
-public sealed class RunLifecycleConsumer(Orchestrator core) : IEventConsumer
+public sealed class OrchestratorRuns(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
@@ -50,17 +48,17 @@ public sealed class RunLifecycleConsumer(Orchestrator core) : IEventConsumer
 }
 
 /// <summary>Agent tool events + board-card links (the flow's mid-flight beats).</summary>
-public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEventsConsumer> logger) : IEventConsumer
+public sealed class OrchestratorAgent(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
         typeof(PlanSaved), typeof(ClarificationRequested), typeof(BlockerReported),
         typeof(ReviewDecisionRequested), typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
         typeof(ReviewCommentsSubmitted), typeof(BugReported), typeof(TestsPassed),
-        typeof(ProjectItemChanged), typeof(LabelsChanged), typeof(PrUpdated),
+        typeof(ProjectItemChanged), typeof(PrUpdated),
     ];
 
-    public string Name => "OrchestratorWorkflow";
+    public string Name => "OrchestratorAgent";
 
     public Task HandleAsync(IEvent evt, int attempt, CancellationToken ct) => evt switch
     {
@@ -79,17 +77,7 @@ public sealed class WorkflowEventsConsumer(Orchestrator core, ILogger<WorkflowEv
             $"environment issue: {e.Description} — needs: {e.WhatIsNeeded}", ct),
         CriteriaClarificationRequested c => core.HandleEscalationAsync(c,
             $"acceptance criteria need clarification: {c.Question}", ct),
-        LabelsChanged labels => IgnoreLabelTriggersAsync(labels, ct),
         PrUpdated updated => core.HandlePrUpdatedAsync(updated, ct),
         _ => Task.CompletedTask,
     };
-
-    // Board/label auto-triggers (auto_plan, auto_code, auto_review, auto_fix) are a
-    // later stage: the event arrives, nothing consumes it yet — recorded, not dropped.
-    private Task IgnoreLabelTriggersAsync(LabelsChanged labels, CancellationToken ct)
-    {
-        logger.LogInformation("labels changed on {item}: [{labels}] (auto-triggers not wired yet)",
-            labels.StreamKey, string.Join(", ", labels.Labels));
-        return Task.CompletedTask;
-    }
 }
