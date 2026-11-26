@@ -212,6 +212,48 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Pr_published_records_the_real_pr_number_on_the_workflow()
+    {
+        var workflow = await RunCommandAsync(Command());
+
+        await _orchestrator.HandlePrPublishedAsync(
+            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
+
+        workflow = await WorkflowAsync(workflow.Id);
+        Assert.Equal(28, workflow.HeadPrNumber);
+    }
+
+    [Fact]
+    public async Task Review_run_targets_the_recorded_head_pr_number()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandlePrPublishedAsync(
+            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
+
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
+
+        var reviewRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
+        Assert.Equal(TaskTypes.Review, (await TaskAsync(reviewRun.TaskId)).Type);
+        Assert.Equal(28, reviewRun.Input.PrNumber);
+
+        // the head branch travels with the review for the publisher's 404 fallback (1.2.2)
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(2, reviewRun.TaskId, "o", "r", 1), CancellationToken.None);
+        Assert.Contains((await AppendedAsync()).OfType<PublishReview>(),
+            r => r.PrNumber == 28 && r.HeadBranch == "agent/1-fix");
+    }
+
+    [Fact]
+    public async Task Review_run_falls_back_to_the_item_number_when_no_pr_is_recorded()
+    {
+        await RunCommandAsync(Command("/review"));
+
+        var scheduled = Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
+        Assert.Equal(1, scheduled.Input.PrNumber); // ItemNumber: nothing published yet
+    }
+
+    [Fact]
     public async Task Clarification_escalation_parks_the_task_and_stops_the_run()
     {
         var workflow = await RunCommandAsync(PlanCommand());

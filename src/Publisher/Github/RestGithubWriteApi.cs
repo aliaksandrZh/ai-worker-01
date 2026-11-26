@@ -23,6 +23,15 @@ public sealed class RestGithubWriteApi(HttpClient httpClient, string pat) : IGit
         return (long)json!["id"]!;
     }
 
+    /// <summary>
+    /// Create-or-get: a second round pushes the same workflow.AgentBranch (docs/coder APPEND_SYSTEM,
+    /// "a push to the same branch updates the same PR"), so GitHub answers 422 "a pull request
+    /// already exists for this head and base". That is not a failure of intent — resolve the open
+    /// PR by head and return it. A plain invalid-head 422 (branch truly absent) still fails
+    /// permanently. Submission race: two creates for one head resolve to the same PR either way.
+    /// Returns the PR's <c>number</c> (the repository-wide number reviews post against),
+    /// not the object id.
+    /// </summary>
     public async Task<long> CreateOrUpdatePrAsync(PublishPr evt, CancellationToken ct)
     {
         if (evt.Kind is PublishPrKind.Update && evt.PrNumber is { } pr)
@@ -36,22 +45,9 @@ public sealed class RestGithubWriteApi(HttpClient httpClient, string pat) : IGit
             return pr;
         }
 
-        var created = await CreatePrOrGetExistingAsync(evt, ct);
-        return (long)created!["number"]!;
-    }
-
-    /// <summary>
-    /// Create-or-get: a second round pushes the same workflow.AgentBranch (docs/coder APPEND_SYSTEM,
-    /// "a push to the same branch updates the same PR"), so GitHub answers 422 "a pull request
-    /// already exists for this head and base". That is not a failure of intent — resolve the open
-    /// PR by head and return it. A plain invalid-head 422 (branch truly absent) still fails
-    /// permanently. Submission race: two creates for one head resolve to the same PR either way.
-    /// </summary>
-    private async Task<JsonNode> CreatePrOrGetExistingAsync(PublishPr evt, CancellationToken ct)
-    {
         try
         {
-            return await SendAsync(HttpMethod.Post, $"repos/{evt.Owner}/{evt.Repo}/pulls",
+            var created = await SendAsync(HttpMethod.Post, $"repos/{evt.Owner}/{evt.Repo}/pulls",
                 new JsonObject
                 {
                     ["title"] = evt.Title,
@@ -59,28 +55,57 @@ public sealed class RestGithubWriteApi(HttpClient httpClient, string pat) : IGit
                     ["head"] = evt.HeadBranch,
                     ["base"] = evt.BaseBranch,
                 }, ct);
+            return (long)created!["number"]!;
         }
         catch (GithubPermanentException ex) when (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
         {
-            var existing = await SendAsync(HttpMethod.Get,
-                $"repos/{evt.Owner}/{evt.Repo}/pulls?head={evt.Owner}:{evt.HeadBranch}&state=open", null, ct);
-            if (existing is JsonArray list && list.Count > 0 && list[0] is { } openPr)
-                return openPr;
-            throw new GithubPermanentException(
-                $"github {evt.Owner}/{evt.Repo}: 422 already-exists but no open PR found for head {evt.HeadBranch}");
+            return await FindOpenPrByHeadAsync(evt.Owner, evt.Repo, evt.HeadBranch, ct)
+                ?? throw new GithubPermanentException(
+                    $"github {evt.Owner}/{evt.Repo}: 422 already-exists but no open PR found for head {evt.HeadBranch}");
         }
     }
 
+    /// <summary>
+    /// The review can be scheduled before PrPublished lands (docs/incident-2026-11-26-follow-ups.md
+    /// decision 1.2.2), so its PrNumber may be the item number. When the POST 404s and the
+    /// event carries the PR head branch, resolve the open PR by head and retry once against
+    /// the found number; with no PR found the permanent failure stands. A second 404 (the
+    /// resolved PR also missing) propagates — never swallowed.
+    /// </summary>
     public async Task<long> SubmitReviewAsync(PublishReview evt, CancellationToken ct)
     {
+        try
+        {
+            return await SubmitReviewOnceAsync(evt.PrNumber, evt, ct);
+        }
+        catch (GithubPermanentException ex)
+            when (evt.HeadBranch is { } head && ex.Message.Contains("[404]", StringComparison.Ordinal))
+        {
+            if (await FindOpenPrByHeadAsync(evt.Owner, evt.Repo, head, ct) is not { } resolved)
+                throw; // no open PR for the head — the permanent failure stands
+            return await SubmitReviewOnceAsync(resolved, evt, ct);
+        }
+    }
+
+    private async Task<long> SubmitReviewOnceAsync(long prNumber, PublishReview evt, CancellationToken ct)
+    {
         var json = await SendAsync(HttpMethod.Post,
-            $"repos/{evt.Owner}/{evt.Repo}/pulls/{evt.PrNumber}/reviews",
+            $"repos/{evt.Owner}/{evt.Repo}/pulls/{prNumber}/reviews",
             new JsonObject
             {
                 ["event"] = evt.Verdict,
                 ["body"] = evt.Body,
             }, ct);
         return (long)json!["id"]!;
+    }
+
+    private async Task<long?> FindOpenPrByHeadAsync(string owner, string repo, string headBranch, CancellationToken ct)
+    {
+        var existing = await SendAsync(HttpMethod.Get,
+            $"repos/{owner}/{repo}/pulls?head={owner}:{headBranch}&state=open", null, ct);
+        return existing is JsonArray list && list.Count > 0 && list[0] is { } openPr
+            ? (long)openPr!["number"]!
+            : null;
     }
 
     public async Task MoveBoardItemAsync(PublishBoardMove evt, CancellationToken ct)

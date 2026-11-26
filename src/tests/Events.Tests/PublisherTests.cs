@@ -68,7 +68,7 @@ public sealed class PublisherTests : IAsyncLifetime
         _fx = fx;
         _markers = new PostgresPublishMarkerStore(fx.DataSource, NullLogger<PostgresPublishMarkerStore>.Instance);
         _publisher = new PublisherConsumer(
-            _markers, _github, NullLogger<PublisherConsumer>.Instance);
+            _markers, _github, _fx.Log, NullLogger<PublisherConsumer>.Instance);
     }
 
     public async Task InitializeAsync()
@@ -145,5 +145,32 @@ public sealed class PublisherTests : IAsyncLifetime
 
         Assert.Empty(_github.BoardMoves);
         Assert.Empty(await MarkerKeysAsync());
+    }
+
+    [Fact]
+    public async Task Pr_publish_announces_the_real_pr_number()
+    {
+        // Case B: the review runs need the number GitHub assigned, not the item number
+        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
+            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
+            Title: "t", Body: "b", PrNumber: null);
+
+        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+
+        Assert.Contains(await _fx.AppendedAsync(),
+            e => e is PrPublished { Owner: "o", Repo: "r", ItemNumber: 27, PrNumber: 42 });
+    }
+
+    [Fact]
+    public async Task Pr_publish_redelivery_does_not_re_announce_the_pr_number()
+    {
+        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
+            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
+            Title: "t", Body: "b", PrNumber: null);
+        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+
+        await _publisher.HandleAsync(pr, 2, CancellationToken.None); // redelivery
+
+        Assert.Single((await _fx.AppendedAsync()).OfType<PrPublished>());
     }
 }

@@ -206,7 +206,7 @@ public sealed class Orchestrator(
                 // the same pointers SetWorkflowPointersAsync recorded above); the base comes
                 // from the same config the run input's DefaultBranch came from
                 await log.AppendAsync(new PublishPr(
-                    PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id,
+                    PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id, workflow.ItemNumber,
                     IdempotencyKey: $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
                     HeadBranch: evt.Branch, BaseBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
                     Title: $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
@@ -220,7 +220,7 @@ public sealed class Orchestrator(
                 await log.AppendAsync(new PublishReview(
                     workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
                     Verdict: "APPROVE", Body: "Review passed", evt.RunId,
-                    IdempotencyKey: $"review:{evt.RunId}"), uow.Events, ct);
+                    IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
                 await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
                 await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
                 break;
@@ -314,7 +314,7 @@ public sealed class Orchestrator(
             await log.AppendAsync(new PublishReview(
                 evt.Owner, evt.Repo, evt.PrNumber, Verdict: "REQUEST_CHANGES",
                 Body: string.Join("\n\n", evt.Comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
-                evt.RunId, IdempotencyKey: $"review:{evt.RunId}"), uow.Events, ct);
+                evt.RunId, IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
             await StartFixingRoundAsync(workflow, null, uow, ct);
         }
 
@@ -414,6 +414,21 @@ public sealed class Orchestrator(
     }
 
     /// <summary>
+    /// The Publisher's PR create/update succeeded — record the real PR number the review
+    /// runs post to (docs/incident-2026-11-26-review-item27.md, Case B). No workflow
+    /// (PR published for an unknown item) — nothing to pin.
+    /// </summary>
+    public async Task HandlePrPublishedAsync(PrPublished evt, CancellationToken ct)
+    {
+        await using var uow = await state.Factory.BeginAsync(ct);
+        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
+        if (workflow is not null)
+            await state.SetWorkflowHeadPrNumberAsync(workflow.Id, evt.PrNumber, uow, ct);
+
+        await uow.Events.CommitAsync(ct);
+    }
+
+    /// <summary>
     /// New commits on the PR pin the revision the next review round reviews
     /// (docs/flows events.md pr_updated): the head sha becomes the Workflow's review pin.
     /// </summary>
@@ -461,7 +476,9 @@ public sealed class Orchestrator(
     {
         var task = await state.GetTaskAsync(taskId, uow, ct);
         var input = new RunInput(workflow.Owner, workflow.Repo, workflow.ItemNumber,
-            PrNumber: task.Type is TaskTypes.Review ? workflow.ItemNumber : null,
+            // the real PR number captured via PrPublished; ItemNumber stays only as the
+            // last-resort fallback (docs/incident-2026-11-26-review-item27.md, Case B)
+            PrNumber: task.Type is TaskTypes.Review ? workflow.HeadPrNumber ?? workflow.ItemNumber : null,
             Command: commandText ?? task.Type, PlanCommentId: 0,
             Profile: CommandRegistry.ProfileFor(task.Type),
             AgentBranch: task.Type is TaskTypes.Implement ? agentBranch : null,

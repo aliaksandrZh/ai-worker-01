@@ -45,6 +45,13 @@ public interface IOrchestrationState
     /// </summary>
     Task SetWorkflowPointersAsync(long workflowId, string? agentBranch, string? headSha, IOrchestrationUnitOfWork uow, CancellationToken ct);
 
+    /// <summary>
+    /// Records the real PR number the Publisher captured on a successful PR
+    /// create/update (PrPublished) — review runs post to it, not to the item number
+    /// (docs/incident-2026-11-26-review-item27.md, Case B).
+    /// </summary>
+    Task SetWorkflowHeadPrNumberAsync(long workflowId, long prNumber, IOrchestrationUnitOfWork uow, CancellationToken ct);
+
     Task IncrementReviewRoundsAsync(long workflowId, IOrchestrationUnitOfWork uow, CancellationToken ct);
 
     Task<long> CreateTaskAsync(long workflowId, string type, IOrchestrationUnitOfWork uow, CancellationToken ct);

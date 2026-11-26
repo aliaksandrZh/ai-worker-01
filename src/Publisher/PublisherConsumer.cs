@@ -13,6 +13,7 @@ namespace PiAgent.Publisher;
 public sealed class PublisherConsumer(
     IPublishMarkerStore markers,
     IGithubWriteApi github,
+    IEventLog log,
     ILogger<PublisherConsumer> logger) : IEventConsumer
 {
     public Type[] Consumes { get; } =
@@ -33,7 +34,17 @@ public sealed class PublisherConsumer(
 
             case PublishPr pr:
                 await PublishOnceAsync(pr, pr.IdempotencyKey,
-                    () => github.CreateOrUpdatePrAsync(pr, ct), ct);
+                    async () =>
+                    {
+                        var prNumber = await github.CreateOrUpdatePrAsync(pr, ct);
+                        // the PR's real number is a fact of the workflow: announce it before
+                        // the marker is written — a crash before the marker replays the
+                        // (idempotent) publish and the announcement; a crash after the
+                        // marker would drop PrPublished forever (docs/eventlog.md invariant 2)
+                        await log.AppendAsync(
+                            new PrPublished(pr.Owner, pr.Repo, pr.ItemNumber, prNumber), ct);
+                        return prNumber;
+                    }, ct);
                 break;
 
             case PublishReview review:
