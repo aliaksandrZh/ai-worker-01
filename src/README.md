@@ -1,142 +1,131 @@
 # pi-agent control plane
 
-The real implementation of the pi-agent architecture.
-The PoC lives in `../poc/` (`api/`, `github-polling/`, `pi/`, `komodo/`) as frozen reference
-material; everything in this directory is the new system. Repo overview + main flow: root `../README.md`.
+The real implementation of the event-driven design (ADR-0002..0007): one app host runs
+the whole control plane as EventLog consumers. Repo overview + main flow: root `../README.md`;
+component contracts: `../docs/{orchestrator,eventlog,run-worker,publisher,github-sync}.md`;
+flows: `../docs/flows/`. The PoC lives in `../poc/` as frozen reference material.
 
 ## Stack (finalized)
 
-> **Amendment (2026-11-20).** The architecture is no longer stack-neutral:
-> **.NET 10** (ASP.NET Core minimal APIs) · **EF Core 10 + Npgsql** (DB access) ·
-> **EF Core Migrations** (versioned schema) · **xUnit** (tests).
-> Two deployment notes travel with it: the stack is single-host, so services speak plain HTTP on the
-> private compose network (TLS-across-hosts applies when hosts split); CI runs on
-> GitHub Actions for every pull request (`.github/workflows/ci.yml`): restore, build, and
-> `dotnet test` on the full solution — the same suites you run locally with `dotnet test`
-> (Hosts.Tests spins a Testcontainers postgres; runners have Docker preinstalled).
+**.NET 10** (ASP.NET Core minimal APIs) · **PostgreSQL** via Npgsql with the modules'
+idempotent **bootstrap DDL** — no EF, no Migrator, the schema has no migration history
+(ADR-0004 amendment) · **xUnit** (some suites spin a Testcontainers postgres — Docker
+required for `dotnet test`) · single-host deployment: services speak on the private
+compose network; CI (`.github/workflows/ci.yml`) runs the .NET suites and the bridge
+node test suite on every pull request.
 
 ## Layout
 
 | path | what |
 |---|---|
-| `Platform/` | cross-service plumbing: JSON logging + correlation, `/healthz` `/readyz` `/metrics`, worker heartbeat loop, service-token auth, Docker-socket readiness |
-| `Infrastructure/` | EF Core AppDbContext, `Persistence/Migrations/`, `AddPiData` (postgres readiness) |
-| `Hosts/` | one executable per service: `RuntimeApi`, `Orchestrator`, `Poller`, `OutboxWorker`, `HostMonitor`, `BuildWorker` |
-| `Migrator/` | one-shot EF migration host (`migrations` step) |
-| `tests/` | `Platform.Tests`, `Infrastructure.Tests`, `Hosts.Tests`, `Architecture.Tests` (Hosts.Tests spins a Testcontainers postgres — Docker required for `dotnet test`) |
-| `Dockerfile` | one multi-stage build for all hosts + Migrator (`--build-arg SERVICE=…`) — the only build artifact left in `src/` |
+| `Platform/` | cross-module plumbing: JSON logging + correlation, `/healthz` `/readyz` `/metrics`, worker heartbeat loop, Docker-socket readiness |
+| `Events/` | the EventLog module: typed event vocabulary (`Events/`), `IEventLog` + Postgres adapter (SKIP LOCKED claim, per-stream order, visibility timeout, dead-letter + replay), in-memory adapter, consumer runner (`Delivery/`) |
+| `Orchestration/` | the Orchestrator — a pure event reactor: Workflow → Task → Run state machines, admission, policies (plan approval, review rounds, run retries); Postgres + in-memory state adapters |
+| `GithubSync/` | the Poller — cursor-diff GitHub polling; trigger detection at the edge (commands, labels, board columns; author permission travels in the payload); emits sync events + `user_command` |
+| `Publisher/` | the only GitHub write path: a consumer of `publish_*` events, key-once idempotent; rate-limit handling lives here, nowhere else |
+| `RunWorker/` | container provisioning + supervision: claims `run_scheduled`, writes the run tree (input.json pointers, secret binds), per-run tokens, the `POST /events` egress endpoint, the watchdog |
+| `Hosts/AppHost/` | the single executable wiring all consumers behind worker gates (`Workers:*:Enabled`) |
+| `tests/` | `Architecture.Tests` (module boundaries), `Events.Tests`, `RunWorker.Tests`, `Platform.Tests` |
+| `Dockerfile` | one multi-stage build for the app host (`--build-arg SERVICE=AppHost`) |
 
 Outside `src/` (repo root):
 
 | path | what |
 |---|---|
-|  `deploy/config/` | configuration-plane yamls: `system.yaml` (bot login + operational knobs), `repositories.yaml`, `routing.yaml` — mounted read-only at the config root |
-| `agents/` | all agent assets: profile definitions (`agents/<name>/profile.yaml` + Dockerfile + entry…) and the shared runtime implementation `agents/_runtime/bridge/` — the Runtime Bridge modules every profile bakes. Merged into each profile's pinned build snapshot under `runtime-bridge/` by `ConfigSnapshotBuilder` (fail-closed on per-profile copies / version drift vs `bridge.json`); mounted read-only INSIDE the orchestrator's config root (`/etc/pi-agent/config/agents/`) so the pinned tree shape holds |
-| `deploy/` | `compose.yaml` (the control-plane stack, private network `pi-agent-net`), `.env.example`, centralized logging config (`logging/`: loki/alloy/grafana) |
+| `deploy/config/` | configuration-plane yamls: `system.yaml`, `repositories.yaml`, `routing.yaml`, `projects.yaml` — mounted read-only at the config root |
+| `agents/` | the agents: per-agent `agent.json` (name, clone_mode, tools, prompt) + baked prompt; `agents/_runtime/` is the shared runtime — the Runtime Bridge modules, the communication-channel server, the ONE entry, the base Dockerfile |
+| `deploy/` | `compose.yaml` (postgres + app-host + the observability stack, private network `pi-agent-net`), `.env.example`, logging config (`logging/`) |
+| `secrets/` | host-managed secret files (gitignored), mounted read-only into app-host and bound into agent containers at provisioning |
+
 ## Quick start
 
 ```sh
-task stack                # postgres → migrator → the rest; --wait gates a green, ordered start
-                          # after any src/ change: task stack-rebuild first (rebuilds images), then task stack
-curl localhost:8080/healthz && curl localhost:8080/readyz && curl localhost:8080/metrics
+task stack                # postgres → app-host (bootstrap DDL at startup) + logging stack; --wait gates a green start
+                          # after any src/ change: task stack-rebuild first, then task stack
+docker compose --env-file deploy/.env -f deploy/compose.yaml exec app-host curl -sf localhost:8080/healthz
 task stack-logs           # each service logs JSON lines
 open http://localhost:3000 # the same logs in one place: "Pi Agent Logs" dashboard (admin / GRAFANA_ADMIN_PASSWORD)
 task stack-down
 ```
 
-`task stack` copies `deploy/.env.example` → `deploy/.env` on first run; the runtime-api provisions agent
-containers itself over the Docker socket (Komodo was dropped), so no external container orchestrator is involved.
+`task stack` copies `deploy/.env.example` → `deploy/.env` on first run. The app host
+provisions agent containers itself over the Docker socket (`RunWorker`), so no external
+orchestrator is involved; no host port is published for it (reach it through the compose
+network — closes OBS-1).
+
+Host-run debugging (Rider): `task dev-db` (postgres on 127.0.0.1:5432) + the AppHost run
+configuration with `dev/env/shared.env` attached.
 
 ## Configuration plane
 
-YAML in `deploy/config/` is the desired configuration; PostgreSQL holds the runtime state. The
-Config Loader — a startup component of the Orchestrator — validates everything and syncs the
-DB in one transaction at each startup; no hot reload, no admin API.
+YAML in `deploy/config/` is the desired configuration; PostgreSQL holds the runtime state
+(the EventLog + orchestration state + cursors + dead-letter + Publisher markers — nothing
+else; there is no GitHub mirror, agents read GitHub themselves per ADR-0006).
 
-- `system.yaml` — `github.bot_login` + every operational knob (unit strings: `60s`, `50MiB`).
-- `repositories.yaml` — registered repositories; allowlist semantics (absent =
-  enabled + seeded with the owner; explicit `[]` = filtering disabled), permitted commands/types,
-  authorization policy.
-- `routing.yaml` — global routing rules (`repository_id = NULL`) with per-repo overrides; the
-  referenced version is pinned on the Task at creation.
-- `agents/<name>/profile.yaml` — profile definition; each configuration change creates a
-  new immutable `AgentProfileVersion` (`draft`): normalized YAML + per-file sha256 + file contents
-  + optional `PI_AGENT_SOURCE_COMMIT` traceability metadata.
+- `system.yaml` — `github.bot_login` + operational knobs.
+- `repositories.yaml` — registered repositories (allowlist semantics) + the default-branch
+  map the Orchestrator reads for `RunInput.DefaultBranch`.
+- `routing.yaml` — routing rules; the referenced version is pinned on the Task at creation.
+- `projects.yaml` — Projects v2 boards: column/label triggers (`auto_plan`/`auto_code`/
+  `auto_review`/`auto_fix`) and the review-loop cap.
+- `agents/<name>/agent.json` — the agent's full tool catalog + clone_mode + prompt path;
+  the single source for the generated `mcp.json` (built into the image).
 
-Before `task stack`: create the two secrets files and align identities
+Before `task stack`: create the secret files and align identities
 
 ```sh
 mkdir -p secrets && printf '<your-pat>' > secrets/github-sync-pat.txt   # gitignored
 #   → the PAT's login (GET /user) must equal github.bot_login in deploy/config/system.yaml
-printf '<your-write-pat>' > secrets/github-write-pat.txt                    # outbox comments; agent GitHub MCP (planner publication) + workspace clone
+printf '<your-write-pat>' > secrets/github-write-pat.txt               # the Publisher's single write path
 ```
 
-Startup failure modes (deliberate): missing/empty PAT file, PAT login mismatch, unknown
-repository (404), schema-invalid YAML or a constraint violation all abort Orchestrator
-startup with a diagnosable log line; the compose `--wait` gate shows it red.
+Agent profiles name their own secrets in `profile.yaml` (`secrets:`) — the Orchestrator
+freezes the names into the Run at scheduling and the Run Worker binds the host files
+read-only at `/run/secrets/<name>`: read-only PAT for planner/reviewer, the write PAT for
+the coder (git push only, ADR-0001 carve-out). Missing secret file → fail-closed
+(`run_failed`, cause `secret_missing`).
 
 ## Ports and exposure
 
 | exposure | port | why |
 |---|---|---|
-| `runtime-api` | published (`RUNTIME_API_HOST_PORT`, default 8080) | control-plane port on the host — health/readiness/metrics |
-| orchestrator | private network only (host access via `docker compose exec orchestrator curl …`) | hosts the Orchestration API + internal commands hook |
-| postgres, all workers, migrator | private network only | no external exposure |
+| postgres | `127.0.0.1:5432` (dev only) | local pgAdmin/debugging |
+| loki | `127.0.0.1:3100` | log lake |
+| grafana | `127.0.0.1:3000` | the provisioned log dashboard |
+| app-host, agent containers | private network only | no external exposure; health via `docker compose exec` |
 
-Host Monitor and Build Worker never touch PostgreSQL (day-one enforcement:
-`tests/Architecture.Tests/ProjectBoundaryTests.cs`); their dependency is the Docker socket
-(read-only) and, for the Host Monitor, the managed storage root (`STORAGE_ROOT`, mounted at
-`/var/lib/pi-agent/workflows` — plain host directories).
+## Metrics baseline
 
-## Metrics baseline (on every service's `/metrics`)
+`/metrics` on the app host is a JSON baseline (`Platform/Http/PlatformEndpointExtensions.cs`):
+liveness/readiness of the shared dependencies plus per-worker heartbeat state — a starting
+point, not a metrics system; Grafana/Loki carry the observability load for now.
 
-Workers additionally expose `running`, `heartbeatUtc`, `lastSuccessfulCycleUtc`.
-Live now: `outboxPending/outboxFailed/
-outboxDeadLetter` (outbox-worker), `dbSizeBytes` (runtime-api), `storageFreeBytes`
-(host-monitor), the poller set `pollerLagSeconds/pollerLastSuccessUtc/
-pollerLastCycleDurationSeconds/pollerErrorsTotal/pollerRateLimitRemaining`, worker
-heartbeats, and the build set — orchestrator: `buildJobsPending/buildJobsPolling/
-oldestPendingBuildAgeSeconds/buildsDispatchedTotal/buildsCompletedTotal/buildsFailedTotal/
-buildTransientErrorsTotal`; build-worker: `buildsActive/buildsSucceededTotal/buildsFailedTotal/
-buildExecutionRetriesTotal`.
+## Agent images
 
-## Profile image builds
+```sh
+task build-agents          # agent-runtime-base:latest, then agent-<profile>:latest (idempotent, no version tags)
+```
 
-Every `AgentProfileVersion` is built asynchronously by the Build Worker: version `draft` →
-durable `build_job` row (buildId persisted BEFORE dispatch) → `POST /internal/builds` → `202` →
-the worker materializes the pinned build context from the version's `config_snapshot`
-(hash-verified per file — a build never reads the live Git tree) and runs a local docker build
-(`agent-<profile>:v<n>`, no registry) → `GET /internal/builds/{buildId}` polling → validated
-result → version `ready` (or `build_failed` on a real build failure). The worker keeps durable
-local JSON state under `BUILD_STATE_ROOT` (default `../runtime/builds`): results stay retrievable after
-worker restarts, unfinished builds finalize from an existing image tag or rebuild idempotently
-with the same `buildId`. The worker has no database (boundary-guarded) and accepts only the
-Orchestrator's service credential. The shared runtime is assembled once as `agent-runtime-base`
-from `agents/_runtime/` (pinned Pi + bridge + communication channel + the ONE shared entry);
-each profile is a slim layer over it (see `agents/planner/Dockerfile`) — the agent delta is
-data: `agent.json` (name, clone_mode, tools, prompt path) + the baked APPEND_SYSTEM.md, with
-`mcp.json` generated at build from the manifest (ticket-04 generator).
+The shared runtime is assembled once as `agent-runtime-base` from `agents/_runtime/`
+(pinned pi + bridge + the communication-channel bundle built at image build + the ONE
+entry; OCI labels `pi.version` / `bridge.contract` stamped from `bridge.json` — a
+disagreement fails the build). Each profile is a slim layer over it: `agent.json` + the
+baked prompt (+ the .NET SDK for the coder); `mcp.json` is generated from the manifest at
+build. The stub agent (also on the base) drives the failure/human levers
+(`RUN_WORKER_STUB_BEHAVIOR`: `succeed | no_completion | escalate | bad_payload | …`).
 
-## Context assembling
+## A Run end-to-end
 
-The claim worker runs the Context Assembler (`Hosts/Orchestrator/Context/`) BEFORE preparing the
-Run: package = task-type instructions + pinned profile identity, the user command (its full
-`source_body_snapshot` incl. trailing text), the work item, every conversation
-comment chronologically (tombstones recorded as exclusions), `relatedWorkItems` from
-WorkItemLink rows, prior Workflow artifacts (the `task_artifact_input` approved plan is mandatory
-and never pruned; `log_reference` artifacts travel by reference), repository data, coder
-agent-branch facts, and — for reviews — the pinned head/base SHAs plus submitted reviews and
-grouped inline threads. Owner simplification: the assembler collects everything and applies only
-budget-driven pruning, newest-first kept, with every exclusion recorded in the snapshot. Limits:
-`ContextTokenEstimator` (bytes/4) against the profile's `max_context_tokens`, plus 256 KiB
-per artifact / 512 KiB artifacts / 512 KiB serialized input. Mandatory context that cannot fit →
-Task fails `context_too_large` with NO Run rows (metric `claimContextTooLargeTotal`); the frozen
-snapshot is byte-exact (`content` moved jsonb → text), hashed, immutable, and served to
-the Bridge via `GET /internal/runtime/runs/{runId}/input`.
-
-## Backups
-
-`backups` service: hourly `pg_dump → /backups/<ts>.sql.gz` (keep 24) —
-`BACKUP_INTERVAL_MINUTES` tunes it. `config-snapshot`: clones `CONFIG_SNAPSHOT_REPO_URL`
-daily into `/backups/config-<ts>.tar.gz`; unset URL = it logs-and-skips. DB size lives on
-runtime-api `/metrics` (`dbSizeBytes`).
+`run_scheduled` (Orchestrator, all pointers filled from Workflow/Task state) → the worker
+writes the run tree (`input.json` — pointers only) and binds the profile's secrets →
+container `pi-session-<id>` (image `agent-<profile>:latest`) → the shared entry clones by
+`clone_mode` (`plain` / `branch-continue` / `pinned-review` — the review base is derived
+locally via merge-base) → the Runtime Bridge launches pi in `--mode rpc` with the pointers
+prompt → every communication tool call the bridge observes becomes one deterministic
+`tool` callback (`POST /events`, per-run token) → the worker translates it into the typed
+event on the root item's stream (dedup by `eventId`; the full payload is the JSONB audit)
+→ the Orchestrator reacts (publication via the Publisher, next stage, `waiting_for_human`,
+policies) → `report_completion` observed → terminal `completed` (summary + git facts +
+session path) → `RunCompleted` (carries Branch/CommitSha). A Run without the observed
+completion call settles `run_failed` (`outcome_missing`) — the Orchestrator's retry
+policy takes over.
