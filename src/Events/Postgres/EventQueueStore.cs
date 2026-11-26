@@ -7,11 +7,11 @@ using PiAgent.Events.Delivery;
 namespace PiAgent.Events.Postgres;
 
 /// <summary>
-/// The Postgres event log: one store implementing the producer side (IEventLog) and the
-/// delivery side (IEventQueue). Idempotent DDL at startup — the formal baseline migration
-/// lands with the stage-3 schema reset (docs/adr/0004).
+/// The Postgres event log: one store implementing the producer side (IEventLog), the
+/// delivery side (IEventQueue) and the read side (IEventReader). Idempotent DDL at
+/// startup — the formal baseline migration lands with the stage-3 schema reset (docs/adr/0004).
 /// </summary>
-public sealed class EventQueueStore : IEventLog, IEventQueue
+public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly ILogger<EventQueueStore> _logger;
@@ -259,6 +259,36 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
 
         if (parked is not null)
             _logger.LogError("event {id} poisoned straight to dead-letter: {error}", id, error);
+    }
+
+    // ---- read side ------------------------------------------------------------
+
+    /// <summary>
+    /// Already-recorded events of one type filtered by the payload's runId, oldest first.
+    /// Small volumes (one run's tool events), so the sequential scan needs no index yet.
+    /// </summary>
+    public async Task<IReadOnlyList<T>> ReadByRunIdAsync<T>(long runId, CancellationToken ct) where T : IEvent
+    {
+        const string sql = """
+            SELECT type, payload FROM events
+            WHERE type = @type AND payload->>'runId' = @runId
+            ORDER BY id
+            """;
+        await using var conn = await _dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("type", EventRegistry.TypeName(typeof(T)));
+        // payload->>'runId' is text — compare against the id's text form
+        cmd.Parameters.AddWithValue("runId", runId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var events = new List<T>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (EventRegistry.Deserialize(reader.GetString(0), reader.GetString(1)) is T typed)
+                events.Add(typed);
+        }
+
+        return events;
     }
 
     public async Task<IReadOnlyList<DeadLetterEntry>> ListDeadLettersAsync(int limit, CancellationToken ct)

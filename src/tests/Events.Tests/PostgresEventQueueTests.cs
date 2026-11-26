@@ -49,6 +49,25 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Read_by_run_id_returns_only_that_runs_events_oldest_first()
+    {
+        // the read side (IEventReader, Block 3.3b): the aggregation source for one reviewer run
+        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
+            Comments: [new ReviewFinding("a.cs", 1, "major", "first")]), CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 8,
+            Comments: [new ReviewFinding("z.cs", 9, "minor", "other run")]), CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
+            Comments: [new ReviewFinding("b.cs", 2, "minor", "second")]), CancellationToken.None);
+        await _store.AppendAsync(new BugReported("o", "r", 1, TaskId: 1, "s", [], "t"), CancellationToken.None);
+
+        var read = await _store.ReadByRunIdAsync<ReviewCommentsSubmitted>(7, CancellationToken.None);
+
+        Assert.Equal(2, read.Count); // only run 7's events, other runs and types excluded
+        Assert.Equal("first", read[0].Comments[0].Message);
+        Assert.Equal("second", read[1].Comments[0].Message); // appended order preserved
+    }
+
+    [Fact]
     public async Task Failed_event_redelivers_then_dead_letters_after_max_attempts()
     {
         var id = await _store.AppendAsync(

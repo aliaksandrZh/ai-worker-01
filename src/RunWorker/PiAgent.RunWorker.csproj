@@ -6,6 +6,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- DockerProvisioningClient's raw-HttpClient ctor is an internal seam: the tests drive it
+         with a fake handler instead of the unix socket -->
+    <InternalsVisibleTo Include="PiAgent.RunWorker.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 

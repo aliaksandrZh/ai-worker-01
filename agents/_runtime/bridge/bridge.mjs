@@ -5,7 +5,7 @@
  * the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
  * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
  * callback to the durable per-Run spool BEFORE sending, turns each observed completed, error-free
- * communication tool call into a `tool` route callback (the 11-name vocabulary, deterministic
+ * communication tool call into a `tool` route callback (the manifest-listed tools, deterministic
  * eventId — docs/run-worker.md 'Communication tool callbacks'), retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
  * enforces the ONE completion mandate after every `agent_settled` (the hardcoded `report_completion`
@@ -13,7 +13,10 @@
  * same RPC session at most PI_COMPLETION_NUDGES times — a denied call fails immediately, exhausted
  * nudges or an agent exit fail the run with `outcome_missing`) and delivers the terminal `completed`
  * (or `failed`) callback — the delivery cycle ends only on the Runtime API's persistence
- * acknowledgement. Before
+ * acknowledgement. On route `events` it forwards ONLY the RunEvent types listed in the profile
+ * manifest's `forward_progress_events` (agents/<profile>/agent.json): an empty or missing/invalid list
+ * forwards nothing — the mapper and the in-bridge derived state keep running unfiltered, and the
+ * routes `tool`/`completed`/`failed`/`cancelled` are outside the filter and always pass. Before
  * the task prompt it probes pi's `/mcp` status (the FULL failure reason incl. the server's stderr
  * — `mcp_unavailable` on a failed server, before any work). It also captures Pi stdout/stderr plus
  * its own diagnostics into the per-Run log trio.
@@ -71,20 +74,8 @@ const logsDir = env.PI_LOGS_DIR || "/logs";
 const spoolDir = env.PI_SPOOL_DIR || "/spool";
 const terminalMarker = join(spoolDir, ".terminal-delivered");
 
-// The communication vocabulary (docs/flows/tools.md; docs/run-worker.md 'Communication tool
-// callbacks'): the eleven flow-driving tool names, HARDCODED — the flows contract is one for every
-// profile; a change to the set or a signature is a bridge contract bump (bridge.json stamp). The
-// normalized name is the last `__` segment of the server-prefixed call name. report_completion is
-// IN the vocabulary but NEVER a `tool` callback: its observed call is the completion mandate's
-// settle signal, rendered as the terminal `completed` callback — the route-tool adapter (the
-// worker's tool→event map) deliberately never sees it (docs/run-worker.md, ticket-03 amendment).
-const TOOL_ROUTE_VOCABULARY = new Set([
-  "save_plan", "request_clarification", "report_blocker", "submit_review_comments",
-  "request_decision", "report_bug", "report_env_issue", "request_criteria_clarification",
-  "report_tests_passed", "report_completion", "submit_pr_description",
-]);
-
-/** One readable console line per mapped RunEvent (mirrors what the Runtime API persists). */
+/** One readable console line per mapped RunEvent (the mapper's stream — only the allow-listed
+ * route-`events` types actually reach the durable spool and the Runtime API). */
 function echoRunEvent(body) {
   const payload = body.payload ?? {};
   let detail = "";
@@ -115,6 +106,35 @@ const log = (line) => {
 };
 const logs = openLogs(logsDir, maxLogBytes, bootLine); // the trio keeps the boot line
 process.stdout.write(bootLine);                        // and the container stdout mirrors it
+
+// Two startup knobs, both from the profile manifest (agents/<profile>/agent.json, baked at
+// /opt/pi-agent/profile — the same file agent-entry reads clone_mode from):
+// - `forward_progress_events` — the route-`events` forward allow-list (the built-in lifecycle/
+//   progress RunEvents only). An empty list — or a missing field, a non-array, or an unreadable
+//   manifest — forwards NOTHING on route `events`; only listed types reach the durable spool and
+//   the Runtime API. A consumer-facing knob only: the EventMapper and the in-bridge derived state
+//   run unfiltered regardless. Routes `tool`/`completed`/`failed`/`cancelled` are separate paths
+//   and are always delivered.
+// - `tools` — the MCP tool set, and the single source of the route-`tool` wire: each observed
+//   completed, error-free call of a listed tool becomes exactly one `tool` route callback
+//   (docs/run-worker.md 'Communication tool callbacks'). Missing/invalid → empty: no route-`tool`
+//   callbacks. report_completion is terminal-only, never a `tool` callback.
+const { forwardEvents, manifestTools } = (() => {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(env.PI_CODING_AGENT_DIR || "/opt/pi-agent/profile", "agent.json"), "utf8"));
+    const stringSet = (value) =>
+      new Set(Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : []);
+    return {
+      forwardEvents: stringSet(manifest.forward_progress_events),
+      manifestTools: stringSet(manifest.tools),
+    };
+  } catch {
+    // a missing/invalid manifest forwards nothing on route `events` and produces no `tool` callbacks
+    return { forwardEvents: new Set(), manifestTools: new Set() };
+  }
+})();
+log(`route-events forward allow-list: ${[...forwardEvents].join(", ") || "none"}\n`);
 
 /** Idempotent container restart: terminal delivered in an earlier lifetime → nothing left to do. */
 if (existsSync(terminalMarker)) {
@@ -168,6 +188,13 @@ const backoffs = [1, 2, 4, 8, 16, 30];
 async function deliverNext() {
   const entry = await spool.next();
   if (!entry) return null;
+  // The allow-list also holds at the send boundary: an `events` entry spooled by an earlier
+  // lifetime (before the profile's forward_progress_events narrowed) is never sent — it simply leaves.
+  // Routes `tool`/`completed`/`failed`/`cancelled` are outside this filter and always pass.
+  if (entry.route === "events" && !forwardEvents.has(entry.body?.type)) {
+    spool.remove(entry);
+    return true;
+  }
   // terminal routes (incl. the `cancelled`): never dropped
   const unbounded = entry.route === "completed" || entry.route === "failed" || entry.route === "cancelled";
   for (let attempt = 0; ; attempt++) {
@@ -288,14 +315,15 @@ async function main() {
       if (typeof normalized === "string") completedToolNames.add(normalized);
     }
     // The communication wire (docs/run-worker.md 'Communication tool callbacks'): each observed
-    // completed, error-free vocabulary call becomes exactly ONE `tool` route callback, spooled like
-    // every delivery — the deterministic eventId makes a restart/redelivery repeat it verbatim
-    // (dedup happens at ingestion, never here). A failed (isError) or permission-denied call
-    // produces no entry; ordinary tools keep flowing as `events` tool_started/tool_completed.
+    // completed, error-free call of a manifest-listed tool becomes exactly ONE `tool` route
+    // callback, spooled like every delivery — the deterministic eventId makes a restart/redelivery
+    // repeat it verbatim (dedup happens at ingestion, never here). A failed (isError) or
+    // permission-denied call produces no entry; ordinary tools keep flowing as `events`
+    // tool_started/tool_completed.
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)
         && !mapper.deniedToolCallIds.has(payload.toolCallId)) {
       const normalized = normalizeToolName(payload.toolName ?? toolNameByCallId.get(payload.toolCallId));
-      if (TOOL_ROUTE_VOCABULARY.has(normalized) && normalized !== COMPLETION_TOOL) {
+      if (manifestTools.has(normalized) && normalized !== COMPLETION_TOOL) {
         const eventId = `${runId}-tool-${payload.toolCallId}`;
         spool.append({
           id: eventId,
@@ -311,6 +339,10 @@ async function main() {
     }
     if (type === "assistant_output" && typeof payload?.text === "string") lastAssistantText = payload.text;
     echoRunEvent(entry.body);
+    // The route-`events` forward allow-list boundary: an unlisted type never enters the durable
+    // spool. Everything above ran BEFORE this boundary — the completion-mandate sets,
+    // lastAssistantText and the `tool` route never depend on the filter.
+    if (!forwardEvents.has(type)) return;
     spool.append(entry);
   }, eventCadenceSeconds);
 

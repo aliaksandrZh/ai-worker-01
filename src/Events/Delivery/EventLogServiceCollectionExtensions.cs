@@ -27,6 +27,7 @@ public static class EventLogServiceCollectionExtensions
             return store;
         });
         services.AddSingleton<IEventQueue>(sp => sp.GetRequiredService<EventQueueStore>());
+        services.AddSingleton<IEventReader>(sp => sp.GetRequiredService<EventQueueStore>());
         return services;
     }
 

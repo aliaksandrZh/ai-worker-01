@@ -49,6 +49,9 @@ public interface IContainerProvisioner
     Task<bool> StopAsync(string container, CancellationToken cancellationToken);
     /// <summary>`docker rm` after the container has stopped; true on removed/already-gone.</summary>
     Task<bool> RemoveAsync(string container, CancellationToken cancellationToken);
+    /// <summary>`docker image inspect`: true when the image reference exists locally, false when
+    /// Docker answers 404 (no such image); throws on outage — the caller owns the failure path.</summary>
+    Task<bool> ImageExistsAsync(string image, CancellationToken cancellationToken);
 }
 
 public sealed class DockerProvisioningClient : IContainerProvisioner
@@ -111,6 +114,19 @@ public sealed class DockerProvisioningClient : IContainerProvisioner
         return document.RootElement.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String
             ? id.GetString()
             : null;
+    }
+
+    public async Task<bool> ImageExistsAsync(string image, CancellationToken cancellationToken)
+    {
+        // a valid image reference ([a-zA-Z0-9._:/-]) is path-safe: the tag's colon and the
+        // registry path's slashes travel verbatim, matching `docker image inspect {image}`
+        using var response = await _http.GetAsync($"http://localhost/images/{image}/json", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return false; // no such image — the caller's quiet early exit
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new DockerProvisioningException($"docker image inspect '{image}' answered {response.StatusCode:D}: {body}");
+        return true;
     }
 
     public async Task<bool> StartAndWaitRunningAsync(string container, TimeSpan timeout, CancellationToken cancellationToken)

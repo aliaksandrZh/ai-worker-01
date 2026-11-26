@@ -13,7 +13,8 @@ public sealed record WorkflowRow(
     bool PlanApproved,
     int ReviewRounds,
     string? AgentBranch,
-    string? HeadSha)
+    string? HeadSha,
+    long? HeadPrNumber)
 {
     public ItemRef Item => new(Owner, Repo, ItemNumber);
 }

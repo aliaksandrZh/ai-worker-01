@@ -32,7 +32,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         _state = new PostgresOrchestrationState(
             fx.DataSource, fx.Log, NullLogger<PostgresOrchestrationState>.Instance);
         _orchestrator = new Orchestrator(
-            _state, _log, Options.Create(new OrchestrationOptions
+            _state, _log, _log, Options.Create(new OrchestrationOptions
             {
                 PlanApprovalRequired = false,
                 ManualAcceptanceRequired = false,
@@ -120,7 +120,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     [Fact]
     public async Task Default_branch_comes_from_the_repositories_config()
     {
-        var orchestrator = new Orchestrator(_state, _log,
+        var orchestrator = new Orchestrator(_state, _log, _log,
             Options.Create(new OrchestrationOptions
             {
                 PlanApprovalRequired = false,
@@ -172,12 +172,44 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
 
-        await _orchestrator.HandleReviewCommentsSubmittedAsync(
-            new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2, Comments: []), CancellationToken.None);
+        await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
+            Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(2, 2, "o", "r", 1), CancellationToken.None);
 
         var fixRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
         Assert.Equal(TaskTypes.Implement, (await TaskAsync(fixRun.TaskId)).Type);
+        Assert.Equal("ai/task-1", fixRun.Input.AgentBranch); // the branch a fix round continues
+    }
+
+    [Fact]
+    public async Task A_reviewer_runs_comment_events_aggregate_into_one_review_and_one_fixing_round()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
+        var runsAfterReviewChained = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
+            Comments: [new ReviewFinding("a.cs", 10, "major", "first")]), CancellationToken.None);
+        await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
+            Comments: [new ReviewFinding("b.cs", 20, "minor", "second")]), CancellationToken.None);
+
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(2, 2, "o", "r", 1), CancellationToken.None);
+
+        // ONE verdict carrying both events' comments — no per-event publish, no APPROVE
+        var review = Assert.Single((await AppendedAsync()).OfType<PublishReview>());
+        Assert.Equal("REQUEST_CHANGES", review.Verdict);
+        Assert.Contains("first", review.Body);
+        Assert.Contains("second", review.Body);
+
+        // exactly ONE fixing round: one new scheduled run, an Implement task, one round spent
+        var newRuns = (await AppendedAsync()).OfType<RunScheduled>().Skip(runsAfterReviewChained).ToList();
+        var fixRun = Assert.Single(newRuns);
+        Assert.Equal(TaskTypes.Implement, (await TaskAsync(fixRun.TaskId)).Type);
         Assert.Equal("ai/task-1", fixRun.Input.AgentBranch);
+        Assert.Equal(1, (await WorkflowAsync(workflow.Id)).ReviewRounds);
     }
 
     [Fact]
@@ -198,6 +230,47 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         var secondRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
         Assert.Equal("cafe01", secondRun.Input.ReviewHeadSha);
         Assert.Equal(TaskTypes.Review, (await TaskAsync(secondRun.TaskId)).Type);
+    }
+
+    [Fact]
+    public async Task Pr_published_records_the_real_pr_number_on_the_workflow()
+    {
+        var workflow = await RunCommandAsync(Command());
+
+        await _orchestrator.HandlePrPublishedAsync(
+            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
+
+        workflow = await WorkflowAsync(workflow.Id);
+        Assert.Equal(28, workflow.HeadPrNumber);
+    }
+
+    [Fact]
+    public async Task Review_run_targets_the_recorded_head_pr_number()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandlePrPublishedAsync(
+            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
+
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
+
+        var reviewRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
+        Assert.Equal(TaskTypes.Review, (await TaskAsync(reviewRun.TaskId)).Type);
+        Assert.Equal(28, reviewRun.Input.PrNumber);
+
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(2, reviewRun.TaskId, "o", "r", 1), CancellationToken.None);
+        Assert.Contains((await AppendedAsync()).OfType<PublishReview>(),
+            r => r.PrNumber == 28 && r.HeadBranch == "agent/1-fix");
+    }
+
+    [Fact]
+    public async Task Review_run_falls_back_to_the_item_number_when_no_pr_is_recorded()
+    {
+        await RunCommandAsync(Command("/review"));
+
+        var scheduled = Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
+        Assert.Equal(1, scheduled.Input.PrNumber); // ItemNumber: nothing published yet
     }
 
     [Fact]
@@ -236,7 +309,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     [Fact]
     public async Task Implement_requires_approved_plan_when_policy_demands_it()
     {
-        var orchestrator = new Orchestrator(_state, _log,
+        var orchestrator = new Orchestrator(_state, _log, _log,
             Options.Create(new OrchestrationOptions { PlanApprovalRequired = true }),
             NullLogger<Orchestrator>.Instance);
         await orchestrator.HandleUserCommandAsync(Command(), CancellationToken.None);
@@ -289,12 +362,44 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
         await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
 
-        // 2 auto-retries done → third failure parks
         await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
         var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
         Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("failed"));
+    }
+
+    [Fact]
+    public async Task Image_missing_failures_retry_silently_then_park_without_a_notification()
+    {
+        var workflow = await RunCommandAsync(Command());
+        var cause = "image missing for profile coder: agent-coder:latest";
+
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
+        Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
+        Assert.DoesNotContain(await AppendedAsync(), e => e is PublishComment);
+    }
+
+    [Fact]
+    public async Task A_silently_parked_task_still_resumes_via_a_reply()
+    {
+        var workflow = await RunCommandAsync(Command());
+        var cause = "image missing for profile coder: agent-coder:latest";
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _orchestrator.HandleUserReplyAsync(
+            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "image built"), CancellationToken.None);
+
+        var active = await ActiveTaskAsync(workflow.Id);
+        Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(active).Status);
+        Assert.Equal(runsBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
     }
 
     [Fact]
@@ -311,27 +416,89 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Review_comments_start_a_fixing_round_until_the_cap()
+    public async Task Review_comment_runs_start_a_fixing_round_until_the_cap()
     {
         var workflow = await RunCommandAsync(Command("/review"));
-        for (var round = 1; round <= 3; round++)
+        long reviewRunId = 1; // the /review command's review run
+        for (var round = 1; round <= 4; round++)
         {
-            await _orchestrator.HandleReviewCommentsSubmittedAsync(
-                new ReviewCommentsSubmitted("o", "r", 1, 1, RunId: round,
-                    Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
+            await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1,
+                RunId: reviewRunId, Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]),
+                CancellationToken.None);
+            await _orchestrator.HandleRunCompletedAsync(
+                new RunCompleted(reviewRunId, (await AppendedAsync()).OfType<RunScheduled>()
+                    .Single(s => s.RunId == reviewRunId).TaskId, "o", "r", 1), CancellationToken.None);
+
+            if (round < 4)
+            {
+                // the fixing round's Implement run completes and chains the next review run
+                var fixRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
+                await _orchestrator.HandleRunCompletedAsync(
+                    new RunCompleted(fixRun.RunId, fixRun.TaskId, "o", "r", 1,
+                        Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
+                reviewRunId = (await AppendedAsync()).OfType<RunScheduled>().Last().RunId;
+            }
         }
 
-        // 3 rounds consumed (cap = 3): the 3rd created a fixing task that now occupies the slot;
-        // a 4th submission hits the cap and parks
-        await _orchestrator.HandleReviewCommentsSubmittedAsync(
-            new ReviewCommentsSubmitted("o", "r", 1, 1, RunId: 4,
-                Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
-
+        // 3 rounds consumed (cap = 3); the 4th reviewer run still publishes its aggregated
+        // verdict, but its fixing round hits the cap and parks
         workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(3, workflow.ReviewRounds);
         Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("review_loop_exhausted"));
-        Assert.Equal(4, (await AppendedAsync()).OfType<PublishReview>().Count());
+        var reviews = (await AppendedAsync()).OfType<PublishReview>().ToList();
+        Assert.Equal(4, reviews.Count);
+        Assert.All(reviews, r => Assert.Equal("REQUEST_CHANGES", r.Verdict));
+    }
+
+    [Fact]
+    public async Task A_completed_run_does_not_chain_a_second_task_while_one_is_active()
+    {
+        var workflow = await RunCommandAsync(Command());
+        var evt = new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee");
+        await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
+        var runsAfterFirst = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        // a replayed (or racing) completion must not start a parallel chain: the Review
+        // task it chained occupies the slot
+        await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
+
+        Assert.Equal(runsAfterFirst, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.Equal(TaskTypes.Review, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Type);
+    }
+
+    [Fact]
+    public async Task Review_comment_events_change_nothing_until_the_reviewer_run_completes()
+    {
+        var workflow = await RunCommandAsync(Command()); // the Implement task occupies the slot
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        // the comment handler only lets the delivery loop ack the event (Block 3.3b):
+        // no publish, no fixing round, no round spent — aggregation happens at completion
+        await _orchestrator.HandleReviewCommentsSubmittedAsync(
+            new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2, Comments: []), CancellationToken.None);
+
+        workflow = await WorkflowAsync(workflow.Id);
+        Assert.Equal(0, workflow.ReviewRounds);
+        Assert.Equal(runsBefore, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.DoesNotContain(await AppendedAsync(), e => e is PublishReview);
+        Assert.Equal(TaskTypes.Implement, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Type);
+    }
+
+    [Fact]
+    public async Task A_parked_task_still_resumes_via_a_reply()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleEscalationAsync(
+            new BlockerReported("o", "r", 1, RunId: 1, "db missing", "no db", ["provide db"]),
+            "blocked", CancellationToken.None);
+        var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
+
+        await _orchestrator.HandleUserReplyAsync(
+            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "here"), CancellationToken.None);
+
+        Assert.Equal(runsBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Status);
     }
 
     [Fact]

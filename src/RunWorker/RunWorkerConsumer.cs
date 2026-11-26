@@ -79,7 +79,6 @@ public sealed class RunWorkerConsumer(
         var containerName = $"pi-session-{scheduled.RunId}";
         var entry = new RunEntry(scheduled.RunId, scheduled.TaskId, scheduled.WorkflowId, scheduled.Input,
             containerName, token, DateTime.UtcNow);
-        registry.Add(entry);
 
         // entry env from the run input pointers (docs/run-worker.md "Run input (pointers v2)"):
         // one input contract — the Bridge renders the prompt from the same input.json
@@ -130,6 +129,17 @@ public sealed class RunWorkerConsumer(
             MemoryBytes: null,
             Network: runOptions.AgentNetwork);
 
+        if (!await docker.ImageExistsAsync(plan.Image, ct))
+        {
+            logger.LogWarning(
+                "run {run} container {container}: profile image {image} missing — failing quietly (command {command}, input {@input})",
+                scheduled.RunId, containerName, plan.Image, scheduled.Input.Command, scheduled.Input);
+            await FailProvisioningAsync(scheduled,
+                $"image missing for profile {scheduled.Input.Profile}: {plan.Image}", ct);
+            return;
+        }
+
+        registry.Add(entry);
         try
         {
             var created = await docker.CreateContainerAsync(plan, ct)

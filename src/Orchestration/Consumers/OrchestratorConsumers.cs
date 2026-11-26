@@ -55,7 +55,7 @@ public sealed class OrchestratorAgent(Orchestrator core) : IEventConsumer
         typeof(PlanSaved), typeof(ClarificationRequested), typeof(BlockerReported),
         typeof(ReviewDecisionRequested), typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
         typeof(ReviewCommentsSubmitted), typeof(BugReported), typeof(TestsPassed),
-        typeof(ProjectItemChanged), typeof(PrUpdated),
+        typeof(ProjectItemChanged), typeof(PrUpdated), typeof(PrPublished),
     ];
 
     public string Name => "OrchestratorAgent";
@@ -78,6 +78,7 @@ public sealed class OrchestratorAgent(Orchestrator core) : IEventConsumer
         CriteriaClarificationRequested c => core.HandleEscalationAsync(c,
             $"acceptance criteria need clarification: {c.Question}", ct),
         PrUpdated updated => core.HandlePrUpdatedAsync(updated, ct),
+        PrPublished published => core.HandlePrPublishedAsync(published, ct),
         _ => Task.CompletedTask,
     };
 }

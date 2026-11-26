@@ -71,11 +71,13 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
                 review_rounds  int    NOT NULL DEFAULT 0,
                 agent_branch   text,
                 head_sha       text,
+                head_pr_number bigint,
                 created_at     timestamptz NOT NULL DEFAULT now(),
                 UNIQUE (owner, repo, item_number)
             );
             ALTER TABLE orch_workflow ADD COLUMN IF NOT EXISTS agent_branch text;
             ALTER TABLE orch_workflow ADD COLUMN IF NOT EXISTS head_sha text;
+            ALTER TABLE orch_workflow ADD COLUMN IF NOT EXISTS head_pr_number bigint;
             CREATE TABLE IF NOT EXISTS orch_task (
                 id          bigserial PRIMARY KEY,
                 workflow_id bigint NOT NULL REFERENCES orch_workflow,
@@ -131,11 +133,12 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
     private static WorkflowRow MapWorkflow(NpgsqlDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetInt64(3),
         r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetBoolean(6), r.GetInt32(7),
-        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9));
+        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9),
+        r.IsDBNull(10) ? null : r.GetInt64(10));
 
     public Task<WorkflowRow?> FindWorkflowAsync(ItemRef item, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         QueryOptionalAsync(uow,
-            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha FROM orch_workflow WHERE owner = @owner AND repo = @repo AND item_number = @number",
+            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha, head_pr_number FROM orch_workflow WHERE owner = @owner AND repo = @repo AND item_number = @number",
             p =>
             {
                 p.AddWithValue("owner", item.Owner);
@@ -149,7 +152,7 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
             INSERT INTO orch_workflow (owner, repo, item_number, status)
             VALUES (@owner, @repo, @number, 'active')
             ON CONFLICT (owner, repo, item_number) DO UPDATE SET owner = EXCLUDED.owner
-            RETURNING id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha
+            RETURNING id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha, head_pr_number
             """,
             p =>
             {
@@ -161,7 +164,7 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
 
     public Task<WorkflowRow> GetWorkflowAsync(long workflowId, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         QueryRequiredAsync(uow,
-            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha FROM orch_workflow WHERE id = @id",
+            "SELECT id, owner, repo, item_number, status, node_id, plan_approved, review_rounds, agent_branch, head_sha, head_pr_number FROM orch_workflow WHERE id = @id",
             p => p.AddWithValue("id", workflowId), MapWorkflow, $"workflow {workflowId} not found", ct);
 
     public Task SetWorkflowStatusAsync(long workflowId, string status, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
@@ -204,6 +207,15 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
             {
                 p.AddWithValue("agent_branch", (object?)agentBranch ?? DBNull.Value);
                 p.AddWithValue("head_sha", (object?)headSha ?? DBNull.Value);
+                p.AddWithValue("id", workflowId);
+            }, ct);
+
+    public Task SetWorkflowHeadPrNumberAsync(long workflowId, long prNumber, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
+        // the real PR number of the workflow's current head pull request (PrPublished)
+        ExecAsync(uow, "UPDATE orch_workflow SET head_pr_number = @pr WHERE id = @id",
+            p =>
+            {
+                p.AddWithValue("pr", prNumber);
                 p.AddWithValue("id", workflowId);
             }, ct);
 

@@ -13,6 +13,7 @@ namespace PiAgent.Orchestration;
 public sealed class Orchestrator(
     IOrchestrationState state,
     IEventLog log,
+    IEventReader eventReader,
     IOptions<OrchestrationOptions> options,
     ILogger<Orchestrator> logger)
 {
@@ -206,7 +207,7 @@ public sealed class Orchestrator(
                 // the same pointers SetWorkflowPointersAsync recorded above); the base comes
                 // from the same config the run input's DefaultBranch came from
                 await log.AppendAsync(new PublishPr(
-                    PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id,
+                    PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id, workflow.ItemNumber,
                     IdempotencyKey: $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
                     HeadBranch: evt.Branch, BaseBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
                     Title: $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
@@ -216,13 +217,26 @@ public sealed class Orchestrator(
                 break;
 
             case TaskTypes.Review:
-                // review passed — the outcome (approve) is published, testing follows
-                await log.AppendAsync(new PublishReview(
-                    workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
-                    Verdict: "APPROVE", Body: "Review passed", evt.RunId,
-                    IdempotencyKey: $"review:{evt.RunId}"), uow.Events, ct);
-                await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
-                await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
+                var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(evt.RunId, ct);
+                if (submitted.SelectMany(e => e.Comments).ToList() is { Count: > 0 } comments)
+                {
+                    await log.AppendAsync(new PublishReview(
+                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
+                        Verdict: "REQUEST_CHANGES",
+                        Body: string.Join("\n\n", comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
+                        evt.RunId, IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await StartFixingRoundAsync(workflow, null, uow, ct);
+                }
+                else
+                {
+                    // review passed — the outcome (approve) is published, testing follows
+                    await log.AppendAsync(new PublishReview(
+                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
+                        Verdict: "APPROVE", Body: "Review passed", evt.RunId,
+                        IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
+                    await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
+                }
                 break;
 
             case TaskTypes.TestDesign:
@@ -267,8 +281,16 @@ public sealed class Orchestrator(
         else
         {
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.WaitingForHuman, uow, ct);
-            await NotifyAsync(workflow,
-                $"task {task.Type} failed after {attempts} attempts: {evt.Cause}", uow, ct);
+            if (IsImageMissingCause(evt.Cause))
+            {
+                logger.LogWarning("task {task} parked silently after {attempts} attempts: {cause}",
+                    task.Id, attempts, evt.Cause);
+            }
+            else
+            {
+                await NotifyAsync(workflow,
+                    $"task {task.Type} failed after {attempts} attempts: {evt.Cause}", uow, ct);
+            }
         }
 
         await uow.Events.CommitAsync(ct);
@@ -305,21 +327,17 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, CancellationToken ct)
-    {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
-        if (workflow is not null)
-        {
-            await log.AppendAsync(new PublishReview(
-                evt.Owner, evt.Repo, evt.PrNumber, Verdict: "REQUEST_CHANGES",
-                Body: string.Join("\n\n", evt.Comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
-                evt.RunId, IdempotencyKey: $"review:{evt.RunId}"), uow.Events, ct);
-            await StartFixingRoundAsync(workflow, null, uow, ct);
-        }
-
-        await uow.Events.CommitAsync(ct);
-    }
+    /// <summary>
+    /// Deliberately a no-op beyond the ack the delivery loop performs on return: one fixing
+    /// round per REVIEWER RUN, not per comment event (docs/incident-2026-11-26-follow-ups.md
+    /// Block 3.3b). The comments stay only in these already-recorded events; their aggregate
+    /// is acted on once, at run completion (HandleRunCompletedAsync, case Review). Publishing
+    /// or starting a fixing round here would revive the dual-verdict problem (per-event
+    /// REQUEST_CHANGES vs the run's verdict) and spawn parallel implement chains. The type
+    /// stays in OrchestratorAgent's Consumes list so the event is delivered and acked.
+    /// </summary>
+    public Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, CancellationToken ct) =>
+        Task.CompletedTask;
 
     public async Task HandleBugReportedAsync(BugReported evt, CancellationToken ct)
     {
@@ -414,6 +432,21 @@ public sealed class Orchestrator(
     }
 
     /// <summary>
+    /// The Publisher's PR create/update succeeded — record the real PR number the review
+    /// runs post to (docs/incident-2026-11-26-review-item27.md, Case B). No workflow
+    /// (PR published for an unknown item) — nothing to pin.
+    /// </summary>
+    public async Task HandlePrPublishedAsync(PrPublished evt, CancellationToken ct)
+    {
+        await using var uow = await state.Factory.BeginAsync(ct);
+        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
+        if (workflow is not null)
+            await state.SetWorkflowHeadPrNumberAsync(workflow.Id, evt.PrNumber, uow, ct);
+
+        await uow.Events.CommitAsync(ct);
+    }
+
+    /// <summary>
     /// New commits on the PR pin the revision the next review round reviews
     /// (docs/flows events.md pr_updated): the head sha becomes the Workflow's review pin.
     /// </summary>
@@ -431,8 +464,25 @@ public sealed class Orchestrator(
 
     private async Task StartTaskAsync(WorkflowRow workflow, string taskType, string? commandText, string? agentBranch, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
         var taskId = await state.CreateTaskAsync(workflow.Id, taskType, uow, ct);
         await CreateRunAndScheduleAsync(workflow, taskId, commandText, agentBranch, uow, ct);
+    }
+
+    /// <summary>
+    /// The one-active-task invariant (docs/incident-2026-11-26-review-item27.md, Case A):
+    /// automatic transitions must not start a parallel task chain — a queued or processing
+    /// Task occupies the Workflow's single slot.
+    /// </summary>
+    private async Task<bool> SlotOccupiedAsync(WorkflowRow workflow, IOrchestrationUnitOfWork uow, CancellationToken ct)
+    {
+        if (await state.GetActiveTaskAsync(workflow.Id, uow, ct)
+            is not { Status: TaskStatuses.Queued or TaskStatuses.Processing } task)
+            return false;
+        logger.LogWarning("workflow {workflow}: {type} task is {status}; the workflow runs one task at a time — not starting another",
+            workflow.Id, task.Type, task.Status);
+        return true;
     }
 
     /// <summary>
@@ -444,7 +494,7 @@ public sealed class Orchestrator(
     {
         var task = await state.GetTaskAsync(taskId, uow, ct);
         var input = new RunInput(workflow.Owner, workflow.Repo, workflow.ItemNumber,
-            PrNumber: task.Type is TaskTypes.Review ? workflow.ItemNumber : null,
+            PrNumber: task.Type is TaskTypes.Review ? workflow.HeadPrNumber ?? workflow.ItemNumber : null,
             Command: commandText ?? task.Type, PlanCommentId: 0,
             Profile: CommandRegistry.ProfileFor(task.Type),
             AgentBranch: task.Type is TaskTypes.Implement ? agentBranch : null,
@@ -471,6 +521,8 @@ public sealed class Orchestrator(
 
     private async Task CreateNextTaskAsync(WorkflowRow workflow, TaskRow current, string nextType, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
         var nextId = await state.CreateTaskAsync(workflow.Id, nextType, uow, ct);
         await CreateRunAndScheduleAsync(workflow, nextId, null, agentBranch: null, uow, ct);
         logger.LogInformation("workflow {workflow}: {current} succeeded → {next} task {task}",
@@ -505,6 +557,9 @@ public sealed class Orchestrator(
             await NotifyAsync(workflow, "review round cap reached — review_loop_exhausted; a fresh command restarts the work", uow, ct);
             return;
         }
+
+        if (await SlotOccupiedAsync(workflow, uow, ct))
+            return;
 
         await state.IncrementReviewRoundsAsync(workflow.Id, uow, ct);
         // a fixing round continues the agent branch the previous Coder run pushed
@@ -561,6 +616,14 @@ public sealed class Orchestrator(
             workflow.Owner, 0, workflow.NodeId, column, runId,
             IdempotencyKey: $"board:{runId}:{column}"), uow.Events, ct);
     }
+
+    /// <summary>
+    /// The RunWorker's quiet-early-exit cause ("image missing for profile X: image"): the run
+    /// failed before provisioning, deterministically, and a GitHub comment would only feed the
+    /// poller's resume loop (docs/incident-2026-11-26-follow-ups.md Block 2.2.1).
+    /// </summary>
+    private static bool IsImageMissingCause(string? cause) =>
+        cause is not null && cause.StartsWith("image missing", StringComparison.Ordinal);
 
     private Task NotifyAsync(WorkflowRow workflow, string body, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
         log.AppendAsync(new PublishComment(
