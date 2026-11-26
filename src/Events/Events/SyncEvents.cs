@@ -1,6 +1,10 @@
 namespace PiAgent.Events;
 
-/// <summary>events.md "Sync events (Poller → EventLog)" — raw normalized GitHub state changes.</summary>
+/// <summary>events.md "Sync events (Poller → EventLog)" — raw normalized GitHub state changes.
+/// Sync-emitted records carry an optional content-fingerprinted EventId: the EventLog's unique
+/// (type, eventId) index drops a re-detected identical change silently (the poller's overlap
+/// window re-fetches by design; the fingerprint makes the re-fetch harmless — main poller's
+/// CommentKey idea, ported to the log).</summary>
 
 /// <summary>Issue/PR: title, body, state.</summary>
 public sealed record ItemChanged(
@@ -10,7 +14,8 @@ public sealed record ItemChanged(
     bool IsPullRequest,
     string Title,
     string Body,
-    string State) : IEvent
+    string State,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, Number).Key;
 }
@@ -19,7 +24,8 @@ public sealed record ItemChanged(
 public sealed record ItemClosed(
     string Owner,
     string Repo,
-    long Number) : IEvent
+    long Number,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, Number).Key;
 }
@@ -32,7 +38,8 @@ public sealed record CommentChanged(
     long CommentId,
     string Author,
     string Body,
-    bool Deleted) : IEvent
+    bool Deleted,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -45,7 +52,8 @@ public sealed record ReviewAdded(
     long ReviewId,
     string Author,
     string Verdict,
-    string Body) : IEvent
+    string Body,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, PrNumber).Key;
 }
@@ -55,7 +63,8 @@ public sealed record PrUpdated(
     string Owner,
     string Repo,
     long PrNumber,
-    string HeadSha) : IEvent
+    string HeadSha,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, PrNumber).Key;
 }
@@ -80,7 +89,8 @@ public sealed record LabelsChanged(
     string Owner,
     string Repo,
     long ItemNumber,
-    IReadOnlyList<string> Labels) : IEvent
+    IReadOnlyList<string> Labels,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }

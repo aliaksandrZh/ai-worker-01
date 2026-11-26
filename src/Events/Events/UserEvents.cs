@@ -14,7 +14,8 @@ public sealed record UserCommand(
     long CommentId,
     string Author,
     string AuthorPermission,
-    string? Text) : IEvent
+    string? Text,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -41,7 +42,8 @@ public sealed record UserDecision(
     string Repo,
     long ItemNumber,
     string Author,
-    string? Text) : IEvent
+    string? Text,
+    string? EventId = null) : IEvent
 {
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
