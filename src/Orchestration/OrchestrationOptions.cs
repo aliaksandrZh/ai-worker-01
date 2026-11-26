@@ -25,7 +25,7 @@ public sealed class OrchestrationOptions
 
     /// <summary>
     /// Default (PR-base) branch per repository, key "owner/name" — read from the config
-    /// plane's repositories.yaml (optional default_branch per entry) at wiring time.
+    /// plane's repositories.json (optional default_branch per entry) at wiring time.
     /// </summary>
     public IReadOnlyDictionary<string, string> DefaultBranches { get; set; } =
         new Dictionary<string, string>();

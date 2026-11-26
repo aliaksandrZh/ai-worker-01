@@ -1,0 +1,31 @@
+// Control-plane knobs: durations "60s|5m|4h", sizes MiB/KiB.
+// profile_secrets — secret NAMES per agent profile (the frozen agents/<name>/profile.yaml
+// `secrets:` lists): the Orchestrator freezes them into run_scheduled; the Run Worker mounts
+// the host-managed files read-only at /run/secrets/<name>. Names only — values never travel
+// through configuration.
+{
+  "github": {
+    "bot_login": "jsxhuz"
+  },
+  "poll_interval": "60s",
+  "poll_overlap": "5m",
+  "per_page": 100,
+  "max_concurrent_runs": 10,
+  "startup_timeout": "10m",
+  "idle_timeout": "60m",
+  "max_run_duration": "4h",
+  "heartbeat_interval": "30s",
+  "max_log_size": "50MiB",
+  "max_artifact_size": "256KiB",
+  "max_task_artifacts_size": "512KiB",
+  "max_automatic_retries": 1,
+  "outbox_retry_window": "24h",
+  "orphan_grace_period": "24h",
+  "orphan_quarantine_period": "24h",
+  "profile_secrets": {
+    "coder": ["github-write-pat.txt"],
+    "planner": ["github-read-pat.txt"],
+    "reviewer": ["github-read-pat.txt"],
+    "stub": []
+  }
+}
