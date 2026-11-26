@@ -173,11 +173,27 @@ function zodField(f) {
   return f.required ? t : t.optional();
 }
 
-/** zod schema for a tool's arguments, built from its spec (strict: unknown keys rejected). */
-export function zodSchema(toolSpec) {
+/** zod schema for a tool's arguments, built from its spec (strict: unknown keys rejected).
+ *
+ * `guard` — an optional () => string? workspace check (null = ok, string = the failure reason).
+ * It attaches to the delivery tools of the agent-branch carve-out (the coder): their validity
+ * depends on workspace git state the agent does not pass as arguments, so the check is an
+ * argument-free refinement — the failure flows through the SAME describeIssue path as any
+ * field error, surfacing to the agent as an isError tool result it can fix in-run.
+ */
+const GUARDED_TOOLS = Object.freeze(new Set(["report_completion", "submit_pr_description"]));
+
+export function zodSchema(toolSpec, guard) {
   const shape = {};
   for (const f of toolSpec.fields) shape[f.name] = zodField(f);
-  return z.strictObject(shape);
+  const base = z.strictObject(shape);
+  if (guard && GUARDED_TOOLS.has(toolSpec.name ?? "")) {
+    return base.superRefine((_args, ctx) => {
+      const problem = guard();
+      if (problem) ctx.addIssue({ code: "custom", path: ["workspace"], message: problem });
+    });
+  }
+  return base;
 }
 
 /** JSON Schema for tools/list, derived from the same spec so both stay in sync. */

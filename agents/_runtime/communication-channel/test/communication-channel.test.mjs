@@ -251,3 +251,99 @@ test("the bundle serves the full conversation end to end (no node_modules needed
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- the workspace delivery guard (CC_COMPLETION_GUARD) ----
+
+import { workspaceGuard } from "../src/server.mjs";
+import { execFileSync } from "node:child_process";
+
+/** A minimal git repo with an origin (a bare sibling): one commit on a pushed branch. */
+function gitWorkspace(prefix, { branch, push = true, detached = false } = {}) {
+  const dir = tempDir(prefix);
+  const run = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  run("init", "--initial-branch=main");
+  run("config", "user.email", "t@t");
+  run("config", "user.name", "t");
+  run("commit", "--allow-empty", "-m", "init");
+  const origin = tempDir(prefix + "-origin-");
+  execFileSync("git", ["init", "--bare", origin], { encoding: "utf8" });
+  run("remote", "add", "origin", origin);
+  if (branch && branch !== "main") run("checkout", "-b", branch);
+  if (push) run("push", "-u", "origin", branch ?? "main");
+  if (detached) run("checkout", "--detach", "HEAD");
+  return dir;
+}
+
+const withEnv = (env) => (requests, manifest) => {
+  const res = spawnSync(process.execPath, [SRC_SERVER, manifest], {
+    input: requests.map((r) => JSON.stringify(r)).join("\n") + "\n",
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  });
+  assert.equal(res.status, 0, `server exited ${res.status}: ${res.stderr}`);
+  return res.stdout.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+};
+
+test("without CC_COMPLETION_GUARD the delivery tools pass regardless of git state", () => {
+  const dir = tempDir("comm-");
+  const ws = gitWorkspace("guard-", { branch: "main" }); // default branch — would fail guarded
+  try {
+    const manifest = writeManifest(dir, ["report_completion"]);
+    const replies = rpc(SRC_SERVER, manifest, [
+      listRequest,
+      call("report_completion", {}),
+    ]);
+    assert.match(replies[1].result.content[0].text, /Recorded: report_completion/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("the guard blocks report_completion on the default branch and on an unpushed branch", () => {
+  const dir = tempDir("comm-");
+  const ws = gitWorkspace("guard-", { branch: "main" });
+  try {
+    const manifest = writeManifest(dir, ["report_completion"]);
+    const send = withEnv({ CC_COMPLETION_GUARD: ws, GIT_DEFAULT_BRANCH: "main" });
+    const replies = send([listRequest, call("report_completion", {})], manifest);
+    assert.equal(replies[1].error.code, -32602);
+    assert.match(replies[1].error.message, /invalid 'workspace'.*default branch 'main'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("the guard passes a pushed agent branch and still validates the payload after it", () => {
+  const dir = tempDir("comm-");
+  const ws = gitWorkspace("guard-", { branch: "agent/1-fix" });
+  try {
+    const manifest = writeManifest(dir, ["submit_pr_description", "report_completion"]);
+    const send = withEnv({ CC_COMPLETION_GUARD: ws, GIT_DEFAULT_BRANCH: "main" });
+    const replies = send([
+      call("submit_pr_description", { title: "t", body: "b" }),
+      call("report_completion", {}),
+    ], manifest);
+    assert.match(replies[0].result.content[0].text, /Recorded: submit_pr_description/);
+    assert.match(replies[1].result.content[0].text, /Recorded: report_completion/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test("the guard fails closed when the workspace has no repository", () => {
+  const dir = tempDir("comm-");
+  const ws = tempDir("guard-empty-"); // no git init
+  try {
+    const manifest = writeManifest(dir, ["report_completion"]);
+    const send = withEnv({ CC_COMPLETION_GUARD: ws, GIT_DEFAULT_BRANCH: "main" });
+    const replies = send([call("report_completion", {})], manifest);
+    assert.equal(replies[0].error.code, -32602);
+    assert.match(replies[0].error.message, /no git repository state/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  }
+});

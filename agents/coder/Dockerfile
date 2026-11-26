@@ -43,6 +43,11 @@ RUN node /opt/agent-runtime/communication-channel/dist/generate-mcpjson.mjs \
 # GIT-push credential only: the GitHub MCP server reads the same file for context reads, the
 # branch push goes through the credential helper (never a remote URL, never persisted config).
 ENV GIT_CLONE_TOKEN_FILE=/run/secrets/github-write-pat.txt
+# The delivery guard: the communication-channel server answers submit_pr_description and
+# report_completion with an isError result until the workspace git state is delivery-ready
+# (on an agent branch, HEAD pushed) — the PR head invalid-422 never leaves the run (the
+# Orchestrator publishes from the run_completed git facts; the guard keeps them publishable).
+ENV CC_COMPLETION_GUARD=/workspace
 
 # uid 1000 (`node`) is the user the Run Worker chowns the per-Run mounts to. /opt/pi-agent/profile
 # is chowned to `node` — the FILES remain image-baked (nothing mounts over them), the ownership

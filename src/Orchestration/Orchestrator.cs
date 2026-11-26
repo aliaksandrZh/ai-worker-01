@@ -192,10 +192,23 @@ public sealed class Orchestrator(
                 break;
 
             case TaskTypes.Implement:
+                if (evt.Branch is null)
+                {
+                    // no git facts — the head branch to publish is unknown (docs/run-worker.md:
+                    // run_completed "settles without pointers" when the facts are absent)
+                    await state.SetTaskStatusAsync(task.Id, TaskStatuses.WaitingForHuman, uow, ct);
+                    await NotifyAsync(workflow,
+                        $"implement run {evt.RunId} completed without git facts (branch) — cannot publish PR",
+                        uow, ct);
+                    break;
+                }
+                // the head is the branch the run actually pushed (the run_completed git facts —
+                // the same pointers SetWorkflowPointersAsync recorded above); the base comes
+                // from the same config the run input's DefaultBranch came from
                 await log.AppendAsync(new PublishPr(
                     PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id,
                     IdempotencyKey: $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
-                    HeadBranch: $"ai/task-{task.Id}", BaseBranch: "main",
+                    HeadBranch: evt.Branch, BaseBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
                     Title: $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
                     Body: $"Workflow {workflow.Id}, task {task.Id}", PrNumber: null), uow.Events, ct);
                 await MoveBoardAsync(workflow, "review", evt.RunId, uow, ct);

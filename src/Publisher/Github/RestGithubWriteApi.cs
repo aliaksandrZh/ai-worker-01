@@ -36,15 +36,39 @@ public sealed class RestGithubWriteApi(HttpClient httpClient, string pat) : IGit
             return pr;
         }
 
-        var created = await SendAsync(HttpMethod.Post, $"repos/{evt.Owner}/{evt.Repo}/pulls",
-            new JsonObject
-            {
-                ["title"] = evt.Title,
-                ["body"] = evt.Body,
-                ["head"] = evt.HeadBranch,
-                ["base"] = evt.BaseBranch,
-            }, ct);
+        var created = await CreatePrOrGetExistingAsync(evt, ct);
         return (long)created!["number"]!;
+    }
+
+    /// <summary>
+    /// Create-or-get: a second round pushes the same workflow.AgentBranch (docs/coder APPEND_SYSTEM,
+    /// "a push to the same branch updates the same PR"), so GitHub answers 422 "a pull request
+    /// already exists for this head and base". That is not a failure of intent — resolve the open
+    /// PR by head and return it. A plain invalid-head 422 (branch truly absent) still fails
+    /// permanently. Submission race: two creates for one head resolve to the same PR either way.
+    /// </summary>
+    private async Task<JsonNode> CreatePrOrGetExistingAsync(PublishPr evt, CancellationToken ct)
+    {
+        try
+        {
+            return await SendAsync(HttpMethod.Post, $"repos/{evt.Owner}/{evt.Repo}/pulls",
+                new JsonObject
+                {
+                    ["title"] = evt.Title,
+                    ["body"] = evt.Body,
+                    ["head"] = evt.HeadBranch,
+                    ["base"] = evt.BaseBranch,
+                }, ct);
+        }
+        catch (GithubPermanentException ex) when (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+        {
+            var existing = await SendAsync(HttpMethod.Get,
+                $"repos/{evt.Owner}/{evt.Repo}/pulls?head={evt.Owner}:{evt.HeadBranch}&state=open", null, ct);
+            if (existing is JsonArray list && list.Count > 0 && list[0] is { } openPr)
+                return openPr;
+            throw new GithubPermanentException(
+                $"github {evt.Owner}/{evt.Repo}: 422 already-exists but no open PR found for head {evt.HeadBranch}");
+        }
     }
 
     public async Task<long> SubmitReviewAsync(PublishReview evt, CancellationToken ct)
@@ -118,10 +142,11 @@ public sealed class RestGithubWriteApi(HttpClient httpClient, string pat) : IGit
             ?? throw new GithubPermanentException($"project {owner}#{projectNumber} not found");
     }
 
-    private async Task<JsonNode> SendAsync(HttpMethod method, string path, JsonObject body, CancellationToken ct)
+    private async Task<JsonNode> SendAsync(HttpMethod method, string path, JsonObject? body, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(method, $"https://api.github.com/{path}");
-        request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        if (body is not null)
+            request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         using var response = await httpClient.SendAsync(request, ct);
         var raw = await response.Content.ReadAsStringAsync(ct);
 
