@@ -185,7 +185,10 @@ Three coordinated changes close that hole:
    `-terminal` / `-failed`, and each terminal body now carries `sessionId`. A stale spool entry
    from a previous lifetime can therefore never collide with this run's terminal, and its body
    self-identifies as foreign. Non-terminal entries (tool callbacks, events, heartbeats) keep
-   their existing run-id-scoped eventIds.
+   their existing run-id-scoped eventIds — and since the strict guard (below) requires sessionId
+   on every callback, the Bridge's `post()` stamps it into **every** outgoing body at the single
+   delivery choke point (`agents/_runtime/bridge/bridge.mjs`): a body that already names a
+   session keeps its own, everything else gains the run's session id.
 
 2. **The Bridge opens pi with the session id** (step 4) and declares `PI_SESSION_ID` fail-closed
    like `PI_RUN_ID`.
