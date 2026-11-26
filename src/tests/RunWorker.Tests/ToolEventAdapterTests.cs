@@ -3,8 +3,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using PiAgent.Events;
-using PiAgent.Events.InMemory;
+using PiAgent.Events.Postgres;
 using PiAgent.RunWorker;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.RunWorker.Tests;
@@ -14,15 +15,23 @@ namespace PiAgent.RunWorker.Tests;
 /// tool→event map against the docs/flows/tools.md dictionary, typed events on the root
 /// item's stream (never Global), and the deterministic-garbage seatbelt.
 /// </summary>
-public sealed class ToolEventAdapterTests
+[Collection("PostgresLog")]
+public sealed class ToolEventAdapterTests : IAsyncLifetime
 {
-    private readonly InMemoryEventStore _log = new();
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _log;
+
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
+
     private readonly RecordingProvisioner _docker = new();
     private readonly RunRegistry _registry = new();
     private readonly RunWorkerConsumer _consumer;
 
-    public ToolEventAdapterTests()
+    public ToolEventAdapterTests(PostgresFixture fx)
     {
+        _fx = fx;
+        _log = fx.Log;
         _consumer = new RunWorkerConsumer(
             _registry, _docker, _log,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = Path.GetTempPath() }),
@@ -57,7 +66,7 @@ public sealed class ToolEventAdapterTests
         await DeliverToolAsync("save_plan",
             """{"goals":"g","scope":"s","acceptanceCriteria":"a","steps":["read","write"]}""");
 
-        var saved = Assert.Single(_log.Appended.OfType<PlanSaved>());
+        var saved = Assert.Single((await _fx.AppendedAsync()).OfType<PlanSaved>());
         Assert.Equal(new ItemRef("o", "r", 1).Key, saved.StreamKey); // the root item's stream, not Global
         Assert.Equal(2, saved.WorkflowId);
         Assert.True(JsonElement.DeepEquals(JsonSerializer.SerializeToElement(new[] { "read", "write" }), saved.Steps ?? default));
@@ -72,7 +81,7 @@ public sealed class ToolEventAdapterTests
         await DeliverToolAsync("submit_pr_description",
             """{"title":"Add thing","body":"does the thing"}""");
 
-        var submitted = Assert.Single(_log.Appended.OfType<PrDescriptionSubmitted>());
+        var submitted = Assert.Single((await _fx.AppendedAsync()).OfType<PrDescriptionSubmitted>());
         Assert.Equal("Add thing", submitted.Title);
         Assert.Equal("does the thing", submitted.Body);
         Assert.Equal(12, submitted.PrNumber); // the Run's linked PR, from the run input
@@ -104,7 +113,7 @@ public sealed class ToolEventAdapterTests
         RegisterRun();
         await DeliverToolAsync(toolName, argsJson);
 
-        var typed = _log.Appended.Where(e => e is not AgentCallback).ToList();
+        var typed = (await _fx.AppendedAsync()).Where(e => e is not AgentCallback).ToList();
         var evt = Assert.Single(typed);
         Assert.Equal(expectedEventType, evt.GetType().Name);
         Assert.Equal(new ItemRef("o", "r", 1).Key, evt.StreamKey);
@@ -148,12 +157,12 @@ public sealed class ToolEventAdapterTests
         RegisterRun();
         await DeliverToolAsync("bash", "{\"command\":\"ls\"}");
 
-        var failed = Assert.Single(_log.Appended.OfType<RunFailed>());
+        var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("unknown communication tool", failed.Cause);
         Assert.Equal(new ItemRef("o", "r", 1).Key, failed.StreamKey);
         Assert.Equal(1, _docker.StopCalls); // the dead run's container is settled
         Assert.Null(_registry.Get(7));      // nothing left in flight
-        Assert.DoesNotContain(_log.Appended, e => e is not (AgentCallback or RunFailed));
+        Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is not (AgentCallback or RunFailed));
     }
 
     [Fact]
@@ -162,7 +171,7 @@ public sealed class ToolEventAdapterTests
         RegisterRun();
         await DeliverToolAsync("save_plan", "{\"goals\":\"g\"}"); // scope/criteria/steps missing
 
-        var failed = Assert.Single(_log.Appended.OfType<RunFailed>());
+        var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("save_plan", failed.Cause);
         Assert.Null(_registry.Get(7));
     }
@@ -174,7 +183,7 @@ public sealed class ToolEventAdapterTests
         await _consumer.HandleAsync(new AgentCallback(7, "tool", Body: null),
             attempt: 1, CancellationToken.None);
 
-        Assert.Single(_log.Appended.OfType<RunFailed>());
+        Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
     }
 
     [Fact]
@@ -182,6 +191,6 @@ public sealed class ToolEventAdapterTests
     {
         await DeliverToolAsync("save_plan", """{"goals":"g","scope":"s","acceptanceCriteria":"a","steps":[]}""");
 
-        Assert.Empty(_log.Appended); // the watchdog already settled this run — no envelope, no event
+        Assert.Empty(await _fx.AppendedAsync()); // the watchdog already settled this run — no envelope, no event
     }
 }

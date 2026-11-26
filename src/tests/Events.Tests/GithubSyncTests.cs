@@ -1,7 +1,7 @@
-using PiAgent.Events;
-using PiAgent.Events.InMemory;
 using Microsoft.Extensions.Logging.Abstractions;
+using PiAgent.Events;
 using PiAgent.GithubSync;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.Events.Tests;
@@ -40,7 +40,8 @@ public sealed class CommandGrammarTests
 /// content-fingerprinted events; the EventLog's unique (type, eventId) index drops unchanged
 /// re-detections, so the fingerprint IS the cursor. No cursor store anywhere.
 /// </summary>
-public sealed class GithubSyncWorkerTests
+[Collection("PostgresLog")]
+public sealed class GithubSyncWorkerTests : IAsyncLifetime
 {
     private sealed class FakeGithubApi : IGithubReadApi
     {
@@ -70,12 +71,13 @@ public sealed class GithubSyncWorkerTests
             Task.FromResult<string?>(Permission);
     }
 
+    private readonly PostgresFixture _fx;
     private readonly FakeGithubApi _api = new();
-    private readonly InMemoryEventStore _log = new();
     private readonly GithubSyncWorker _worker;
 
-    public GithubSyncWorkerTests()
+    public GithubSyncWorkerTests(PostgresFixture fx)
     {
+        _fx = fx;
         var config = new SyncConfig
         {
             Repositories = [new SyncConfig.RepoConfig("o", "r")],
@@ -83,8 +85,11 @@ public sealed class GithubSyncWorkerTests
             PollIntervalSeconds = 1,
         };
         _worker = new GithubSyncWorker(
-            config, _api, _log, NullLogger<GithubSyncWorker>.Instance);
+            config, _api, fx.Log, NullLogger<GithubSyncWorker>.Instance);
     }
+
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
 
     [Fact]
     public async Task A_command_comment_becomes_comment_changed_plus_user_command_with_permission()
@@ -95,9 +100,10 @@ public sealed class GithubSyncWorkerTests
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        var appended = await _fx.AppendedAsync();
+        Assert.Contains(appended, e =>
             e is CommentChanged c && c.ItemNumber == 1 && c.CommentId == 10 && !c.Deleted);
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(appended, e =>
             e is UserCommand u && u.Command == "code" && u.AuthorPermission == "write" && u.CommentId == 10);
     }
 
@@ -110,12 +116,13 @@ public sealed class GithubSyncWorkerTests
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e => e is CommentChanged);
-        Assert.DoesNotContain(_log.Appended, e => e is UserCommand);
+        var appended = await _fx.AppendedAsync();
+        Assert.Contains(appended, e => e is CommentChanged);
+        Assert.DoesNotContain(appended, e => e is UserCommand);
     }
 
     [Fact]
-    public async Task An_open_pr_produces_item_changed_labels_pr_updated_and_reviews()
+    public async Task An_open_pr_produces_item_changed_pr_updated_and_reviews()
     {
         var now = DateTime.UtcNow;
         _api.Items.Add(new GithubItem(1, IsPullRequest: true, "t", "b", "open",
@@ -124,11 +131,12 @@ public sealed class GithubSyncWorkerTests
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        var appended = await _fx.AppendedAsync();
+        Assert.Contains(appended, e =>
             e is ItemChanged { IsPullRequest: true, State: "open", Labels: ["AI:Code"] });
-        Assert.Contains(_log.Appended, e => e is PrUpdated { HeadSha: "abc" });
-        Assert.Contains(_log.Appended, e => e is ReviewAdded { Verdict: "CHANGES_REQUESTED" });
-        Assert.DoesNotContain(_log.Appended, e => e is ItemClosed);
+        Assert.Contains(appended, e => e is PrUpdated { HeadSha: "abc" });
+        Assert.Contains(appended, e => e is ReviewAdded { Verdict: "CHANGES_REQUESTED" });
+        Assert.DoesNotContain(appended, e => e is ItemClosed);
     }
 
     [Fact]
@@ -142,12 +150,13 @@ public sealed class GithubSyncWorkerTests
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e => e is ItemClosed);
-        Assert.DoesNotContain(_log.Appended, e => e is ItemChanged);
-        Assert.DoesNotContain(_log.Appended, e => e is PrUpdated);
-        Assert.DoesNotContain(_log.Appended, e => e is ReviewAdded);
-        Assert.DoesNotContain(_log.Appended, e => e is CommentChanged);
-        Assert.DoesNotContain(_log.Appended, e => e is UserCommand);
+        var appended = await _fx.AppendedAsync();
+        Assert.Contains(appended, e => e is ItemClosed);
+        Assert.DoesNotContain(appended, e => e is ItemChanged);
+        Assert.DoesNotContain(appended, e => e is PrUpdated);
+        Assert.DoesNotContain(appended, e => e is ReviewAdded);
+        Assert.DoesNotContain(appended, e => e is CommentChanged);
+        Assert.DoesNotContain(appended, e => e is UserCommand);
     }
 
     [Fact]
@@ -165,7 +174,7 @@ public sealed class GithubSyncWorkerTests
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Equal(2, _log.Appended.Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
     }
 
     [Fact]
@@ -180,7 +189,7 @@ public sealed class GithubSyncWorkerTests
         _api.Items.Add(new GithubItem(1, IsPullRequest: false, "t", "b", "open", ["AI:Code", "AI:Plan"], now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
-        Assert.Equal(2, _log.Appended.Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
 
         // and a title edit does not re-emit the item for its unchanged labels — the
         // fingerprint covers everything at once
@@ -188,7 +197,7 @@ public sealed class GithubSyncWorkerTests
         _api.Items.Add(new GithubItem(1, IsPullRequest: false, "t", "b", "open", ["AI:Code", "AI:Plan"], now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
-        Assert.Equal(2, _log.Appended.Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
     }
 
     [Fact]
@@ -199,12 +208,12 @@ public sealed class GithubSyncWorkerTests
         _api.Comments[1] = [new GithubComment(10, "alice", "@jsxhuz /code", now, now)];
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
-        var afterFirst = _log.Appended.Count;
+        var afterFirst = (await _fx.AppendedAsync()).Count;
 
         // the fake keeps returning the same working set; the fingerprint dedup drops the
         // re-detection — there is no cursor to rewind and no window to let it through
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Equal(afterFirst, _log.Appended.Count);
+        Assert.Equal(afterFirst, (await _fx.AppendedAsync()).Count);
     }
 }

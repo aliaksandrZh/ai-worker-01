@@ -3,31 +3,30 @@ using Microsoft.Extensions.Options;
 using PiAgent.Events;
 using PiAgent.Events.Delivery;
 using PiAgent.Events.Postgres;
-using Testcontainers.PostgreSql;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.RunWorker.Tests;
 
 /// <summary>
-/// The EventLog's deterministic-eventId dedup against real Postgres: a content-fingerprinted
-/// record re-detected by the sync yields one row — the fingerprint is the sync's only memory
-/// (docs/github-sync.md invariant 1).
+/// The EventLog's deterministic-eventId dedup against the real Postgres adapter: a
+/// content-fingerprinted record re-detected by the sync yields one row — the fingerprint is
+/// the sync's only memory (docs/github-sync.md invariant 1).
 /// </summary>
+[Collection("PostgresLog")]
 public sealed class EventLogFingerprintTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:17").Build();
-    private EventQueueStore _store = null!;
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _store;
 
-    public async Task InitializeAsync()
+    public EventLogFingerprintTests(PostgresFixture fx)
     {
-        await _container.StartAsync();
-        _store = new EventQueueStore(
-            Options.Create(new EventLogOptions { ConnectionString = _container.GetConnectionString() }),
-            NullLogger<EventQueueStore>.Instance);
-        await _store.EnsureSchemaAsync(CancellationToken.None);
+        _fx = fx;
+        _store = fx.Log;
     }
 
-    public Task DisposeAsync() => _container.DisposeAsync().AsTask();
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private static ItemChanged ItemChanged(string eventId) => new(
         "o", "r", 25, IsPullRequest: false, "t", "b", "open", [], EventId: eventId);

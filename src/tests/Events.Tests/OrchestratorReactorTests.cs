@@ -2,28 +2,35 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PiAgent.Events;
-using PiAgent.Events.InMemory;
+using PiAgent.Events.Postgres;
 using PiAgent.Orchestration;
 using PiAgent.Orchestration.State;
-using PiAgent.Orchestration.State.InMemory;
+using PiAgent.Orchestration.State.Postgres;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 
 namespace PiAgent.Events.Tests;
 
 /// <summary>
-/// The Orchestrator reactor against in-memory state + in-memory log: admission, the
+/// The Orchestrator reactor against the real Postgres state + log: admission, the
 /// Workflow/Task/Run machine, the flow chain, policies, escalation and cancellation
 /// (docs/orchestrator.md).
 /// </summary>
-public sealed class OrchestratorReactorTests
+[Collection("PostgresLog")]
+public sealed class OrchestratorReactorTests : IAsyncLifetime
 {
-    private readonly InMemoryEventStore _log = new();
-    private readonly InMemoryOrchestrationState _state = new();
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _log;
+    private readonly PostgresOrchestrationState _state;
     private readonly Orchestrator _orchestrator;
 
-    public OrchestratorReactorTests()
+    public OrchestratorReactorTests(PostgresFixture fx)
     {
+        _fx = fx;
+        _log = fx.Log;
+        _state = new PostgresOrchestrationState(
+            fx.DataSource, fx.Log, NullLogger<PostgresOrchestrationState>.Instance);
         _orchestrator = new Orchestrator(
             _state, _log, Options.Create(new OrchestrationOptions
             {
@@ -35,6 +42,46 @@ public sealed class OrchestratorReactorTests
             NullLogger<Orchestrator>.Instance);
     }
 
+    public async Task InitializeAsync()
+    {
+        await _state.EnsureSchemaAsync(CancellationToken.None);
+        await _fx.ResetCoreAsync();
+        // the state machine's tables too — a previous test's workflow must not survive
+        await using var cmd = _fx.DataSource.CreateCommand(
+            "TRUNCATE orch_run, orch_task, orch_workflow RESTART IDENTITY");
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    // reads go through a real unit of work; the handlers have already committed,
+    // so an uncommitted (rolled-back) read transaction sees everything
+    private async Task<WorkflowRow> WorkflowAsync(long workflowId)
+    {
+        await using var uow = await _state.Factory.BeginAsync(CancellationToken.None);
+        return await _state.GetWorkflowAsync(workflowId, uow, CancellationToken.None);
+    }
+
+    private async Task<TaskRow> TaskAsync(long taskId)
+    {
+        await using var uow = await _state.Factory.BeginAsync(CancellationToken.None);
+        return await _state.GetTaskAsync(taskId, uow, CancellationToken.None);
+    }
+
+    private async Task<TaskRow?> ActiveTaskAsync(long workflowId)
+    {
+        await using var uow = await _state.Factory.BeginAsync(CancellationToken.None);
+        return await _state.GetActiveTaskAsync(workflowId, uow, CancellationToken.None);
+    }
+
+    private async Task<WorkflowRow?> FindWorkflowScopedAsync(ItemRef item)
+    {
+        await using var uow = await _state.Factory.BeginAsync(CancellationToken.None);
+        return await _state.FindWorkflowAsync(item, uow, CancellationToken.None);
+    }
+
+    private async Task<IReadOnlyList<IEvent>> AppendedAsync() => await _fx.AppendedAsync();
+
     private static UserCommand Command(string command = "/code", string permission = "write") =>
         new(command, "o", "r", 1, CommentId: 100, Author: "u", permission, Text: command);
 
@@ -43,8 +90,8 @@ public sealed class OrchestratorReactorTests
     private async Task<WorkflowRow> RunCommandAsync(UserCommand cmd)
     {
         await _orchestrator.HandleUserCommandAsync(cmd, CancellationToken.None);
-        return await _state.FindWorkflowAsync(new ItemRef(cmd.Owner, cmd.Repo, cmd.ItemNumber), null!, CancellationToken.None)
-               ?? throw new InvalidOperationException("workflow missing");
+        var workflow = await FindWorkflowScopedAsync(new ItemRef(cmd.Owner, cmd.Repo, cmd.ItemNumber));
+        return workflow ?? throw new InvalidOperationException("workflow missing");
     }
 
     [Fact]
@@ -53,9 +100,9 @@ public sealed class OrchestratorReactorTests
         var workflow = await RunCommandAsync(Command());
 
         Assert.Equal(WorkflowStatuses.Active, workflow.Status);
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskTypes.Implement, Assert.IsType<TaskRow>(active).Type);
-        Assert.Contains(_log.Appended, e => e is RunScheduled s && s.Input.Profile == "coder");
+        Assert.Contains(await AppendedAsync(), e => e is RunScheduled s && s.Input.Profile == "coder");
     }
 
     [Fact]
@@ -63,7 +110,7 @@ public sealed class OrchestratorReactorTests
     {
         await RunCommandAsync(PlanCommand());
 
-        var scheduled = Assert.Single(_log.Appended.OfType<RunScheduled>());
+        var scheduled = Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
         Assert.Null(scheduled.Input.AgentBranch); // planner clones plain
         Assert.Null(scheduled.Input.ReviewHeadSha);
         Assert.Null(scheduled.Input.PrNumber);
@@ -82,7 +129,7 @@ public sealed class OrchestratorReactorTests
             NullLogger<Orchestrator>.Instance);
         await orchestrator.HandleUserCommandAsync(Command(), CancellationToken.None);
 
-        var scheduled = Assert.Single(_log.Appended.OfType<RunScheduled>());
+        var scheduled = Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
         Assert.Equal("develop", scheduled.Input.DefaultBranch);
     }
 
@@ -94,12 +141,12 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
 
-        workflow = await _state.GetWorkflowAsync(workflow.Id, null!, CancellationToken.None);
+        workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal("ai/task-1", workflow.AgentBranch);
         Assert.Equal("c0ffee", workflow.HeadSha);
 
         // the PR publication carries the branch the run actually pushed, not a synthesized name
-        var publish = Assert.Single(_log.Appended.OfType<PublishPr>());
+        var publish = Assert.Single((await AppendedAsync()).OfType<PublishPr>());
         Assert.Equal("ai/task-1", publish.HeadBranch);
         Assert.Equal("main", publish.BaseBranch); // fallback: no config entry
     }
@@ -112,10 +159,10 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: null, CommitSha: null), CancellationToken.None);
 
-        Assert.DoesNotContain(_log.Appended, e => e is PublishPr);
-        var task = await _state.GetTaskAsync(1, null!, CancellationToken.None);
+        Assert.DoesNotContain(await AppendedAsync(), e => e is PublishPr);
+        var task = await TaskAsync(1);
         Assert.Equal(TaskStatuses.WaitingForHuman, task.Status);
-        Assert.Contains(_log.Appended, e => e is PublishComment); // the notify comment
+        Assert.Contains(await AppendedAsync(), e => e is PublishComment); // the notify comment
     }
 
     [Fact]
@@ -128,8 +175,8 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleReviewCommentsSubmittedAsync(
             new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2, Comments: []), CancellationToken.None);
 
-        var fixRun = _log.Appended.OfType<RunScheduled>().Last();
-        Assert.Equal(TaskTypes.Implement, (await _state.GetTaskAsync(fixRun.TaskId, null!, CancellationToken.None)).Type);
+        var fixRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
+        Assert.Equal(TaskTypes.Implement, (await TaskAsync(fixRun.TaskId)).Type);
         Assert.Equal("ai/task-1", fixRun.Input.AgentBranch);
     }
 
@@ -137,7 +184,7 @@ public sealed class OrchestratorReactorTests
     public async Task Pr_updated_pins_the_head_revision_for_the_next_review_run()
     {
         var workflow = await RunCommandAsync(Command("/review"));
-        var firstRun = Assert.Single(_log.Appended.OfType<RunScheduled>());
+        var firstRun = Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
         Assert.Null(firstRun.Input.ReviewHeadSha); // first round: the reviewer reads the PR itself
 
         // the reviewer's escalation parks the Task; new commits pin the revision; the reply resumes
@@ -148,9 +195,9 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleUserReplyAsync(
             new UserReply("o", "r", 1, CommentId: 500, Author: "u", Text: "go on"), CancellationToken.None);
 
-        var secondRun = _log.Appended.OfType<RunScheduled>().Last();
+        var secondRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
         Assert.Equal("cafe01", secondRun.Input.ReviewHeadSha);
-        Assert.Equal(TaskTypes.Review, (await _state.GetTaskAsync(secondRun.TaskId, null!, CancellationToken.None)).Type);
+        Assert.Equal(TaskTypes.Review, (await TaskAsync(secondRun.TaskId)).Type);
     }
 
     [Fact]
@@ -162,8 +209,8 @@ public sealed class OrchestratorReactorTests
             new ClarificationRequested("o", "r", 1, RunId: 1, Question: "which scope?", Context: null),
             "clarification needed", CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e => e is RunStopRequested);
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        Assert.Contains(await AppendedAsync(), e => e is RunStopRequested);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
     }
 
@@ -173,7 +220,7 @@ public sealed class OrchestratorReactorTests
         await RunCommandAsync(Command());
         await _orchestrator.HandleUserCommandAsync(Command(), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("one task at a time"));
     }
 
@@ -182,7 +229,7 @@ public sealed class OrchestratorReactorTests
     {
         await RunCommandAsync(Command(permission: "read"));
 
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("permission"));
     }
 
@@ -194,7 +241,7 @@ public sealed class OrchestratorReactorTests
             NullLogger<Orchestrator>.Instance);
         await orchestrator.HandleUserCommandAsync(Command(), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("/plan"));
     }
 
@@ -205,7 +252,7 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandlePlanSavedAsync(new PlanSaved(
             "o", "r", 1, workflow.Id, Goals: "g", Scope: "s", AcceptanceCriteria: "a", Steps: JsonSerializer.SerializeToElement(new[] { "step" })), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Plan, Body: var b } && b.Contains("Acceptance criteria"));
     }
 
@@ -216,8 +263,8 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e => e is PublishPr { Kind: PublishPrKind.Create });
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        Assert.Contains(await AppendedAsync(), e => e is PublishPr { Kind: PublishPrKind.Create });
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskTypes.Review, Assert.IsType<TaskRow>(active).Type);
     }
 
@@ -228,9 +275,9 @@ public sealed class OrchestratorReactorTests
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1), CancellationToken.None);
 
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishReview { Verdict: "APPROVE" });
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskTypes.TestDesign, Assert.IsType<TaskRow>(active).Type);
     }
 
@@ -244,9 +291,9 @@ public sealed class OrchestratorReactorTests
 
         // 2 auto-retries done → third failure parks
         await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("failed"));
     }
 
@@ -256,10 +303,10 @@ public sealed class OrchestratorReactorTests
         var workflow = await RunCommandAsync(Command());
         await _orchestrator.HandleUserCancelAsync(new UserCancel("o", "r", 1, "u", Reason: "no"), CancellationToken.None);
 
-        workflow = await _state.GetWorkflowAsync(workflow.Id, null!, CancellationToken.None);
+        workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(WorkflowStatuses.Cancelled, workflow.Status);
-        Assert.Contains(_log.Appended, e => e is RunStopRequested);
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        Assert.Contains(await AppendedAsync(), e => e is RunStopRequested);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Null(active); // cancelled task leaves the slot
     }
 
@@ -280,32 +327,32 @@ public sealed class OrchestratorReactorTests
             new ReviewCommentsSubmitted("o", "r", 1, 1, RunId: 4,
                 Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
 
-        workflow = await _state.GetWorkflowAsync(workflow.Id, null!, CancellationToken.None);
+        workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(3, workflow.ReviewRounds);
-        Assert.Contains(_log.Appended, e =>
+        Assert.Contains(await AppendedAsync(), e =>
             e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("review_loop_exhausted"));
-        Assert.Equal(4, _log.Appended.OfType<PublishReview>().Count());
+        Assert.Equal(4, (await AppendedAsync()).OfType<PublishReview>().Count());
     }
 
     [Fact]
     public async Task Escalation_parks_and_a_reply_resumes_with_a_fresh_run()
     {
         var workflow = await RunCommandAsync(Command());
-        var runCountBefore = _log.Appended.OfType<RunScheduled>().Count();
+        var runCountBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
         await _orchestrator.HandleEscalationAsync(
             new BlockerReported("o", "r", 1, RunId: 1, "db missing", "no db", ["provide db"]),
             "blocked", CancellationToken.None);
 
-        var active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
-        Assert.Contains(_log.Appended, e => e is RunStopRequested);
+        Assert.Contains(await AppendedAsync(), e => e is RunStopRequested);
 
         await _orchestrator.HandleUserReplyAsync(new UserReply("o", "r", 1, 200, "u", "here"), CancellationToken.None);
 
-        active = await _state.GetActiveTaskAsync(workflow.Id, null!, CancellationToken.None);
+        active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(active).Status);
-        Assert.Equal(runCountBefore + 1, _log.Appended.OfType<RunScheduled>().Count());
+        Assert.Equal(runCountBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
     }
 
     [Fact]
@@ -314,7 +361,7 @@ public sealed class OrchestratorReactorTests
         var workflow = await RunCommandAsync(Command());
         await _orchestrator.HandleItemClosedAsync(new ItemClosed("o", "r", 1), CancellationToken.None);
 
-        workflow = await _state.GetWorkflowAsync(workflow.Id, null!, CancellationToken.None);
+        workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(WorkflowStatuses.Closed, workflow.Status);
     }
 }

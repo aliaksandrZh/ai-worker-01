@@ -2,8 +2,9 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PiAgent.Events;
-using PiAgent.Events.InMemory;
+using PiAgent.Events.Postgres;
 using PiAgent.RunWorker;
+using PiAgent.Tests.Postgres;
 using PiAgent.RunWorker.Docker;
 using Xunit;
 
@@ -14,16 +15,24 @@ namespace PiAgent.RunWorker.Tests;
 /// input.json v2 in the run tree, the entry-facing pointer subset in ContainerPlan.env,
 /// and the completed callback's git facts carried into RunCompleted.
 /// </summary>
-public sealed class RunWorkerConsumerTests
+[Collection("PostgresLog")]
+public sealed class RunWorkerConsumerTests : IAsyncLifetime
 {
-    private readonly InMemoryEventStore _log = new();
+    private readonly PostgresFixture _fx;
+    private readonly EventQueueStore _log;
+
+    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task DisposeAsync() => Task.CompletedTask;
+
     private readonly RecordingProvisioner _docker = new();
     private readonly RunRegistry _registry = new();
     private readonly string _workspace;
     private readonly RunWorkerConsumer _consumer;
 
-    public RunWorkerConsumerTests()
+    public RunWorkerConsumerTests(PostgresFixture fx)
     {
+        _fx = fx;
+        _log = fx.Log;
         _workspace = Path.Combine(Path.GetTempPath(), "pi-runworker-tests", Guid.NewGuid().ToString("N"));
         _consumer = new RunWorkerConsumer(
             _registry, _docker, _log,
@@ -118,7 +127,7 @@ public sealed class RunWorkerConsumerTests
                 Secrets: ["github-write-pat.txt"]),
             attempt: 1, CancellationToken.None);
 
-        var failed = Assert.Single(_log.Appended.OfType<RunFailed>());
+        var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("secret_missing", failed.Cause);
         Assert.Contains("github-write-pat.txt", failed.Cause);
         Assert.Null(_docker.LastPlan);      // fail closed: nothing was provisioned
@@ -184,7 +193,7 @@ public sealed class RunWorkerConsumerTests
                 """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
             attempt: 1, CancellationToken.None);
 
-        var completed = Assert.Single(_log.Appended.OfType<RunCompleted>());
+        var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
         Assert.Equal("ai/task-1", completed.Branch);
         Assert.Equal("c0ffee", completed.CommitSha);
     }
@@ -197,7 +206,7 @@ public sealed class RunWorkerConsumerTests
         await _consumer.HandleAsync(new AgentCallback(7, "completed", Body: null),
             attempt: 1, CancellationToken.None);
 
-        var completed = Assert.Single(_log.Appended.OfType<RunCompleted>());
+        var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
         Assert.Null(completed.Branch);
         Assert.Null(completed.CommitSha);
     }

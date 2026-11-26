@@ -1,17 +1,20 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using Npgsql;
 using PiAgent.Events;
-using PiAgent.Events.InMemory;
 using PiAgent.Publisher;
+using PiAgent.Publisher.Postgres;
+using PiAgent.Tests.Postgres;
 using Xunit;
 
 namespace PiAgent.Events.Tests;
 
 /// <summary>
 /// The publication consumer (docs/publisher.md): key-once, transient → redelivery,
-/// permanent → poison (straight to dead-letter), no label writes.
+/// permanent → poison (straight to dead-letter), no label writes. Against the real
+/// Postgres marker store.
 /// </summary>
-public sealed class PublisherTests
+[Collection("PostgresLog")]
+public sealed class PublisherTests : IAsyncLifetime
 {
     private sealed class FakeGithubApi : IGithubWriteApi
     {
@@ -55,29 +58,35 @@ public sealed class PublisherTests
 
     private enum GithubExceptionKind { None, Transient, Permanent }
 
-    private sealed class InMemoryMarkerStore : IPublishMarkerStore
-    {
-        public HashSet<string> Keys { get; } = [];
-
-        public Task<bool> ExistsAsync(string idempotencyKey, CancellationToken ct) =>
-            Task.FromResult(Keys.Contains(idempotencyKey));
-
-        public Task InsertAsync(string idempotencyKey, IEventTransaction? tx, CancellationToken ct)
-        {
-            Keys.Add(idempotencyKey);
-            return Task.CompletedTask;
-        }
-    }
-
+    private readonly PostgresFixture _fx;
     private readonly FakeGithubApi _github = new();
-    private readonly InMemoryMarkerStore _markers = new();
-    private readonly InMemoryEventStore _log = new();
+    private readonly PostgresPublishMarkerStore _markers;
     private readonly PublisherConsumer _publisher;
 
-    public PublisherTests()
+    public PublisherTests(PostgresFixture fx)
     {
+        _fx = fx;
+        _markers = new PostgresPublishMarkerStore(fx.DataSource, NullLogger<PostgresPublishMarkerStore>.Instance);
         _publisher = new PublisherConsumer(
             _markers, _github, NullLogger<PublisherConsumer>.Instance);
+    }
+
+    public async Task InitializeAsync()
+    {
+        await _fx.ResetCoreAsync();
+        await _markers.EnsureSchemaAsync(CancellationToken.None);
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private async Task<IReadOnlyList<string>> MarkerKeysAsync()
+    {
+        await using var cmd = _fx.DataSource.CreateCommand("SELECT key FROM publish_marker ORDER BY key");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var keys = new List<string>();
+        while (await reader.ReadAsync())
+            keys.Add(reader.GetString(0));
+        return keys;
     }
 
     [Fact]
@@ -89,7 +98,7 @@ public sealed class PublisherTests
         await _publisher.HandleAsync(comment, 2, CancellationToken.None); // redelivery
 
         Assert.Single(_github.Comments);
-        Assert.Equal(["plan:1"], _markers.Keys);
+        Assert.Equal(["plan:1"], await MarkerKeysAsync());
     }
 
     [Fact]
@@ -100,13 +109,13 @@ public sealed class PublisherTests
             IdempotencyKey: "notification:1", Body: "n");
 
         await Assert.ThrowsAsync<GithubTransientException>(() => _publisher.HandleAsync(comment, 1, CancellationToken.None));
-        Assert.Empty(_markers.Keys); // not marked → redelivery retries
+        Assert.Empty(await MarkerKeysAsync()); // not marked → redelivery retries
     }
 
     [Fact]
     public async Task Permanent_failure_poisons_the_event_without_retries()
     {
-        var queue = _log;
+        var queue = _fx.Log;
         var id = await queue.AppendAsync(
             new PublishReview("o", "r", 1, "APPROVE", "ok", RunId: 1, IdempotencyKey: "review:1"),
             CancellationToken.None);
@@ -125,7 +134,7 @@ public sealed class PublisherTests
 
         var dead = await queue.ListDeadLettersAsync(10, CancellationToken.None);
         Assert.Single(dead);
-        Assert.Equal(0, queue.PendingCount); // no retries scheduled
+        Assert.Equal(0, await _fx.PendingCountAsync()); // no retries scheduled
     }
 
     [Fact]
@@ -135,6 +144,6 @@ public sealed class PublisherTests
             new PublishBoardMove("o", 0, "", "review", RunId: 1, IdempotencyKey: "board:1"), 1, CancellationToken.None);
 
         Assert.Empty(_github.BoardMoves);
-        Assert.Empty(_markers.Keys);
+        Assert.Empty(await MarkerKeysAsync());
     }
 }
