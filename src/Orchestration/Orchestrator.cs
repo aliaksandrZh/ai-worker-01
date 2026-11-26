@@ -217,9 +217,6 @@ public sealed class Orchestrator(
                 break;
 
             case TaskTypes.Review:
-                // One verdict, one fixing round per reviewer run (incident 2026-11-26 Case A,
-                // Block 3.3b): the run's recorded ReviewCommentsSubmitted events ARE the
-                // aggregate — read here, never stored anywhere else. No comments → approve.
                 var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(evt.RunId, ct);
                 if (submitted.SelectMany(e => e.Comments).ToList() is { Count: > 0 } comments)
                 {
@@ -286,10 +283,6 @@ public sealed class Orchestrator(
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.WaitingForHuman, uow, ct);
             if (IsImageMissingCause(evt.Cause))
             {
-                // quiet park (incident 2026-11-26 Case C, Block 2): a notify comment would be
-                // observed by the poller and resume the parked task — the missing-image loop
-                // returns through that comment. No GitHub comment; a real user reply still
-                // resumes the task (HandleUserReplyAsync).
                 logger.LogWarning("task {task} parked silently after {attempts} attempts: {cause}",
                     task.Id, attempts, evt.Cause);
             }
@@ -501,8 +494,6 @@ public sealed class Orchestrator(
     {
         var task = await state.GetTaskAsync(taskId, uow, ct);
         var input = new RunInput(workflow.Owner, workflow.Repo, workflow.ItemNumber,
-            // the real PR number captured via PrPublished; ItemNumber stays only as the
-            // last-resort fallback (docs/incident-2026-11-26-review-item27.md, Case B)
             PrNumber: task.Type is TaskTypes.Review ? workflow.HeadPrNumber ?? workflow.ItemNumber : null,
             Command: commandText ?? task.Type, PlanCommentId: 0,
             Profile: CommandRegistry.ProfileFor(task.Type),

@@ -284,7 +284,6 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            // the same registry the claim path deserializes with
             if (EventRegistry.Deserialize(reader.GetString(0), reader.GetString(1)) is T typed)
                 events.Add(typed);
         }

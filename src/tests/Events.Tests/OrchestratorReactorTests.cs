@@ -172,8 +172,6 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
 
-        // the chained reviewer run (2) submits comments; its completion aggregates them
-        // into one verdict and starts one fixing round (Block 3.3b)
         await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
             Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
@@ -192,8 +190,6 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
         var runsAfterReviewChained = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
-        // the chained reviewer run (2) legitimately submits TWO events (incident doc,
-        // Case A: corrections, per-line batches) before its completion
         await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
             Comments: [new ReviewFinding("a.cs", 10, "major", "first")]), CancellationToken.None);
         await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
@@ -262,7 +258,6 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         Assert.Equal(TaskTypes.Review, (await TaskAsync(reviewRun.TaskId)).Type);
         Assert.Equal(28, reviewRun.Input.PrNumber);
 
-        // the head branch travels with the review for the publisher's 404 fallback (1.2.2)
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(2, reviewRun.TaskId, "o", "r", 1), CancellationToken.None);
         Assert.Contains((await AppendedAsync()).OfType<PublishReview>(),
@@ -367,7 +362,6 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
         await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
 
-        // 2 auto-retries done → third failure parks
         await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: "boom"), CancellationToken.None);
         var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
@@ -378,16 +372,12 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     [Fact]
     public async Task Image_missing_failures_retry_silently_then_park_without_a_notification()
     {
-        // the quiet early exit (incident 2026-11-26 Case C, Block 2): the cause keeps the
-        // normal retry counting (2.3.1b) but a notify comment would feed the poller's resume
-        // loop, so the exhausted cap parks the task WITHOUT PublishComment (2.3.2a)
         var workflow = await RunCommandAsync(Command());
         var cause = "image missing for profile coder: agent-coder:latest";
 
         await _orchestrator.HandleRunFailedAsync(new RunFailed(1, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
         await _orchestrator.HandleRunFailedAsync(new RunFailed(2, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
 
-        // 2 auto-retries done → third failure parks silently
         await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
         var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);

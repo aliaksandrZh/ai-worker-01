@@ -129,11 +129,6 @@ public sealed class RunWorkerConsumer(
             MemoryBytes: null,
             Network: runOptions.AgentNetwork);
 
-        // quiet early exit (incident 2026-11-26 Case C, Block 2): a missing profile image failed
-        // every retry in a ~60 s loop because each RunFailed produced a bot comment that resumed
-        // the parked task. Inspect the image BEFORE `docker create` and settle the run quietly:
-        // the command/input go to the log, the run settles as failed with a dedicated cause —
-        // the orchestrator keeps its silent retry counting and parks without a GitHub comment.
         if (!await docker.ImageExistsAsync(plan.Image, ct))
         {
             logger.LogWarning(
