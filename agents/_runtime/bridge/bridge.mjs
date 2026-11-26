@@ -130,10 +130,14 @@ const headers = () => ({
 /** One HTTP call to the app host's events endpoint; resolves {ok, status, retryable, detail} — never throws. */
 async function post(route, body) {
   try {
+    // every spooled body carries the session id (docs/run-session-id.md): the worker's callback
+    // guard settles nothing that does not name this run's session — terminals, tool calls and
+    // event echoes alike
+    const stamped = { sessionId, ...body };
     const response = await fetch(`${baseUrl}/events`, {
       method: "post",
       headers: headers(),
-      body: JSON.stringify({ route, body }),
+      body: JSON.stringify({ route, body: stamped }),
       signal: AbortSignal.timeout(30_000),
     });
     if (response.ok) return { ok: true, status: response.status };
