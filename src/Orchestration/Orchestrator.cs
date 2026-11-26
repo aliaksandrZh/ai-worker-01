@@ -104,7 +104,11 @@ public sealed class Orchestrator(
         switch (decision.Kind)
         {
             case DecisionKind.PlanApproved:
+                // the owner's ruling: approval only UNLOCKS the gate — development starts
+                // when the user issues /code themselves
                 await state.SetWorkflowPlanAsync(workflow.Id, approved: true, 0, uow, ct);
+                logger.LogInformation("workflow {workflow}: plan approved by {author}",
+                    workflow.Id, decision.Author);
                 break;
 
             case DecisionKind.PlanChangesRequested or DecisionKind.ReviewChangeScope:

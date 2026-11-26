@@ -115,10 +115,27 @@ public sealed class GithubSyncWorker(
             if (CommandGrammar.Parse(comment.Body, config.BotLogin) is not { } parsed)
                 continue;
 
-            var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, comment.Author, ct) ?? "read";
-            await log.AppendAsync(new UserCommand(
-                parsed.Command, repo.Owner, repo.Name, comment.ItemNumber, comment.Id,
-                comment.Author, permission, parsed.TrailingContext), uow, ct);
+            switch (parsed.Command)
+            {
+                // decisions at the edge (docs/flows events.md "user_decision"): plan approval
+                // / changes requested — the Orchestrator consumes the typed event
+                case "approve":
+                    await log.AppendAsync(new UserDecision(DecisionKind.PlanApproved,
+                        repo.Owner, repo.Name, comment.ItemNumber, comment.Author,
+                        parsed.TrailingContext), uow, ct);
+                    break;
+                case "changes":
+                    await log.AppendAsync(new UserDecision(DecisionKind.PlanChangesRequested,
+                        repo.Owner, repo.Name, comment.ItemNumber, comment.Author,
+                        parsed.TrailingContext), uow, ct);
+                    break;
+                default:
+                    var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, comment.Author, ct) ?? "read";
+                    await log.AppendAsync(new UserCommand(
+                        parsed.Command, repo.Owner, repo.Name, comment.ItemNumber, comment.Id,
+                        comment.Author, permission, parsed.TrailingContext), uow, ct);
+                    break;
+            }
         }
 
         if (comments.Count > 0)
