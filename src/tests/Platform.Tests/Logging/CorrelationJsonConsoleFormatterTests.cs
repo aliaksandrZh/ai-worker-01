@@ -53,7 +53,7 @@ public class CorrelationJsonConsoleFormatterTests
             Assert.Equal(System.Text.Json.JsonValueKind.Object, root.ValueKind);
 
             string[] allFields =
-                ["timestamp", "level", "service", "message", "correlationId", "repositoryId", "workflowId", "taskId", "runId", "eventId"];
+                ["timestamp", "level", "service", "logger", "message", "correlationId", "repositoryId", "workflowId", "taskId", "runId", "eventId"];
             foreach (var field in allFields)
                 Assert.True(root.TryGetProperty(field, out _), $"missing field {field}");
 
@@ -65,6 +65,8 @@ public class CorrelationJsonConsoleFormatterTests
             Assert.Equal(System.Text.Json.JsonValueKind.Null, root.GetProperty("eventId").ValueKind);
 
             Assert.Equal("test-service", root.GetProperty("service").GetString());
+            // category "PiAgent.Test" shortens to its last segment — the emitting worker's name.
+            Assert.Equal("Test", root.GetProperty("logger").GetString());
             Assert.Equal("hello", root.GetProperty("message").GetString());
 
             var timestamp = root.GetProperty("timestamp").GetString();

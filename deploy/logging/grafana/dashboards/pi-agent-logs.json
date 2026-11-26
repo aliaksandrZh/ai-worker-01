@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "refresh": "10s",
   "time": {
@@ -28,6 +28,29 @@
         "refresh": 2,
         "includeAll": true,
         "allValue": ".+",
+        "multi": true,
+        "sort": 1,
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0
+      },
+      {
+        "name": "logger",
+        "label": "Worker",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "definition": "label_values({logformat=\"json\"}, logger)",
+        "query": "label_values({logformat=\"json\"}, logger)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
         "multi": true,
         "sort": 1,
         "options": [],
@@ -63,7 +86,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service=~\"$service\", logformat=\"json\"} | json | line_format `{{.message}}`"
+          "expr": "{service=~\"$service\", logformat=\"json\"} | json | logger=~\"$logger\" | line_format `{{ if .logger }}[{{.logger}}] {{ end }}{{.message}}`"
         },
         {
           "refId": "B",
