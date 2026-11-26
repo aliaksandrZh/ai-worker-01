@@ -33,6 +33,17 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
 
     }
 
+    /// <summary>The repo-wide comments listing carries no `issue_number` field — only `issue_url`
+    /// (`.../issues/25`, or a PR comment's `.../pulls/12`); the routed number is the url's trailing
+    /// segment. An unresolvable url routes nowhere (0) and the worker skips it.</summary>
+    static long IssueNumberFromUrl(string? url)
+    {
+        if (url is null) return 0;
+        var segment = url.TrimEnd('/').Split('/').LastOrDefault();
+        return segment is not null && segment.All(char.IsDigit) && long.TryParse(segment, out var number)
+            ? number : 0;
+    }
+
     public async Task<IReadOnlyList<GithubComment>> ListCommentsSinceAsync(
         string owner, string repo, DateTime sinceUtc, CancellationToken ct)
     {
@@ -41,7 +52,7 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
         var array = await GetArrayAsync(url, ct);
         return array.Select(c => new GithubComment(
                 c.GetProperty("id").GetInt64(),
-                c.TryGetProperty("issue_number", out var issueNumber) ? issueNumber.GetInt64() : 0,
+                IssueNumberFromUrl(c.TryGetProperty("issue_url", out var issueUrl) ? issueUrl.GetString() : null),
                 c.TryGetProperty("user", out var user) && user.ValueKind is JsonValueKind.Object
                     ? user.GetProperty("login").GetString() ?? ""
                     : "ghost",
