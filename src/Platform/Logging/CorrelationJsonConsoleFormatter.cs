@@ -15,10 +15,11 @@ public sealed class PiJsonConsoleFormatterOptions : ConsoleFormatterOptions
 }
 
 /// <summary>
-/// Structured JSON log format: exactly the fields timestamp, level, service,
+/// Structured JSON log format: exactly the fields timestamp, level, service, logger,
 /// message, correlationId, repositoryId, workflowId, taskId, runId, eventId — absent identifiers
-/// are null, never omitted. Secrets never enter logs: only allow-listed state keys (source, action)
-/// are emitted from the log state; all other state/scopes are dropped.
+/// are null, never omitted. `logger` is the emitting category's short name (the worker/consumer
+/// a line came from — one app host runs many). Secrets never enter logs: only allow-listed state
+/// keys (source, action) are emitted from the log state; all other state/scopes are dropped.
 /// </summary>
 public sealed class CorrelationJsonConsoleFormatter(IOptions<PiJsonConsoleFormatterOptions> options)
     : ConsoleFormatter(FormatterName)
@@ -45,6 +46,13 @@ public sealed class CorrelationJsonConsoleFormatter(IOptions<PiJsonConsoleFormat
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    /// <summary>The category's short name: what emitted the line (e.g. WorkflowEventsConsumer).</summary>
+    private static string ShortCategory(string category)
+    {
+        var lastDot = category.LastIndexOf('.');
+        return lastDot < 0 ? category : category[(lastDot + 1)..];
+    }
+
     public override void Write<TState>(
         in LogEntry<TState> logEntry,
         IExternalScopeProvider? scopeProvider,
@@ -56,6 +64,7 @@ public sealed class CorrelationJsonConsoleFormatter(IOptions<PiJsonConsoleFormat
             ["timestamp"] = timestamp.ToString(_options.TimestampFormat, CultureInfo.InvariantCulture),
             ["level"] = logEntry.LogLevel.ToString(),
             ["service"] = _options.ServiceName,
+            ["logger"] = ShortCategory(logEntry.Category),
             ["message"] = logEntry.Formatter(logEntry.State, logEntry.Exception),
         };
 

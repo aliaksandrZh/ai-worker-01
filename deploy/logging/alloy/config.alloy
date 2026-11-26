@@ -5,8 +5,11 @@
 // Labels per stream: `service` = compose service name (non-compose containers, e.g. the
 // agent session containers carry only `container`), `logformat` = json | text. The log stack's
 // own containers are dropped so alloy→loki→grafana chatter never enters the log lake.
-// JSON pipelines run only for the services that emit JSON (the app host); plain-text emitters
-// (postgres) passes through raw — no JSONParserErr anywhere downstream.
+// JSON pipelines run only for the services that emit JSON (the app host); the other plain-text
+// emitters pass through raw — no JSONParserErr anywhere downstream. Postgres emits plain text
+// too, but its severity word is mapped to a real `level` so Grafana stops showing UNK.
+// `logger` (the emitting worker/consumer's short name) is promoted from the JSON body so the
+// dashboard can filter by it — one app host runs several workers behind one `service` label.
 
 discovery.docker "docker" {
   host             = "unix:///var/run/docker.sock"
@@ -53,7 +56,28 @@ loki.process "docker" {
     selector = "{logformat=\"json\"}"
 
     stage.json {
-      expressions = { level = "level" }
+      expressions = { level = "level", logger = "logger" }
+    }
+
+    stage.labels {
+      values = { level = "level", logger = "logger" }
+    }
+  }
+
+  // Postgres plain text: "2026-11-26 06:40:51.849 UTC [52] LOG:  ..." — map the severity
+  // word to a `level` label (LOG/INFO/NOTICE → info, WARNING → warn, DEBUG → debug,
+  // ERROR/FATAL/PANIC → error). Continuation lines (STATEMENT/DETAIL bodies) don't match
+  // and stay levelless; an empty value is simply not set as a label.
+  stage.match {
+    selector = "{service=\"postgres\"}"
+
+    stage.regex {
+      expression = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d+ \\S+ \\[\\d+\\] (?P<pg_level>LOG|INFO|NOTICE|WARNING|ERROR|FATAL|PANIC|DEBUG[1-5]?):"
+    }
+
+    stage.template {
+      source   = "level"
+      template = `{{ if .pg_level }}{{ if or (eq .pg_level "LOG") (eq .pg_level "INFO") (eq .pg_level "NOTICE") }}info{{ else if eq .pg_level "WARNING" }}warn{{ else if (eq (substr .pg_level 0 5) "DEBUG") }}debug{{ else }}error{{ end }}{{ end }}`
     }
 
     stage.labels {
