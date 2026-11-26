@@ -54,34 +54,8 @@ public sealed class GithubSyncWorker(
         var itemsNew = 0;
         await using var uow = await log.BeginTransactionAsync(ct);
 
-        // 1. comments → comment_changed + derived user_command
-        var commentsSince = await PollSinceAsync(repoKey, "comments", uow, ct);
-        var comments = (await github.ListCommentsSinceAsync(repo.Owner, repo.Name, commentsSince, ct))
-            .Where(c => c.ItemNumber > 0)
-            .ToList();
-        foreach (var comment in comments)
-        {
-            commentsNew++;
-            await log.AppendAsync(new CommentChanged(
-                repo.Owner, repo.Name, comment.ItemNumber, comment.Id, comment.Author, comment.Body,
-                Deleted: false), uow, ct);
-
-            if (comment.Author.Equals(config.BotLogin, StringComparison.Ordinal))
-                continue; // the bot's own comments are noise
-
-            if (CommandGrammar.Parse(comment.Body, config.BotLogin) is not { } parsed)
-                continue;
-
-            var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, comment.Author, ct) ?? "read";
-            await log.AppendAsync(new UserCommand(
-                parsed.Command, repo.Owner, repo.Name, comment.ItemNumber, comment.Id,
-                comment.Author, permission, parsed.TrailingContext), uow, ct);
-        }
-
-        if (comments.Count > 0)
-            await cursors.SetAsync(repoKey, "comments", Watermark(comments.Max(c => c.CreatedAtUtc)), uow, ct);
-
-        // 2. items → item_changed / labels_changed / item_closed; PRs → pr_updated + reviews
+        // 1. items first: their watermark is the comments' fresh-start anchor (below), and
+        // item_changed then precedes comment_changed on the same item stream.
         var itemsSince = await PollSinceAsync(repoKey, "items", uow, ct);
         var reviewsSince = await PollSinceAsync(repoKey, "reviews", uow, ct);
         var items = await github.ListItemsUpdatedSinceAsync(repo.Owner, repo.Name, itemsSince, ct);
@@ -120,6 +94,37 @@ public sealed class GithubSyncWorker(
         if (items.Count > 0)
             await cursors.SetAsync(repoKey, "items", Watermark(newestItemUtc), uow, ct);
 
+        // 2. comments → comment_changed + derived user_command. A fresh start anchors at the
+        // ITEM watermark, not at host start: an item's updated_at is the witness of activity
+        // typed while the plane was down (a comment bumps it), so a command given during
+        // downtime is caught on the first cycle back. A plane that was never down still
+        // anchors ≈NOW — the backlog is not replayed (the owner's no-history decision).
+        var commentsSince = await PollSinceAsync(repoKey, "comments", uow, ct, newestItemUtc);
+        var comments = (await github.ListCommentsSinceAsync(repo.Owner, repo.Name, commentsSince, ct))
+            .Where(c => c.ItemNumber > 0)
+            .ToList();
+        foreach (var comment in comments)
+        {
+            commentsNew++;
+            await log.AppendAsync(new CommentChanged(
+                repo.Owner, repo.Name, comment.ItemNumber, comment.Id, comment.Author, comment.Body,
+                Deleted: false), uow, ct);
+
+            if (comment.Author.Equals(config.BotLogin, StringComparison.Ordinal))
+                continue; // the bot's own comments are noise
+
+            if (CommandGrammar.Parse(comment.Body, config.BotLogin) is not { } parsed)
+                continue;
+
+            var permission = await github.GetPermissionAsync(repo.Owner, repo.Name, comment.Author, ct) ?? "read";
+            await log.AppendAsync(new UserCommand(
+                parsed.Command, repo.Owner, repo.Name, comment.ItemNumber, comment.Id,
+                comment.Author, permission, parsed.TrailingContext), uow, ct);
+        }
+
+        if (comments.Count > 0)
+            await cursors.SetAsync(repoKey, "comments", Watermark(comments.Max(c => c.CreatedAtUtc)), uow, ct);
+
         await uow.CommitAsync(ct);
         logger.LogInformation("sync {repo} cycle: {comments} comment(s), {items} item(s) since {since:O}",
             repoKey, commentsNew, itemsNew, itemsSince);
@@ -127,17 +132,19 @@ public sealed class GithubSyncWorker(
 
     /// <summary>
     /// The since-anchor of a stream: the stored watermark, rewound for clock skew. With no
-    /// cursor yet the sync starts from NOW — the backlog is not replayed, only live
+    /// cursor yet the stream starts from NOW — the backlog is not replayed, only live
     /// activity is reacted to (the orchestrator's history is the repo's, not the log's).
+    /// Comments pass an item-watermark anchor: an item updated during downtime is the
+    /// witness of a command typed while the plane was down (see the comments block).
     /// </summary>
-    private async Task<DateTime> PollSinceAsync(string repoKey, string stream, IEventTransaction uow, CancellationToken ct)
+    private async Task<DateTime> PollSinceAsync(string repoKey, string stream, IEventTransaction uow, CancellationToken ct, DateTime? anchor = null)
     {
         var raw = await cursors.GetAsync(repoKey, stream, ct);
         if (raw is null)
-            return _startedUtc; // first cycle: start at host start minus overlap — no history replay
+            return anchor ?? _startedUtc; // first cycle: no cursor — anchor (≈NOW for fresh repos)
 
         var watermark = new DateTime(long.Parse(raw), DateTimeKind.Utc);
-        return watermark - Overlap;
+        return watermark - Overlap; // clock-skew rewind
     }
 
     private static string Watermark(DateTime utc) => utc.Ticks.ToString();
