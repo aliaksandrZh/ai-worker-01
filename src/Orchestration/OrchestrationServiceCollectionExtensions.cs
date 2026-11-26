@@ -71,6 +71,8 @@ public static class OrchestrationServiceCollectionExtensions
 
         var root = new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .IgnoreUnmatchedProperties() // the Orchestrator reads a NARROW subset of system.yaml
+                                         // (github:, rate limits… belong to other modules)
             .Build()
             .Deserialize<SystemYamlRoot>(File.ReadAllText(path));
 
