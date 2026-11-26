@@ -48,19 +48,19 @@ public sealed class GithubSyncWorkerTests
         public string HeadSha { get; set; } = "abc";
         public string Permission { get; set; } = "write";
 
-        public Task<IReadOnlyList<GithubItem>> ListItemsUpdatedSinceAsync(
-            string owner, string repo, DateTime sinceUtc, CancellationToken ct) =>
+        public Task<IReadOnlyList<GithubItem>> ListItemsAsync(
+            string owner, string repo, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<GithubItem>>(Items);
 
-        public Task<IReadOnlyList<GithubComment>> ListCommentsSinceAsync(
-            string owner, string repo, DateTime sinceUtc, CancellationToken ct) =>
+        public Task<IReadOnlyList<GithubComment>> ListCommentsAsync(
+            string owner, string repo, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<GithubComment>>(Comments);
 
         public Task<string?> GetPullHeadShaAsync(string owner, string repo, long prNumber, CancellationToken ct) =>
             Task.FromResult<string?>(HeadSha);
 
-        public Task<IReadOnlyList<GithubReview>> ListReviewsSinceAsync(
-            string owner, string repo, long prNumber, DateTime sinceUtc, CancellationToken ct) =>
+        public Task<IReadOnlyList<GithubReview>> ListReviewsAsync(
+            string owner, string repo, long prNumber, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<GithubReview>>(Reviews);
 
         public Task<string?> GetPermissionAsync(string owner, string repo, string login, CancellationToken ct) =>
@@ -88,7 +88,7 @@ public sealed class GithubSyncWorkerTests
     public async Task A_command_comment_becomes_comment_changed_plus_user_command_with_permission()
     {
         var now = DateTime.UtcNow;
-        _api.Comments.Add(new GithubComment(10, 1, "alice", "@jsxhuz /code", now));
+        _api.Comments.Add(new GithubComment(10, 1, "alice", "@jsxhuz /code", now, now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
@@ -101,7 +101,7 @@ public sealed class GithubSyncWorkerTests
     [Fact]
     public async Task The_bots_own_comments_emit_no_commands()
     {
-        _api.Comments.Add(new GithubComment(10, 1, "jsxhuz", "work done", DateTime.UtcNow));
+        _api.Comments.Add(new GithubComment(10, 1, "jsxhuz", "work done", DateTime.UtcNow, DateTime.UtcNow));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
@@ -129,7 +129,7 @@ public sealed class GithubSyncWorkerTests
     public async Task Cursors_advance_so_the_next_cycle_re_emits_nothing()
     {
         var now = DateTime.UtcNow;
-        _api.Comments.Add(new GithubComment(10, 1, "alice", "@jsxhuz /code", now));
+        _api.Comments.Add(new GithubComment(10, 1, "alice", "@jsxhuz /code", now, now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
         var afterFirst = _log.Appended.Count;

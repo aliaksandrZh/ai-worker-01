@@ -8,11 +8,10 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public async Task<IReadOnlyList<GithubItem>> ListItemsUpdatedSinceAsync(
-        string owner, string repo, DateTime sinceUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<GithubItem>> ListItemsAsync(
+        string owner, string repo, CancellationToken ct)
     {
-        var since = sinceUtc == DateTime.MinValue ? "" : $"&since={Uri.EscapeDataString(sinceUtc.ToString("O"))}";
-        var url = $"repos/{owner}/{repo}/issues?state=all&per_page=100&sort=updated&direction=asc" + since;
+        var url = $"repos/{owner}/{repo}/issues?state=all&per_page=100&sort=updated&direction=desc";
         var array = await GetArrayAsync(url, ct);
         var items = new List<GithubItem>();
         foreach (var item in array)
@@ -44,11 +43,10 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
             ? number : 0;
     }
 
-    public async Task<IReadOnlyList<GithubComment>> ListCommentsSinceAsync(
-        string owner, string repo, DateTime sinceUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<GithubComment>> ListCommentsAsync(
+        string owner, string repo, CancellationToken ct)
     {
-        var since = sinceUtc == DateTime.MinValue ? "" : $"&since={Uri.EscapeDataString(sinceUtc.ToString("O"))}";
-        var url = $"repos/{owner}/{repo}/issues/comments?per_page=100&sort=created&direction=asc" + since;
+        var url = $"repos/{owner}/{repo}/issues/comments?per_page=100&sort=updated&direction=desc";
         var array = await GetArrayAsync(url, ct);
         return array.Select(c => new GithubComment(
                 c.GetProperty("id").GetInt64(),
@@ -57,7 +55,8 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
                     ? user.GetProperty("login").GetString() ?? ""
                     : "ghost",
                 c.GetProperty("body").GetString() ?? "",
-                c.TryGetProperty("created_at", out var createdAt) ? createdAt.GetDateTime() : DateTime.UtcNow))
+                c.TryGetProperty("created_at", out var createdAt) ? createdAt.GetDateTime() : DateTime.UtcNow,
+                c.TryGetProperty("updated_at", out var updatedAt) ? updatedAt.GetDateTime() : DateTime.UtcNow))
             .ToList();
     }
 
@@ -70,13 +69,12 @@ public sealed class RestGithubReadApi(HttpClient httpClient) : IGithubReadApi
         return json.RootElement.GetProperty("head").GetProperty("sha").GetString();
     }
 
-    public async Task<IReadOnlyList<GithubReview>> ListReviewsSinceAsync(
-        string owner, string repo, long prNumber, DateTime sinceUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<GithubReview>> ListReviewsAsync(
+        string owner, string repo, long prNumber, CancellationToken ct)
     {
         var array = await GetArrayAsync($"repos/{owner}/{repo}/pulls/{prNumber}/reviews?per_page=100", ct);
         return array
-            .Where(r => r.TryGetProperty("submitted_at", out var submitted) && submitted.ValueKind == JsonValueKind.String
-                        && submitted.GetDateTime() > sinceUtc)
+            .Where(r => r.TryGetProperty("submitted_at", out var submitted) && submitted.ValueKind == JsonValueKind.String)
             .Select(r => new GithubReview(
                 r.GetProperty("id").GetInt64(),
                 prNumber,

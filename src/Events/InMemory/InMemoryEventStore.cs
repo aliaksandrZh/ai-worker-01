@@ -11,6 +11,7 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
 {
     private readonly object _lock = new();
     private readonly List<Row> _events = [];
+    private readonly HashSet<string> _eventIds = [];
     private readonly List<DeadLetterRow> _deadLetters = [];
     private long _nextId = 1;
 
@@ -38,6 +39,9 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
     {
         lock (_lock)
         {
+            // parity with the Postgres (type, eventId) unique index: content-fingerprinted
+            // events (the sync's overlap window re-fetches by design) are dropped silently
+            if (!RememberEventId(evt)) return Task.FromResult(_nextId - 1);
             var id = _nextId++;
             _events.Add(new Row(id, evt));
             return Task.FromResult(id);
@@ -56,6 +60,19 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
 
     public Task<IEventTransaction> BeginTransactionAsync(CancellationToken ct) =>
         Task.FromResult<IEventTransaction>(new InMemoryTransaction());
+
+    /// <summary>Extracts the event's optional content fingerprint (the eventId) and records it;
+    /// returns false when an identical fingerprint already exists. Events without a
+    /// fingerprint are always appended (their dedup is the emitter's contract).</summary>
+    private bool RememberEventId<TEvent>(TEvent evt) where TEvent : IEvent
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(EventRegistry.Serialize(evt));
+        if (!doc.RootElement.TryGetProperty("eventId", out var property)
+            || property.ValueKind is not System.Text.Json.JsonValueKind.String)
+            return true;
+        var eventId = property.GetString()!;
+        return _eventIds.Add(eventId);
+    }
 
     private sealed class InMemoryTransaction : IEventTransaction
     {
@@ -77,6 +94,7 @@ public sealed class InMemoryEventStore : IEventLog, IEventQueue
             {
                 lock (owner._lock)
                 {
+                    if (!owner.RememberEventId(evt)) continue;
                     var id = owner._nextId++;
                     owner._events.Add(new Row(id, evt));
                 }
