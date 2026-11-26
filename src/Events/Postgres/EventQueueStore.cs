@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -98,10 +99,20 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
     private static async Task<long> AppendCoreAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, CancellationToken ct)
     {
-        // Callback dedup (docs/run-worker.md): spool redelivery repeats the deterministic
-        // eventId verbatim — ON CONFLICT DO NOTHING keeps the row unique and the existing
-        // row's id is returned, so no consumer sees a duplicate.
-        var eventId = (evt as AgentCallback)?.EventId;
+        // Deterministic-eventId dedup: the Runtime Bridge's spool redelivery repeats the
+        // callback's eventId verbatim, and the sync's overlap window repeats the
+        // content-fingerprinted eventIds of its records (docs/github-sync.md). ON CONFLICT DO
+        // NOTHING keeps the row unique and the existing row's id is returned, so no consumer
+        // sees a duplicate. The eventId is read from the serialized payload — the same key the
+        // unique index uses — so every event type that carries one participates.
+        var payload = EventRegistry.Serialize(evt);
+        string? eventId;
+        using (var doc = JsonDocument.Parse(payload))
+            eventId = doc.RootElement.ValueKind is JsonValueKind.Object
+                      && doc.RootElement.TryGetProperty("eventId", out var property)
+                      && property.ValueKind is JsonValueKind.String
+                ? property.GetString()
+                : null;
         const string sql = """
             WITH inserted AS (
                 INSERT INTO events (stream, type, payload)
@@ -121,7 +132,7 @@ public sealed class EventQueueStore : IEventLog, IEventQueue
         await using var cmd = new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("stream", evt.StreamKey);
         cmd.Parameters.AddWithValue("type", EventRegistry.TypeName(evt.GetType()));
-        cmd.Parameters.AddWithValue("payload", EventRegistry.Serialize(evt));
+        cmd.Parameters.AddWithValue("payload", payload);
         cmd.Parameters.AddWithValue("event_id", (object?)eventId ?? DBNull.Value);
         var id = await cmd.ExecuteScalarAsync(ct);
         return id is long value ? value : throw new InvalidOperationException(
