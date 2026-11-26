@@ -13,6 +13,7 @@ namespace PiAgent.Orchestration;
 public sealed class Orchestrator(
     IOrchestrationState state,
     IEventLog log,
+    IEventReader eventReader,
     IOptions<OrchestrationOptions> options,
     ILogger<Orchestrator> logger)
 {
@@ -216,13 +217,29 @@ public sealed class Orchestrator(
                 break;
 
             case TaskTypes.Review:
-                // review passed — the outcome (approve) is published, testing follows
-                await log.AppendAsync(new PublishReview(
-                    workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
-                    Verdict: "APPROVE", Body: "Review passed", evt.RunId,
-                    IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
-                await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
-                await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
+                // One verdict, one fixing round per reviewer run (incident 2026-11-26 Case A,
+                // Block 3.3b): the run's recorded ReviewCommentsSubmitted events ARE the
+                // aggregate — read here, never stored anywhere else. No comments → approve.
+                var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(evt.RunId, ct);
+                if (submitted.SelectMany(e => e.Comments).ToList() is { Count: > 0 } comments)
+                {
+                    await log.AppendAsync(new PublishReview(
+                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
+                        Verdict: "REQUEST_CHANGES",
+                        Body: string.Join("\n\n", comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
+                        evt.RunId, IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await StartFixingRoundAsync(workflow, null, uow, ct);
+                }
+                else
+                {
+                    // review passed — the outcome (approve) is published, testing follows
+                    await log.AppendAsync(new PublishReview(
+                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
+                        Verdict: "APPROVE", Body: "Review passed", evt.RunId,
+                        IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
+                    await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
+                }
                 break;
 
             case TaskTypes.TestDesign:
@@ -317,21 +334,17 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, CancellationToken ct)
-    {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
-        if (workflow is not null)
-        {
-            await log.AppendAsync(new PublishReview(
-                evt.Owner, evt.Repo, evt.PrNumber, Verdict: "REQUEST_CHANGES",
-                Body: string.Join("\n\n", evt.Comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
-                evt.RunId, IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
-            await StartFixingRoundAsync(workflow, null, uow, ct);
-        }
-
-        await uow.Events.CommitAsync(ct);
-    }
+    /// <summary>
+    /// Deliberately a no-op beyond the ack the delivery loop performs on return: one fixing
+    /// round per REVIEWER RUN, not per comment event (docs/incident-2026-11-26-follow-ups.md
+    /// Block 3.3b). The comments stay only in these already-recorded events; their aggregate
+    /// is acted on once, at run completion (HandleRunCompletedAsync, case Review). Publishing
+    /// or starting a fixing round here would revive the dual-verdict problem (per-event
+    /// REQUEST_CHANGES vs the run's verdict) and spawn parallel implement chains. The type
+    /// stays in OrchestratorAgent's Consumes list so the event is delivered and acked.
+    /// </summary>
+    public Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, CancellationToken ct) =>
+        Task.CompletedTask;
 
     public async Task HandleBugReportedAsync(BugReported evt, CancellationToken ct)
     {
