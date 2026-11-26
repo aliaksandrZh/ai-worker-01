@@ -16,7 +16,6 @@ public sealed class GithubSyncWorker(
     ICursorStore cursors,
     ILogger<GithubSyncWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan Overlap = TimeSpan.FromMinutes(5);
     private DateTime _startedUtc;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -131,11 +130,16 @@ public sealed class GithubSyncWorker(
     }
 
     /// <summary>
-    /// The since-anchor of a stream: the stored watermark, rewound for clock skew. With no
-    /// cursor yet the stream starts from NOW — the backlog is not replayed, only live
-    /// activity is reacted to (the orchestrator's history is the repo's, not the log's).
-    /// Comments pass an item-watermark anchor: an item updated during downtime is the
-    /// witness of a command typed while the plane was down (see the comments block).
+    /// The since-anchor of a stream: the stored watermark advanced by one tick. GitHub's
+    /// `since` is INCLUSIVE, so rewinding below the watermark (the old clock-skew overlap)
+    /// re-fetched the same comment/item/review every cycle forever — the watermark is the
+    /// max-seen field value, and the rewind put it back into the query window. One tick
+    /// steps past it: exclusive progression, no refetch. Known trade-off: a second item
+    /// created/updated in the SAME wall-clock second as the watermark would be skipped —
+    /// acceptable for a single-author command flow. With no cursor yet the stream anchors:
+    /// comments at the item watermark (an item updated during downtime witnesses a command
+    /// typed while the plane was down), everything else at host start (≈NOW — the backlog
+    /// is not replayed; the orchestrator's history is the repo's, not the log's).
     /// </summary>
     private async Task<DateTime> PollSinceAsync(string repoKey, string stream, IEventTransaction uow, CancellationToken ct, DateTime? anchor = null)
     {
@@ -144,7 +148,7 @@ public sealed class GithubSyncWorker(
             return anchor ?? _startedUtc; // first cycle: no cursor — anchor (≈NOW for fresh repos)
 
         var watermark = new DateTime(long.Parse(raw), DateTimeKind.Utc);
-        return watermark - Overlap; // clock-skew rewind
+        return watermark.AddTicks(1);
     }
 
     private static string Watermark(DateTime utc) => utc.Ticks.ToString();

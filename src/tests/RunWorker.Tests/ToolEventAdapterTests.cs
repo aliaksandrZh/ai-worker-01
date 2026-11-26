@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using PiAgent.Events;
 using PiAgent.Events.InMemory;
 using PiAgent.RunWorker;
@@ -59,7 +60,7 @@ public sealed class ToolEventAdapterTests
         var saved = Assert.Single(_log.Appended.OfType<PlanSaved>());
         Assert.Equal(new ItemRef("o", "r", 1).Key, saved.StreamKey); // the root item's stream, not Global
         Assert.Equal(2, saved.WorkflowId);
-        Assert.Equal(["read", "write"], saved.Steps);
+        Assert.True(JsonElement.DeepEquals(JsonSerializer.SerializeToElement(new[] { "read", "write" }), saved.Steps ?? default));
     }
 
     [Fact]

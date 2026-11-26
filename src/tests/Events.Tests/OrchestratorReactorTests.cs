@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PiAgent.Events;
@@ -6,6 +7,7 @@ using PiAgent.Orchestration;
 using PiAgent.Orchestration.State;
 using PiAgent.Orchestration.State.InMemory;
 using Xunit;
+
 
 namespace PiAgent.Events.Tests;
 
@@ -182,7 +184,7 @@ public sealed class OrchestratorReactorTests
     {
         var workflow = await RunCommandAsync(PlanCommand());
         await _orchestrator.HandlePlanSavedAsync(new PlanSaved(
-            "o", "r", 1, workflow.Id, Goals: "g", Scope: "s", AcceptanceCriteria: "a", Steps: ["step"]), CancellationToken.None);
+            "o", "r", 1, workflow.Id, Goals: "g", Scope: "s", AcceptanceCriteria: "a", Steps: JsonSerializer.SerializeToElement(new[] { "step" })), CancellationToken.None);
 
         Assert.Contains(_log.Appended, e =>
             e is PublishComment { Kind: PublishCommentKind.Plan, Body: var b } && b.Contains("Acceptance criteria"));

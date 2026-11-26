@@ -22,13 +22,18 @@ public sealed record ToolCallback(string EventId, string ToolName, JsonElement A
 /// The agent's tool manifest is not dragged into .NET: the map is contract-checked
 /// against tools.md by a test. report_completion is deliberately absent — the Bridge
 /// renders its observed call as the terminal `completed` callback (the settle mandate),
-/// so the route tool handler never sees it.
+/// so the route tool handler must not map it (the consumer skips the settle marker).
 /// </summary>
 public static class ToolEventAdapter
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public static bool IsCommunicationTool(string toolName) => Map.ContainsKey(Normalize(toolName));
+
+    /// <summary>report_completion rides the route too (the Bridge's vocabulary includes it) but
+    /// carries no payload event: its observation is the terminal-completion mandate. The
+    /// consumer skips it instead of failing the Run as unknown.</summary>
+    public static bool IsSettleMarker(string toolName) => Normalize(toolName) is "report_completion";
 
     /// <summary>The Bridge normalizes the call name to its last `__` segment; the seatbelt repeats it.</summary>
     public static string Normalize(string toolName)
@@ -80,8 +85,9 @@ public static class ToolEventAdapter
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException)
         {
+            // the cause travels to a user-facing comment — never leak raw framework text
             throw new ToolCallbackException(
-                $"tool {callback.ToolName}: payload does not match the contract shape: {ex.Message}");
+                $"tool {callback.ToolName}: payload does not match the contract shape (field '{(ex is JsonException j ? j.Path : callback.ToolName)}')");
         }
     }
 

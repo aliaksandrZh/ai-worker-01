@@ -224,6 +224,13 @@ public sealed class RunWorkerConsumer(
             return;
         }
 
+        if (ToolEventAdapter.IsSettleMarker(tool.ToolName))
+        {
+            // its observation settles the run via the terminal `completed` callback — no event here
+            logger.LogDebug("run {run} settle marker observed (report_completion)", callback.RunId);
+            return;
+        }
+
         try
         {
             var evt = ToolEventAdapter.Translate(tool, entry);
