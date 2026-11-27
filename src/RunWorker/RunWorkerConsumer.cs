@@ -16,6 +16,7 @@ public sealed class RunWorkerConsumer(
     RunRegistry registry,
     IContainerProvisioner docker,
     IEventLog log,
+    IEventReader reader,
     IOptions<RunWorkerOptions> options,
     ILogger<RunWorkerConsumer> logger) : IEventConsumer
 {
@@ -191,7 +192,15 @@ public sealed class RunWorkerConsumer(
     {
         var entry = registry.Get(callback.RunId);
         if (entry is null)
-            return; // the watchdog already settled this run
+        {
+            // the watchdog already settled this run — expected for non-terminal callbacks, but a
+            // terminal one arriving after the settle is exactly the race the watchdog must not win
+            if (callback.Route is "completed" or "failed" or "cancelled")
+                logger.LogWarning(
+                    "run {run}: terminal {route} callback arrived after the run settled — skipped",
+                    callback.RunId, callback.Route);
+            return;
+        }
 
         // instance-scoped callback guard (docs/run-session-id.md "Instance-scoped callbacks"):
         // a callback settles this run only if it names the run's own session. Anything else —
@@ -272,9 +281,22 @@ public sealed class RunWorkerConsumer(
         // anything else propagates: the EventLog's redelivery → dead-letter covers it
     }
 
-    /// <summary>Called by the watchdog when a container exits without a terminal callback.</summary>
-    internal async Task SettleOnWatchdogAsync(RunEntry entry, string cause, CancellationToken ct) =>
+    /// <summary>Called by the watchdog when a container exits without a terminal callback.
+    /// A terminal callback that is already recorded but not yet consumed means the consumer is
+    /// about to settle the run normally — failing here would race it (run 52's false RunFailed).</summary>
+    internal async Task SettleOnWatchdogAsync(RunEntry entry, string cause, CancellationToken ct)
+    {
+        var callbacks = await reader.ReadByRunIdAsync<AgentCallback>(entry.RunId, ct);
+        if (callbacks.Any(c => c.Route is "completed" or "failed" or "cancelled"))
+        {
+            logger.LogInformation(
+                "run {run}: container exited but a terminal callback is already recorded — not failing",
+                entry.RunId);
+            return;
+        }
+
         await SettleAsync(entry, "failed", cause, null, null, ct);
+    }
 
     private async Task SettleAsync(RunEntry entry, string status, string? cause, string? branch, string? commitSha, CancellationToken ct)
     {

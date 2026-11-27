@@ -32,7 +32,7 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
         _fx = fx;
         _log = fx.Log;
         _consumer = new RunWorkerConsumer(
-            _registry, _docker, _log,
+            _registry, _docker, _log, _log,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = Path.GetTempPath() }),
             NullLogger<RunWorkerConsumer>.Instance);
     }

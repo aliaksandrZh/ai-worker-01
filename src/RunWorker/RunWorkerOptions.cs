@@ -51,8 +51,8 @@ public sealed class RunWorkerOptions
     /// <summary>Watchdog ceiling per Run (seconds).</summary>
     public int RunTimeoutSeconds { get; set; } = 4 * 3600;
 
-    /// <summary>How long a stop waits before the container is killed (seconds).</summary>
-    public int StopGraceSeconds { get; set; } = 30;
+    /// <summary>How long after a container's exit the watchdog still expects the terminal callback (seconds).</summary>
+    public int StopGraceSeconds { get; set; } = 60;
 
     /// <summary>The uid agent containers run as — the per-Run tree's writable dirs are chowned to it.</summary>
     public long ContainerUserId { get; set; } = 1000;

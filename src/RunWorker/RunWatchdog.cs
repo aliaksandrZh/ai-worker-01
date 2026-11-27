@@ -58,8 +58,11 @@ public sealed class RunWatchdog(
 
             if (snapshot.State == "removed" || snapshot.State is "exited" or "dead")
             {
-                // the Bridge may still be spooling its terminal callback — give it the grace period
-                if (DateTime.UtcNow - entry.StartedUtc > grace)
+                // the Bridge may still be delivering the terminal callback — grace runs from the
+                // container's actual exit, not the run's start (a run longer than the grace period
+                // would otherwise be failed on the first sweep after exit, run 52's race)
+                var reference = snapshot.FinishedAtUtc ?? entry.StartedUtc;
+                if (DateTime.UtcNow - reference > grace)
                 {
                     await consumer.SettleOnWatchdogAsync(entry,
                         $"container {snapshot.State} without a terminal callback", ct);
