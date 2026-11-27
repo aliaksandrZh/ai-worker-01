@@ -224,8 +224,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
             new ReviewDecisionRequested("o", "r", 1, RunId: 1, Issue: "i", Context: "c", Options: []),
             "decision needed", CancellationToken.None);
         await _orchestrator.HandlePrUpdatedAsync(new PrUpdated("o", "r", 1, HeadSha: "cafe01"), CancellationToken.None);
-        await _orchestrator.HandleUserReplyAsync(
-            new UserReply("o", "r", 1, CommentId: 500, Author: "u", Text: "go on"), CancellationToken.None);
+        await _orchestrator.HandleUserCommandAsync(Command("/resume"), CancellationToken.None);
 
         var secondRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
         Assert.Equal("cafe01", secondRun.Input.ReviewHeadSha);
@@ -385,7 +384,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_silently_parked_task_still_resumes_via_a_reply()
+    public async Task A_silently_parked_task_resumes_via_the_resume_command()
     {
         var workflow = await RunCommandAsync(Command());
         var cause = "image missing for profile coder: agent-coder:latest";
@@ -394,8 +393,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         await _orchestrator.HandleRunFailedAsync(new RunFailed(3, 1, "o", "r", 1, Cause: cause), CancellationToken.None);
         var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
-        await _orchestrator.HandleUserReplyAsync(
-            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "image built"), CancellationToken.None);
+        await _orchestrator.HandleUserCommandAsync(Command("/resume"), CancellationToken.None);
 
         var active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(active).Status);
@@ -486,7 +484,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_parked_task_still_resumes_via_a_reply()
+    public async Task A_parked_task_resumes_via_the_resume_command()
     {
         var workflow = await RunCommandAsync(Command());
         await _orchestrator.HandleEscalationAsync(
@@ -494,15 +492,14 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
             "blocked", CancellationToken.None);
         var runsBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
-        await _orchestrator.HandleUserReplyAsync(
-            new UserReply("o", "r", 1, CommentId: 200, Author: "u", Text: "here"), CancellationToken.None);
+        await _orchestrator.HandleUserCommandAsync(Command("/resume"), CancellationToken.None);
 
         Assert.Equal(runsBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
         Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Status);
     }
 
     [Fact]
-    public async Task Escalation_parks_and_a_reply_resumes_with_a_fresh_run()
+    public async Task Escalation_parks_and_the_resume_command_resumes_with_a_fresh_run()
     {
         var workflow = await RunCommandAsync(Command());
         var runCountBefore = (await AppendedAsync()).OfType<RunScheduled>().Count();
@@ -515,11 +512,22 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
         Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
         Assert.Contains(await AppendedAsync(), e => e is RunStopRequested);
 
-        await _orchestrator.HandleUserReplyAsync(new UserReply("o", "r", 1, 200, "u", "here"), CancellationToken.None);
+        await _orchestrator.HandleUserCommandAsync(Command("/resume"), CancellationToken.None);
 
         active = await ActiveTaskAsync(workflow.Id);
         Assert.Equal(TaskStatuses.Queued, Assert.IsType<TaskRow>(active).Status);
         Assert.Equal(runCountBefore + 1, (await AppendedAsync()).OfType<RunScheduled>().Count());
+    }
+
+    [Fact]
+    public async Task Resume_without_a_parked_task_is_rejected()
+    {
+        await RunCommandAsync(Command()); // the Implement task is processing
+
+        await _orchestrator.HandleUserCommandAsync(Command("/resume"), CancellationToken.None);
+
+        Assert.Contains(await AppendedAsync(), e =>
+            e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("nothing to resume"));
     }
 
     [Fact]

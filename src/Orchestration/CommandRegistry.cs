@@ -24,6 +24,13 @@ public static class CommandRegistry
         return CommandToTaskType.TryGetValue(name, out var type) ? type : null;
     }
 
+    public static bool IsResume(string command)
+    {
+        var name = command.Trim().ToLowerInvariant();
+        if (name.StartsWith('/')) name = name[1..];
+        return name is "resume";
+    }
+
     /// <summary>Agent profile per flow stage (the container's agent).</summary>
     public static string ProfileFor(string taskType) => taskType switch
     {

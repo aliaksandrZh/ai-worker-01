@@ -76,7 +76,7 @@ queued ──► processing ──► succeeded        (report_completion receiv
                  │────► failed             (Run failed without one, or all retries spent)
                  │────► cancelled          (user_cancel, claim-time recheck)
                  └────► waiting_for_human  (escalation, decision, manual acceptance)
-waiting_for_human ──► queued               (user_reply / user_decision with fresh context)
+waiting_for_human ──► queued               (@bot /resume / user_decision with fresh context)
 failed ──► queued                          (auto-retry, new Run, attempt counter on the Task)
 ```
 
@@ -123,7 +123,9 @@ Applied while processing events, never as flow nodes (table mirrored in
 - **Run fails** → policy: a new Run of the same Task, or the Task parks in
   `waiting_for_human` with a user notification.
 - **Task fails** (retries spent) → the single slot frees; the Workflow stays `active`
-  and the failure is notified. A new command (or retry) starts fresh work.
+  and the failure is notified. A new command starts fresh work; a parked task
+  re-enters the queue only on `@bot /resume` — a plain comment never does (a bot's own
+  failure notification must not wake the parked Task).
 - **`user_cancel`** → the running Run is stopped (`running → stopping → cancelled`),
   the Task turns `cancelled`, the Workflow turns `cancelled`; all related scheduled
   work is dropped (ref: `StopCommandHandler.cs`).

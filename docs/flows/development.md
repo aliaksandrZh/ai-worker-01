@@ -40,7 +40,7 @@ flowchart TB
         V6 --> V7["Orchestrator → User: requests decision / information / access"]
         V7 --> V8["Waiting for Human"]
         V8 --> V9["User provides response"]
-        V9 --> V10["user_reply event → Orchestrator:<br/>new Coder Run with the response"]
+        V9 --> V10["@bot /resume command → Orchestrator:<br/>new Coder Run"]
         V10 --> V1
 
         V4 -- "No" --> V11{"Work completed?"}

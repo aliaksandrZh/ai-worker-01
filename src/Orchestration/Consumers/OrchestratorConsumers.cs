@@ -4,13 +4,12 @@ using PiAgent.Orchestration.State;
 
 namespace PiAgent.Orchestration.Consumers;
 
-/// <summary>Commands, replies, decisions, cancellation, closure — the admission side.</summary>
+/// <summary>Commands, decisions, cancellation, closure — the admission side.</summary>
 public sealed class OrchestratorInbound(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
-        typeof(UserCommand), typeof(UserReply), typeof(UserDecision), typeof(UserCancel),
-        typeof(ItemClosed), typeof(CommentChanged),
+        typeof(UserCommand), typeof(UserDecision), typeof(UserCancel), typeof(ItemClosed),
     ];
 
     public string Name => "OrchestratorInbound";
@@ -18,11 +17,9 @@ public sealed class OrchestratorInbound(Orchestrator core) : IEventConsumer
     public Task HandleAsync(IEvent evt, int attempt, CancellationToken ct) => evt switch
     {
         UserCommand command => core.HandleUserCommandAsync(command, ct),
-        UserReply reply => core.HandleUserReplyAsync(reply, ct),
         UserDecision decision => core.HandleUserDecisionAsync(decision, ct),
         UserCancel cancel => core.HandleUserCancelAsync(cancel, ct),
         ItemClosed closed => core.HandleItemClosedAsync(closed, ct),
-        CommentChanged comment => core.HandleCommentChangedAsync(comment, ct),
         _ => Task.CompletedTask,
     };
 }

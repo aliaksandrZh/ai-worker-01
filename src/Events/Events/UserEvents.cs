@@ -20,18 +20,6 @@ public sealed record UserCommand(
     public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
-/// <summary>The User answered a clarification, blocker, or env-issue request.</summary>
-public sealed record UserReply(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long CommentId,
-    string Author,
-    string Text) : IEvent
-{
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
-}
-
 /// <summary>
 /// A decision: plan approved / changes requested; review escalation resolved; test
 /// results accepted / bug found / does not meet requirements.

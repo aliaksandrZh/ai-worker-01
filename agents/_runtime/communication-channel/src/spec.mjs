@@ -31,7 +31,7 @@ export const TOOLS = {
     kind: "escalation",
     description:
       "Request missing information from the User via the Orchestrator. The flow PARKS until a " +
-      "user_reply event resumes it as a NEW Run. This call publishes nothing to GitHub — " +
+      "@bot /resume command resumes it as a NEW Run. This call publishes nothing to GitHub — " +
       "publication is the Orchestrator's act.",
     fields: [
       { name: "question", type: "string", required: true },
@@ -42,7 +42,7 @@ export const TOOLS = {
     kind: "escalation",
     description:
       "Report a blocker you cannot resolve independently: cause, context and possible solutions. " +
-      "The flow PARKS until a user_reply event resumes it as a NEW Run. This call publishes " +
+      "The flow PARKS until an @bot /resume command resumes it as a NEW Run. This call publishes " +
       "nothing to GitHub — publication is the Orchestrator's act.",
     fields: [
       { name: "description", type: "string", required: true },
@@ -99,7 +99,7 @@ export const TOOLS = {
     kind: "escalation",
     description:
       "Report an environment or access problem blocking test execution: what happened and what is " +
-      "needed. The flow PARKS until a user_reply event (after the User restores the environment) " +
+      "needed. The flow PARKS until an @bot /resume command (after the User restores the environment) " +
       "resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the " +
       "Orchestrator's act.",
     fields: [

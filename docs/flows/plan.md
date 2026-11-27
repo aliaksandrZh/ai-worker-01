@@ -13,7 +13,7 @@ flowchart TD
     C1 --> C2["Orchestrator → User:<br/>request clarification"]
     C2 --> W1["Waiting for Human"]
     W1 --> U1["User provides clarification"]
-    U1 --> C3["user_reply event → Orchestrator:<br/>new Planner Run with the response"]
+    U1 --> C3["@bot /resume command → Orchestrator:<br/>new Planner Run"]
     C3 --> P1
 
     P2 --> PUB["Orchestrator: publishes the plan<br/>as a comment in the issue"]

@@ -16,13 +16,13 @@ flowchart TB
         T6["Orchestrator → User:<br/>requests environment recovery / access"]
         T7["Waiting for Human"]
         T8["User: restores environment / provides access"]
-        T9["user_reply event → Orchestrator:<br/>new Testing Run"]
+        T9["@bot /resume command → Orchestrator:<br/>new Testing Run"]
 
         T10["Testing Agent → Orchestrator:<br/>requests clarification of acceptance criteria<br/><br/>request_criteria_clarification"]
         T11["Orchestrator → User:<br/>requests clarification of expected behavior"]
         T12["Waiting for Human"]
         T13["User: clarifies expected behavior"]
-        T14["user_reply event → Orchestrator:<br/>passes clarification to the Planner"]
+        T14["@bot /resume command → Orchestrator:<br/>passes the flow back to the Planner"]
 
         T1 --> T2
         T2 -- "No" --> T3

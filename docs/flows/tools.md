@@ -11,8 +11,8 @@
 > tools below.
 >
 > **The reverse direction is not a tool.** The Orchestrator reacts to events
-> ([events.md](events.md)): a user reply or decision resumes the flow as a **new Run**
-> with freshly assembled context — there is no "receive" tool.
+> ([events.md](events.md)): an `@bot /resume` command or a decision resumes the flow as
+> a **new Run** with freshly assembled context — there is no "receive" tool.
 >
 > **Publication rule.** Agents never write to GitHub directly. Every artifact an agent
 > produces (plan, review comments, bug reports, the Pull Request itself) is published
@@ -101,14 +101,14 @@
 
 ### `request_clarification` [explicit]
 - **Purpose:** Request missing information from the User via the Orchestrator. Blocks the
-  agent until a `user_reply` event resumes the flow as a new Run.
+  agent until an `@bot /resume` command resumes the flow as a new Run.
 - **Signature:** `request_clarification(question, context?) → void`
 - **Used by:** Planner
 - **Stage:** Plan — not enough information (C1)
 
 ### `report_blocker` [explicit]
 - **Purpose:** Report a blocker that the Coder cannot resolve independently: cause,
-  context, and possible solutions. Resumes on a `user_reply` event.
+  context, and possible solutions. Resumes on an `@bot /resume` command.
 - **Signature:** `report_blocker(description, cause, options[]) → void`
 - **Used by:** Coder
 - **Stage:** Development — blocker encountered (V4–V10)
@@ -137,7 +137,7 @@
 
 ### `report_env_issue`
 - **Purpose:** Report an environment or access problem blocking test execution. Testing
-  resumes on a `user_reply` event after the User restores the environment.
+  resumes on an `@bot /resume` command after the User restores the environment.
 - **Signature:** `report_env_issue(description, whatIsNeeded) → void`
 - **Used by:** Testing Agent
 - **Stage:** Testing — environment/access failure (T5)
