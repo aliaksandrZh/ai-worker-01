@@ -21,11 +21,24 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     private readonly PostgresFixture _fx;
     private readonly EventQueueStore _log;
 
-    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task InitializeAsync()
+    {
+        return ResetAsync();
+    }
+
     public Task DisposeAsync() => Task.CompletedTask;
 
+    /// <summary>Clean slate plus the durable-registry schema and the FK parent for run 7 —
+    /// provisioning now inserts a run_container row.</summary>
+    private async Task ResetAsync()
+    {
+        await _fx.ResetCoreAsync();
+        await RunContainerSchema.EnsureAsync(_fx);
+        await RunContainerSchema.ResetAsync(_fx);
+    }
+
     private readonly RecordingProvisioner _docker = new();
-    private readonly RunRegistry _registry = new();
+    private readonly RunRegistryStore _store;
     private readonly string _workspace;
     private readonly RunWorkerConsumer _consumer;
 
@@ -34,8 +47,9 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         _fx = fx;
         _log = fx.Log;
         _workspace = Path.Combine(Path.GetTempPath(), "pi-runworker-tests", Guid.NewGuid().ToString("N"));
+        _store = RunContainerSchema.Store(fx);
         _consumer = new RunWorkerConsumer(
-            _registry, _docker, _log, _log,
+            _docker, _log, _log, _store,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = _workspace }),
             NullLogger<RunWorkerConsumer>.Instance);
     }
@@ -44,7 +58,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     private RunWorkerConsumer ConsumerWith(
         string? secretsDir = null, string? secretsHostDir = null,
         string? workspaceHostRoot = null, string? stubBehavior = null) =>
-        new(_registry, _docker, _log, _log,
+        new(_docker, _log, _log, _store,
             Options.Create(new RunWorkerOptions
             {
                 WorkspaceRoot = _workspace,
@@ -63,6 +77,10 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     private async Task StartRunAsync(RunInput input, long runId = 7,
         IReadOnlyList<string>? secrets = null)
     {
+        // the durable registry reads the run facts back from orch_run — seed it with the
+        // same input the Orchestrator would have written at run_scheduled
+        await RunContainerSchema.SeedRunAsync(_fx, runId, taskId: 3,
+            input: JsonSerializer.Serialize(input, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input, secrets),
             attempt: 1, CancellationToken.None);
     }
@@ -133,7 +151,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         Assert.Contains("secret_missing", failed.Cause);
         Assert.Contains("github-write-pat.txt", failed.Cause);
         Assert.Null(_docker.LastPlan);      // fail closed: nothing was provisioned
-        Assert.Null(_registry.Get(7));      // nothing in flight
+        Assert.Empty(await _store.LoadUnfinishedAsync()); // nothing in flight
     }
 
     [Fact]
@@ -147,7 +165,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         Assert.StartsWith("image missing for profile testing:", failed.Cause);
         Assert.Contains("agent-testing:latest", failed.Cause);
         Assert.Null(_docker.LastPlan);              // no container was created
-        Assert.Null(_registry.Get(7));              // nothing left in flight
+        Assert.Empty(await _store.LoadUnfinishedAsync());           // nothing left in flight
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunProcessing);
         Assert.Equal("agent-testing:latest", _docker.LastCheckedImage);
     }
@@ -222,7 +240,8 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
 
         Assert.DoesNotContain(await _fx.AppendedAsync(),
             e => e is RunCompleted or RunCancelled or RunFailed); // nothing settled
-        Assert.NotNull(_registry.Get(7)); // the run stays in flight
+        var unfinished = await _store.LoadUnfinishedAsync();
+        Assert.Contains(unfinished, e => e.RunId == 7); // the run stays in flight
     }
 
     [Fact]
@@ -250,7 +269,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             attempt: 1, CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunCompleted);
-        Assert.NotNull(_registry.Get(7));
+        Assert.Contains(await _store.LoadUnfinishedAsync(), e => e.RunId == 7);
     }
 
     [Fact]

@@ -20,9 +20,12 @@ builder.Services.AddEventLog(builder.Configuration);
 builder.Services.AddOrchestrator(builder.Configuration);
 builder.Services.AddPublisher(builder.Configuration);
 builder.Services.AddGithubSync(builder.Configuration);
-builder.Services.AddRunWorker(builder.Configuration);
 
 builder.Services.AddHostedService<SchemaBootstrap>();
+
+// the worker's hosted services (recovery, consumer, watchdog) must start AFTER SchemaBootstrap:
+// provisioning inserts into run_container (FK → orch_run) and reads the run input pointers
+builder.Services.AddRunWorker(builder.Configuration);
 
 var app = builder.Build();
 app.MapPiEndpoints();
@@ -33,13 +36,15 @@ app.Run();
 internal sealed class SchemaBootstrap(
     EventQueueStore eventStore,
     PostgresOrchestrationState orchestration,
-    PostgresPublishMarkerStore markers) : IHostedService
+    PostgresPublishMarkerStore markers,
+    RunRegistryStore runRegistry) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await eventStore.EnsureSchemaAsync(cancellationToken);
         await orchestration.EnsureSchemaAsync(cancellationToken);
         await markers.EnsureSchemaAsync(cancellationToken);
+        await runRegistry.EnsureSchemaAsync(cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

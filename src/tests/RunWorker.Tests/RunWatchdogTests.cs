@@ -20,38 +20,54 @@ public sealed class RunWatchdogTests : IAsyncLifetime
     private readonly PostgresFixture _fx;
     private readonly EventQueueStore _log;
     private readonly RecordingProvisioner _docker = new();
-    private readonly RunRegistry _registry = new();
+    private readonly RunRegistryStore _store;
     private readonly RunWorkerConsumer _consumer;
     private readonly RunWatchdog _watchdog;
 
-    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task InitializeAsync()
+    {
+        return ResetAsync();
+    }
+
     public Task DisposeAsync() => Task.CompletedTask;
+
+    private async Task ResetAsync()
+    {
+        await _fx.ResetCoreAsync();
+        await RunContainerSchema.EnsureAsync(_fx);
+        await RunContainerSchema.ResetAsync(_fx);
+    }
 
     public RunWatchdogTests(PostgresFixture fx)
     {
         _fx = fx;
         _log = fx.Log;
+        _store = RunContainerSchema.Store(fx);
         _consumer = new RunWorkerConsumer(
-            _registry, _docker, _log, _log,
+            _docker, _log, _log, _store,
             Options.Create(new RunWorkerOptions
             {
                 WorkspaceRoot = Path.Combine(Path.GetTempPath(), "pi-watchdog-tests", Guid.NewGuid().ToString("N")),
             }),
             NullLogger<RunWorkerConsumer>.Instance);
         _watchdog = new RunWatchdog(
-            _registry, _docker, _consumer,
+            _store, _docker, _consumer,
             Options.Create(new RunWorkerOptions()),
             NullLogger<RunWatchdog>.Instance);
     }
 
-    private async Task StartRunAsync(long runId = 7) =>
-        await _consumer.HandleAsync(
-            new RunScheduled(runId, TaskId: 3, WorkflowId: 2,
-                new RunInput(Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: null,
-                    Command: "plan", PlanCommentId: 0, Profile: "planner",
-                    AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null),
-                Secrets: null),
+    private async Task StartRunAsync(long runId = 7)
+    {
+        var input = new RunInput(Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: null,
+            Command: "plan", PlanCommentId: 0, Profile: "planner",
+            AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
+        // the registry reads run facts back from orch_run — seed it with the same input
+        await RunContainerSchema.SeedRunAsync(_fx, runId, taskId: 3,
+            input: System.Text.Json.JsonSerializer.Serialize(input,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input, null),
             attempt: 1, CancellationToken.None);
+    }
 
     [Fact]
     public async Task A_recently_exited_container_is_not_failed_within_the_grace()
@@ -62,7 +78,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
         await _watchdog.SweepAsync(CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunFailed);
-        Assert.NotNull(_registry.Get(7)); // left for the consumer to settle normally
+        Assert.Contains(await _store.LoadUnfinishedAsync(), e => e.RunId == 7); // left for the consumer to settle normally
     }
 
     [Fact]
@@ -75,7 +91,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
 
         var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("without a terminal callback", failed.Cause);
-        Assert.Null(_registry.Get(7));
+        Assert.Empty(await _store.LoadUnfinishedAsync());
     }
 
     [Fact]
@@ -90,7 +106,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
         await _watchdog.SweepAsync(CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunFailed);
-        Assert.NotNull(_registry.Get(7));
+        Assert.Contains(await _store.LoadUnfinishedAsync(), e => e.RunId == 7);
     }
 
     [Fact]

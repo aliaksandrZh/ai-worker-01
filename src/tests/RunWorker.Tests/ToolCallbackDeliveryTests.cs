@@ -26,8 +26,20 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
         _store = fx.Log;
     }
 
-    public Task InitializeAsync() => _fx.ResetCoreAsync();
+    public Task InitializeAsync()
+    {
+        return ResetAsync();
+    }
+
     public Task DisposeAsync() => Task.CompletedTask;
+
+    private async Task ResetAsync()
+    {
+        await _fx.ResetCoreAsync();
+        await RunContainerSchema.EnsureAsync(_fx);
+        await RunContainerSchema.ResetAsync(_fx);
+        await RunContainerSchema.SeedRunAsync(_fx, runId: 7, taskId: 3);
+    }
 
     private static AgentCallback ToolCallback(string eventId) => new(
         RunId: 7, Route: "tool",
@@ -62,15 +74,21 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
     {
         var id = await _store.AppendAsync(ToolCallback("7-tool-1"), CancellationToken.None);
 
-        var registry = new RunRegistry();
-        registry.Add(new RunEntry(7, TaskId: 3, WorkflowId: 2,
-            Input: new RunInput("o", "r", 1, PrNumber: 1, Command: "plan", PlanCommentId: 0,
-                Profile: "planner", AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null),
-            ContainerName: "pi-session-7", Token: "t", StartedUtc: DateTime.UtcNow));
+        var store = RunContainerSchema.Store(_fx);
+        var input = new RunInput("o", "r", 1, PrNumber: 1, Command: "plan", PlanCommentId: 0,
+            Profile: "planner", AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
+        // the registry reads run facts back from orch_run — seed it with the same input
+        await RunContainerSchema.SeedRunAsync(_fx, runId: 7, taskId: 3,
+            input: System.Text.Json.JsonSerializer.Serialize(input,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        await store.InsertAsync(new RunEntry(7, TaskId: 3, WorkflowId: 2,
+            Input: input,
+            ContainerName: "pi-session-7", Token: "t", StartedUtc: DateTime.UtcNow),
+            containerId: "pi-session-7", CancellationToken.None);
 
         var consumer = new RunWorkerConsumer(
-            registry, new RecordingProvisioner(),
-            new ThrowingAppendLog(_store), _store,
+            new RecordingProvisioner(),
+            new ThrowingAppendLog(_store), _store, store,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = Path.GetTempPath() }),
             NullLogger<RunWorkerConsumer>.Instance);
 

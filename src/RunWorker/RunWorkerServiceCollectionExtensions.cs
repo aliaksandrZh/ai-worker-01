@@ -21,8 +21,9 @@ public static class RunWorkerServiceCollectionExtensions
     {
         services.AddOptions<RunWorkerOptions>().Bind(configuration.GetSection(RunWorkerOptions.SectionName));
         services.AddDockerSocket(configuration);
-        services.AddSingleton<RunRegistry>();
         services.AddSingleton<IContainerProvisioner, DockerProvisioningClient>();
+        // the durable run registry; requires AddEventLog on the host (shares its connection)
+        services.AddSingleton<RunRegistryStore>();
 
         if (configuration.GetValue<bool?>($"Workers:RunWorker:Enabled") is not true)
             return services;
@@ -37,9 +38,9 @@ public static class RunWorkerServiceCollectionExtensions
     /// <summary>Maps the Bridge egress endpoint on the app host.</summary>
     public static WebApplication MapRunWorker(this WebApplication app)
     {
-        var registry = app.Services.GetRequiredService<RunRegistry>();
+        var store = app.Services.GetRequiredService<RunRegistryStore>();
         var log = app.Services.GetRequiredService<IEventLog>();
-        return app.MapAgentEventsEndpoint(registry, log);
+        return app.MapAgentEventsEndpoint(store, log);
     }
 }
 

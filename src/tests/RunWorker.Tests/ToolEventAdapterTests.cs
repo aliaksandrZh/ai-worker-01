@@ -20,21 +20,33 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     private readonly PostgresFixture _fx;
     private readonly EventQueueStore _log;
 
-    public Task InitializeAsync() => _fx.ResetCoreAsync();
-    public Task DisposeAsync() => Task.CompletedTask;
-
     private readonly RecordingProvisioner _docker = new();
-    private readonly RunRegistry _registry = new();
+    private readonly RunRegistryStore _store;
     private readonly RunWorkerConsumer _consumer;
 
     public ToolEventAdapterTests(PostgresFixture fx)
     {
         _fx = fx;
         _log = fx.Log;
+        _store = RunContainerSchema.Store(fx);
         _consumer = new RunWorkerConsumer(
-            _registry, _docker, _log, _log,
+            _docker, _log, _log, _store,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = Path.GetTempPath() }),
             NullLogger<RunWorkerConsumer>.Instance);
+    }
+
+    public Task InitializeAsync()
+    {
+        return ResetAsync();
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    private async Task ResetAsync()
+    {
+        await _fx.ResetCoreAsync();
+        await RunContainerSchema.EnsureAsync(_fx);
+        await RunContainerSchema.ResetAsync(_fx);
     }
 
     private static RunEntry Entry() => new(
@@ -45,7 +57,14 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
             AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: "cafe01"),
         ContainerName: "pi-session-7", Token: "tok", StartedUtc: DateTime.UtcNow);
 
-    private void RegisterRun() => _registry.Add(Entry());
+    private async Task RegisterRun()
+    {
+        // the registry reads run facts back from orch_run — seed it with the same input
+        await RunContainerSchema.SeedRunAsync(_fx, Entry().RunId, Entry().TaskId,
+            input: System.Text.Json.JsonSerializer.Serialize(Entry().Input,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        await _store.InsertAsync(Entry(), Entry().ContainerName);
+    }
 
     private async Task DeliverToolAsync(string toolName, string argsJson)
     {
@@ -61,7 +80,7 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     [Fact]
     public async Task Save_plan_callback_becomes_PlanSaved_on_the_item_stream_with_steps()
     {
-        RegisterRun();
+        await RegisterRun();
         await DeliverToolAsync("save_plan",
             """{"goals":"g","scope":"s","acceptanceCriteria":"a","steps":["read","write"]}""");
 
@@ -76,7 +95,7 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     {
         Assert.Contains(nameof(PrDescriptionSubmitted), EventRegistry.Types.Keys); // in the dictionary
 
-        RegisterRun();
+        await RegisterRun();
         await DeliverToolAsync("submit_pr_description",
             """{"title":"Add thing","body":"does the thing"}""");
 
@@ -109,7 +128,7 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     public async Task Communication_tool_callbacks_translate_to_their_typed_events(
         string toolName, string argsJson, string expectedEventType)
     {
-        RegisterRun();
+        await RegisterRun();
         await DeliverToolAsync(toolName, argsJson);
 
         var typed = (await _fx.AppendedAsync()).Where(e => e is not AgentCallback).ToList();
@@ -153,32 +172,32 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     [Fact]
     public async Task Unknown_tool_name_fails_the_run_with_the_cause()
     {
-        RegisterRun();
+        await RegisterRun();
         await DeliverToolAsync("bash", "{\"command\":\"ls\"}");
 
         var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("unknown communication tool", failed.Cause);
         Assert.Equal(new ItemRef("o", "r", 1).Key, failed.StreamKey);
         Assert.Equal(1, _docker.StopCalls); // the dead run's container is settled
-        Assert.Null(_registry.Get(7));      // nothing left in flight
+        Assert.Empty(await _store.LoadUnfinishedAsync()); // nothing left in flight
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is not (AgentCallback or RunFailed));
     }
 
     [Fact]
     public async Task Payload_not_matching_the_contract_shape_fails_the_run()
     {
-        RegisterRun();
+        await RegisterRun();
         await DeliverToolAsync("save_plan", "{\"goals\":\"g\"}"); // scope/criteria/steps missing
 
         var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("save_plan", failed.Cause);
-        Assert.Null(_registry.Get(7));
+        Assert.Empty(await _store.LoadUnfinishedAsync());
     }
 
     [Fact]
     public async Task Callback_without_a_body_is_deterministic_garbage()
     {
-        RegisterRun();
+        await RegisterRun();
         await _consumer.HandleAsync(new AgentCallback(7, "tool", Body: null),
             attempt: 1, CancellationToken.None);
 

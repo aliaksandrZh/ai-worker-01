@@ -13,10 +13,10 @@ namespace PiAgent.RunWorker;
 /// never lost — the Bridge spools them; the watchdog covers crashes and timeouts.
 /// </summary>
 public sealed class RunWorkerConsumer(
-    RunRegistry registry,
     IContainerProvisioner docker,
     IEventLog log,
     IEventReader reader,
+    RunRegistryStore registryStore,
     IOptions<RunWorkerOptions> options,
     ILogger<RunWorkerConsumer> logger) : IEventConsumer
 {
@@ -140,7 +140,6 @@ public sealed class RunWorkerConsumer(
             return;
         }
 
-        registry.Add(entry);
         try
         {
             var created = await docker.CreateContainerAsync(plan, ct)
@@ -151,8 +150,9 @@ public sealed class RunWorkerConsumer(
             await log.AppendAsync(new RunProcessing(
                 scheduled.RunId, scheduled.TaskId,
                 scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber), ct);
-            logger.LogInformation("run {run} started in {container}", scheduled.RunId, containerName);
-        }
+          
+            await registryStore.InsertAsync(entry, created, ct);
+            logger.LogInformation("run {run} started in {container}", scheduled.RunId, containerName);        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await log.AppendAsync(new RunFailed(
@@ -174,7 +174,7 @@ public sealed class RunWorkerConsumer(
 
     private async Task StopRunAsync(RunStopRequested stop, CancellationToken ct)
     {
-        var entry = registry.Get(stop.RunId);
+        var entry = await registryStore.GetAsync(stop.RunId, ct);
         if (entry is null)
             return; // nothing in flight
 
@@ -182,7 +182,7 @@ public sealed class RunWorkerConsumer(
         // container removal is disabled by owner decision: the pi-session container and its
         // logs stay on the host for diagnosability (docker logs pi-session-<runId>)
         // await docker.RemoveAsync(entry.ContainerName, ct);
-        registry.Remove(stop.RunId);
+        await registryStore.MarkFinishedAsync(stop.RunId, ct);
         await log.AppendAsync(new RunCancelled(
             stop.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber), ct);
         logger.LogInformation("run {run} stopped on request", stop.RunId);
@@ -190,7 +190,7 @@ public sealed class RunWorkerConsumer(
 
     private async Task HandleCallbackAsync(AgentCallback callback, CancellationToken ct)
     {
-        var entry = registry.Get(callback.RunId);
+        var entry = await registryStore.GetAsync(callback.RunId, ct);
         if (entry is null)
         {
             // the watchdog already settled this run — expected for non-terminal callbacks, but a
@@ -300,7 +300,7 @@ public sealed class RunWorkerConsumer(
 
     private async Task SettleAsync(RunEntry entry, string status, string? cause, string? branch, string? commitSha, CancellationToken ct)
     {
-        registry.Remove(entry.RunId);
+        await registryStore.MarkFinishedAsync(entry.RunId, ct);
         await docker.StopAsync(entry.ContainerName, ct);
         // container removal is disabled by owner decision: the pi-session container and its
         // logs stay on the host for diagnosability (docker logs pi-session-<runId>)

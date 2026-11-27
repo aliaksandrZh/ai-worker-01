@@ -22,10 +22,15 @@ public sealed class PostgresFixture : IAsyncLifetime
     public EventQueueStore Log { get; private set; } = null!;
     public NpgsqlDataSource DataSource { get; private set; } = null!;
 
+    /// <summary>The container's real connection string — NpgsqlDataSource.ConnectionString
+    /// masks the password, so stores building their own data source take this one.</summary>
+    public string ConnectionString { get; private set; } = null!;
+
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
-        DataSource = NpgsqlDataSource.Create(_container.GetConnectionString());
+        ConnectionString = _container.GetConnectionString();
+        DataSource = NpgsqlDataSource.Create(ConnectionString);
         Log = new EventQueueStore(
             Options.Create(new EventLogOptions { ConnectionString = _container.GetConnectionString() }),
             NullLogger<EventQueueStore>.Instance);
