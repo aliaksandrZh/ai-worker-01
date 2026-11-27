@@ -164,7 +164,11 @@ public sealed class Orchestrator(
             await uow.Events.CommitAsync(ct);
             return;
         }
-        await state.SetTaskStatusAsync(task.Id, TaskStatuses.Succeeded, uow, ct);
+        // the implement Task is NOT completed here: its result is the published PR —
+        // PrPublished completes it and chains the review (HandlePrPublishedAsync), so the
+        // review starts only on the published PR with the real number and this pin
+        if (task.Type is not TaskTypes.Implement)
+            await state.SetTaskStatusAsync(task.Id, TaskStatuses.Succeeded, uow, ct);
 
         // the Coder run's git facts are the Workflow's pointers: the agent branch a fix
         // round continues and the head commit a review round pins (docs/run-worker.md)
@@ -198,7 +202,6 @@ public sealed class Orchestrator(
                     Title: $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
                     Body: $"Workflow {workflow.Id}, task {task.Id}", PrNumber: null), uow.Events, ct);
                 await MoveBoardAsync(workflow, "review", evt.RunId, uow, ct);
-                await CreateNextTaskAsync(workflow, task, TaskTypes.Review, uow, ct);
                 break;
 
             case TaskTypes.Review:
@@ -418,15 +421,53 @@ public sealed class Orchestrator(
 
     /// <summary>
     /// The Publisher's PR create/update succeeded — record the real PR number the review
-    /// runs post to (docs/incident-2026-11-26-review-item27.md, Case B). No workflow
-    /// (PR published for an unknown item) — nothing to pin.
+    /// runs post to (docs/incident-2026-11-26-review-item27.md, Case B), complete the
+    /// implement Task whose result the PR is, and chain the review task. No workflow
+    /// (PR published for an unknown item) or no implement Task in flight — a replayed or
+    /// foreign PrPublished: a no-op.
     /// </summary>
     public async Task HandlePrPublishedAsync(PrPublished evt, CancellationToken ct)
     {
         await using var uow = await state.Factory.BeginAsync(ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null)
+        {
             await state.SetWorkflowHeadPrNumberAsync(workflow.Id, evt.PrNumber, uow, ct);
+            // fresh pointers for the run input: the snapshot predates the PR number just
+            // committed — the same staleness that left the review pin null (the TODO bug)
+            workflow = await state.GetWorkflowAsync(workflow.Id, uow, ct);
+
+            // the review chains here, never at run completion: by now the run's git facts
+            // (the pinned head) and the real PR number are both committed, so the review
+            // run's input carries them without guessing
+            if (await state.GetActiveTaskAsync(workflow.Id, uow, ct)
+                is { Status: TaskStatuses.Processing, Type: TaskTypes.Implement } implement)
+            {
+                await state.SetTaskStatusAsync(implement.Id, TaskStatuses.Succeeded, uow, ct);
+                await CreateNextTaskAsync(workflow, implement, TaskTypes.Review, uow, ct);
+            }
+        }
+
+        await uow.Events.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// A PR publication died permanently (PublishFailed, announced by the Publisher
+    /// before dead-lettering): the implement Task waiting on that PR parks for a human —
+    /// processing must never be a terminal state. A fresh command (or /resume) restarts.
+    /// </summary>
+    public async Task HandlePublishFailedAsync(PublishFailed evt, CancellationToken ct)
+    {
+        await using var uow = await state.Factory.BeginAsync(ct);
+        var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
+        if (workflow is not null
+            && await state.GetActiveTaskAsync(workflow.Id, uow, ct)
+                is { Status: TaskStatuses.Processing, Type: TaskTypes.Implement } implement)
+        {
+            await state.SetTaskStatusAsync(implement.Id, TaskStatuses.WaitingForHuman, uow, ct);
+            await NotifyAsync(workflow,
+                $"PR publication failed permanently: {evt.Cause} — the implement task needs a human", uow, ct);
+        }
 
         await uow.Events.CommitAsync(ct);
     }
