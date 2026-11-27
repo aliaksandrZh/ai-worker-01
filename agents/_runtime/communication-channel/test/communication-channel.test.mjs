@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -165,6 +165,21 @@ test("escalation tools hint: parked until a user event resumes a NEW Run; still 
     assert.match(completion.result.content[0].text, /run can settle/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("every agent manifest lists only tools declared in the catalog (agents/_runtime/tools.json)", () => {
+  const catalog = JSON.parse(readFileSync(new URL("../../tools.json", import.meta.url), "utf8"));
+  const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
+  const manifests = readdirSync(join(repoRoot, "agents"), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("_"))
+    .map((d) => join(repoRoot, "agents", d.name, "agent.json"))
+    .filter(existsSync);
+  assert.ok(manifests.length >= 4); // planner, coder, reviewer, stub
+  for (const path of manifests) {
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    for (const name of manifest.tools ?? [])
+      assert.ok(catalog.tools[name], `${path}: '${name}' is not declared in the catalog`);
   }
 });
 

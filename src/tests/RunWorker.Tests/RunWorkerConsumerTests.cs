@@ -35,7 +35,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         _log = fx.Log;
         _workspace = Path.Combine(Path.GetTempPath(), "pi-runworker-tests", Guid.NewGuid().ToString("N"));
         _consumer = new RunWorkerConsumer(
-            _registry, _docker, _log,
+            _registry, _docker, _log, _log,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = _workspace }),
             NullLogger<RunWorkerConsumer>.Instance);
     }
@@ -44,7 +44,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     private RunWorkerConsumer ConsumerWith(
         string? secretsDir = null, string? secretsHostDir = null,
         string? workspaceHostRoot = null, string? stubBehavior = null) =>
-        new(_registry, _docker, _log,
+        new(_registry, _docker, _log, _log,
             Options.Create(new RunWorkerOptions
             {
                 WorkspaceRoot = _workspace,

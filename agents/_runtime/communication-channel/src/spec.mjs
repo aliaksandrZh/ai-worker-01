@@ -1,159 +1,40 @@
 /**
- * The communication-tool vocabulary (docs/flows/tools.md): the Runtime Bridge's `tool`-route
- * contract. A change to this set or a signature is a bridge contract bump (bridge.json stamp).
+ * The adapter over the ONE tool catalog (agents/_runtime/tools.json): the communication-tool
+ * vocabulary (docs/flows/tools.md §2) — the Runtime Bridge's `tool`-route contract and this
+ * server's registration set.
  *
- * Payload validation is zod, built from the field spec below so the zod schema and the
+ * Payload validation is zod, built from the field spec of the catalog so the zod schema and the
  * JSON Schema advertised in tools/list can never drift. Only schema (types/required) is
  * validated here — business rules live on the Orchestrator side. Signatures are hand-synced
  * with the payload records of the .NET adapter (ticket 03); the contract tests catch drift.
  */
 import { z } from "zod";
+import catalogJson from "../../tools.json" with { type: "json" };
+
+export const CATALOG = Object.freeze(catalogJson.tools);
 
 // Kinds drive the success hint:
 //  - escalation: the flow parks until a user event resumes it as a NEW Run
 //  - completion: report_completion — the run can settle
 //  - ack:        short acknowledgment
-export const TOOLS = {
-  save_plan: {
-    kind: "ack",
-    description:
-      "Save or update the plan: goals, scope, acceptance criteria and steps. The Orchestrator " +
-      "publishes the plan as a comment in the issue and runs plan approval. This call publishes " +
-      "nothing to GitHub — publication is the Orchestrator's act.",
-    fields: [
-      { name: "goals", type: "string", required: true },
-      { name: "scope", type: "string", required: true },
-      { name: "acceptanceCriteria", type: "string", required: true },
-      { name: "steps", type: "string[]", required: true },
-    ],
-  },
-  request_clarification: {
-    kind: "escalation",
-    description:
-      "Request missing information from the User via the Orchestrator. The flow PARKS until a " +
-      "@bot /resume command resumes it as a NEW Run. This call publishes nothing to GitHub — " +
-      "publication is the Orchestrator's act.",
-    fields: [
-      { name: "question", type: "string", required: true },
-      { name: "context", type: "string", required: false },
-    ],
-  },
-  report_blocker: {
-    kind: "escalation",
-    description:
-      "Report a blocker you cannot resolve independently: cause, context and possible solutions. " +
-      "The flow PARKS until an @bot /resume command resumes it as a NEW Run. This call publishes " +
-      "nothing to GitHub — publication is the Orchestrator's act.",
-    fields: [
-      { name: "description", type: "string", required: true },
-      { name: "cause", type: "string", required: true },
-      { name: "options", type: "string[]", required: true },
-    ],
-  },
-  submit_review_comments: {
-    kind: "ack",
-    description:
-      "Submit review findings. The Orchestrator publishes them to the PR and assigns the fixes to " +
-      "the Coder (a fixing Run). This call publishes nothing to GitHub — publication is the " +
-      "Orchestrator's act.",
-    fields: [
-      {
-        name: "comments",
-        type: "object[]",
-        required: true,
-        fields: [
-          { name: "file", type: "string", required: true },
-          { name: "line", type: "number", required: true },
-          { name: "severity", type: "string", required: true },
-          { name: "message", type: "string", required: true },
-        ],
-      },
-    ],
-  },
-  request_decision: {
-    kind: "escalation",
-    description:
-      "Escalate a review issue that cannot be resolved without user input: issue, context and " +
-      "possible solutions. The flow PARKS until a user_decision event resumes it as a NEW Run. " +
-      "This call publishes nothing to GitHub — publication is the Orchestrator's act.",
-    fields: [
-      { name: "issue", type: "string", required: true },
-      { name: "context", type: "string", required: true },
-      { name: "options", type: "string[]", required: true },
-    ],
-  },
-  report_bug: {
-    kind: "ack",
-    description:
-      "Report a product bug, test-code issue or missing tests: summary, reproduction steps and " +
-      "test results. The Orchestrator publishes the report as a comment in the issue and returns " +
-      "control to Development. This call publishes nothing to GitHub — publication is the " +
-      "Orchestrator's act.",
-    fields: [
-      { name: "summary", type: "string", required: true },
-      { name: "reproSteps", type: "string[]", required: true },
-      { name: "testResults", type: "string", required: true },
-    ],
-  },
-  report_env_issue: {
-    kind: "escalation",
-    description:
-      "Report an environment or access problem blocking test execution: what happened and what is " +
-      "needed. The flow PARKS until an @bot /resume command (after the User restores the environment) " +
-      "resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the " +
-      "Orchestrator's act.",
-    fields: [
-      { name: "description", type: "string", required: true },
-      { name: "whatIsNeeded", type: "string", required: true },
-    ],
-  },
-  request_criteria_clarification: {
-    kind: "escalation",
-    description:
-      "Request clarification of acceptance criteria / expected behavior; the Orchestrator routes " +
-      "the answer to the Planner. The flow PARKS until a user event resumes it as a NEW Run. " +
-      "This call publishes nothing to GitHub — publication is the Orchestrator's act.",
-    fields: [
-      { name: "question", type: "string", required: true },
-      { name: "context", type: "string", required: false },
-    ],
-  },
-  report_tests_passed: {
-    kind: "ack",
-    description:
-      "Report that all tests passed, with a summary; the Orchestrator then checks the manual " +
-      "acceptance policy. This call publishes nothing to GitHub — publication is the " +
-      "Orchestrator's act.",
-    fields: [{ name: "summary", type: "string", required: true }],
-  },
-  report_completion: {
-    kind: "completion",
-    description:
-      "Explicit, parameterless signal that your work is done — the MANDATORY final call of every " +
-      "Run; a Run that ends without it has failed. Payloads travel through the specific tools; " +
-      "this call only marks the end. It publishes nothing to GitHub — publication is the " +
-      "Orchestrator's act.",
-    fields: [],
-  },
-  submit_pr_description: {
-    kind: "ack",
-    description:
-      "Carry your result to the Orchestrator: the title and body of the Pull Request the " +
-      "Orchestrator creates after report_completion. You never write to GitHub. This call " +
-      "publishes nothing — publication is the Orchestrator's act.",
-    fields: [
-      { name: "title", type: "string", required: true },
-      { name: "body", type: "string", required: true },
-    ],
-  },
-};
+const communicationEntries = Object.entries(CATALOG)
+  .filter(([, spec]) => spec.carrier === "communication");
+
+export const TOOLS = Object.freeze(Object.fromEntries(
+  communicationEntries.map(([name, spec]) => [name, { ...spec, name }]),
+));
 
 export const VOCABULARY = Object.freeze(new Set(Object.keys(TOOLS)));
+
+/** The catalog's carrier classification: only the `communication` carrier's calls ride the
+ * route-tool wire and register here; `github-mcp` entries are the GitHub MCP server's context
+ * tools, `none` is declared-but-unimplemented (web_search). */
+export const isCommunicationTool = (name) => CATALOG[name]?.carrier === "communication";
 
 // The escalation pattern of docs/flows/tools.md: what happened, context, options -> the flow
 // resumes on a user event as a NEW Run.
 export const ESCALATION_TOOLS = Object.freeze(
-  new Set(Object.entries(TOOLS).filter(([, t]) => t.kind === "escalation").map(([n]) => n)),
+  new Set(communicationEntries.filter(([, t]) => t.kind === "escalation").map(([n]) => n)),
 );
 
 const SCALARS = {

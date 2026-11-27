@@ -108,8 +108,7 @@ task build-agents          # agent-runtime-base:latest, then agent-<profile>:lat
 
 The shared runtime is assembled once as `agent-runtime-base` from `agents/_runtime/`
 (pinned pi + bridge + the communication-channel bundle built at image build + the ONE
-entry; OCI labels `pi.version` / `bridge.contract` stamped from `bridge.json` — a
-disagreement fails the build). Each profile is a slim layer over it: `agent.json` + the
+entry; OCI label `pi.version`). Each profile is a slim layer over it: `agent.json` + the
 baked prompt (+ the .NET SDK for the coder); `mcp.json` is generated from the manifest at
 build. The stub agent (also on the base) drives the failure/human levers
 (`RUN_WORKER_STUB_BEHAVIOR`: `succeed | no_completion | escalate | bad_payload | …`).

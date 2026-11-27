@@ -70,7 +70,7 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
 
         var consumer = new RunWorkerConsumer(
             registry, new RecordingProvisioner(),
-            new ThrowingAppendLog(_store),
+            new ThrowingAppendLog(_store), _store,
             Options.Create(new RunWorkerOptions { WorkspaceRoot = Path.GetTempPath() }),
             NullLogger<RunWorkerConsumer>.Instance);
 

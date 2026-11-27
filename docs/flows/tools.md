@@ -1,10 +1,11 @@
 # Agent Tools
 
 > **Status: contract.** The tool set, signatures and availability below are fixed for the
-> flows rework. The eleven communication tool names are the Runtime Bridge's `tool`-route
-> vocabulary (see [../run-worker.md](../run-worker.md)): the Bridge observes each completed
-> call and turns it into exactly one event — a change to the set or a signature is a bridge
-> contract bump (`bridge.json` stamp).
+> flows rework. The machine declaration of the catalog (names, carriers, field specs) is
+> [../agents/_runtime/tools.json](../agents/_runtime/tools.json); the eleven communication
+> tool names are the Runtime Bridge's `tool`-route vocabulary (see
+> [../run-worker.md](../run-worker.md)): the Bridge observes each completed
+> call and turns it into exactly one event.
 >
 > Agents communicate with the Orchestrator / User **only through tools**. Every
 > "Agent → Orchestrator/User" arrow in a flow diagram maps to one of the communication

@@ -11,6 +11,9 @@ public sealed class RecordingProvisioner : IContainerProvisioner
     public int ImageChecks { get; private set; }
     public string? LastCheckedImage { get; private set; }
 
+    /// <summary>The snapshot the next GetContainerStateAsync returns (watchdog tests).</summary>
+    public ContainerSnapshot NextSnapshot { get; set; } = new("running", null, null, null);
+
     public Task<string?> CreateContainerAsync(ContainerPlan plan, CancellationToken cancellationToken)
     {
         LastPlan = plan;
@@ -21,7 +24,7 @@ public sealed class RecordingProvisioner : IContainerProvisioner
         Task.FromResult(true);
 
     public Task<ContainerSnapshot> GetContainerStateAsync(string container, CancellationToken cancellationToken) =>
-        Task.FromResult(new ContainerSnapshot("running", null, null));
+        Task.FromResult(NextSnapshot);
 
     public Task<bool> StopAsync(string container, CancellationToken cancellationToken)
     {

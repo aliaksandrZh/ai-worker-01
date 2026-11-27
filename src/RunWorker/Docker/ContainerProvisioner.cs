@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -23,8 +24,9 @@ public sealed record ContainerPlan(
     string Network);
 
 /// <summary>Observed container snapshot (observed states are written back from observations);
-/// exit facts come from `inspect`'s State block.</summary>
-public sealed record ContainerSnapshot(string State, long? ExitCode, bool? OomKilled);
+/// exit facts come from `inspect`'s State block. FinishedAtUtc is null while the container has
+/// never run (and for `removed`, where inspect has nothing to answer).</summary>
+public sealed record ContainerSnapshot(string State, long? ExitCode, bool? OomKilled, DateTime? FinishedAtUtc = null);
 
 /// <summary>
 /// The minimal Docker Engine surface this system needs (the Runtime API abstracts the
@@ -175,7 +177,13 @@ public sealed class DockerProvisioningClient : IContainerProvisioner
         bool? oom = null;
         if (state.TryGetProperty("OOMKilled", out var oomKilled) && oomKilled.ValueKind is JsonValueKind.True or JsonValueKind.False)
             oom = oomKilled.GetBoolean();
-        return new ContainerSnapshot(name, exitCode, oom);
+        // docker stamps FinishedAt with the zero time while the container never ran
+        DateTime? finishedAt = null;
+        if (state.TryGetProperty("FinishedAt", out var finished) && finished.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(finished.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed)
+            && parsed > DateTime.UnixEpoch)
+            finishedAt = parsed;
+        return new ContainerSnapshot(name, exitCode, oom, finishedAt);
     }
 
     public async Task<bool> StopAsync(string container, CancellationToken cancellationToken)
