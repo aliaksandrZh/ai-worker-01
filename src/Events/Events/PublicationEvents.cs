@@ -59,6 +59,22 @@ public enum PublishPrKind
     Update,
 }
 
+/// <summary>
+/// A PR publication died permanently (the Publisher announces it before dead-lettering):
+/// the Orchestrator parks the implement Task waiting on that PR — processing must never
+/// be a terminal state. Appended for PublishPr only: the one publication a Task waits
+/// on; comment/board failures are best-effort and leave nothing stranded.
+/// </summary>
+public sealed record PublishFailed(
+    string Owner,
+    string Repo,
+    long ItemNumber,
+    string IdempotencyKey,
+    string Cause) : IEvent
+{
+    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+}
+
 /// <summary>Review outcome: approve / request changes + inline comments.</summary>
 public sealed record PublishReview(
     string Owner,

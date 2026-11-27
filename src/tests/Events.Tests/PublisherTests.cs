@@ -173,4 +173,34 @@ public sealed class PublisherTests : IAsyncLifetime
 
         Assert.Single((await _fx.AppendedAsync()).OfType<PrPublished>());
     }
+
+    [Fact]
+    public async Task A_permanent_pr_failure_announces_publish_failed_before_poisoning()
+    {
+        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
+            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
+            Title: "t", Body: "b", PrNumber: null);
+        _github.FailWith = GithubExceptionKind.Permanent;
+
+        await Assert.ThrowsAsync<PermanentDeliveryException>(
+            () => _publisher.HandleAsync(pr, 1, CancellationToken.None));
+
+        // the death announcement carries the identity the Orchestrator parks the Task on
+        Assert.Contains(await _fx.AppendedAsync(),
+            e => e is PublishFailed { Owner: "o", Repo: "r", ItemNumber: 27, Cause: "gone" });
+    }
+
+    [Fact]
+    public async Task A_permanent_comment_failure_announces_nothing()
+    {
+        _github.FailWith = GithubExceptionKind.Permanent;
+        var comment = new PublishComment(PublishCommentKind.Notification, "o", "r", 1,
+            IdempotencyKey: "notification:1", Body: "n");
+
+        await Assert.ThrowsAsync<PermanentDeliveryException>(
+            () => _publisher.HandleAsync(comment, 1, CancellationToken.None));
+
+        // comments are best-effort: no Task waits on them, so no death announcement
+        Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is PublishFailed);
+    }
 }

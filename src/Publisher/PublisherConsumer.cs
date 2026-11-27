@@ -85,6 +85,12 @@ public sealed class PublisherConsumer(
         catch (GithubPermanentException ex)
         {
             logger.LogError("permanent publication failure for {key}: {error}", idempotencyKey, ex.Message);
+            // a dead PR announces its own death: the Orchestrator parks the implement Task
+            // waiting on it instead of leaving it processing forever (docs/eventlog.md —
+            // the dead-letter store alone carries no identity to react on)
+            if (evt is PublishPr pr)
+                await log.AppendAsync(
+                    new PublishFailed(pr.Owner, pr.Repo, pr.ItemNumber, pr.IdempotencyKey, ex.Message), ct);
             throw new PermanentDeliveryException($"{ex.Message} (artifact state unknown — verify on GitHub before replay)");
         }
     }

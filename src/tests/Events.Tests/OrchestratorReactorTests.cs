@@ -169,10 +169,12 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     public async Task Fix_round_schedules_an_implement_run_on_the_recorded_agent_branch()
     {
         var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
+        await _orchestrator.HandlePrPublishedAsync(new PrPublished("o", "r", 1, PrNumber: 28), CancellationToken.None);
 
-        await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
+        await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 28, RunId: 2,
             Comments: [new ReviewFinding("a.cs", 10, "major", "fix")]), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(2, 2, "o", "r", 1), CancellationToken.None);
@@ -186,8 +188,10 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     public async Task A_reviewer_runs_comment_events_aggregate_into_one_review_and_one_fixing_round()
     {
         var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee"), CancellationToken.None);
+        await _orchestrator.HandlePrPublishedAsync(new PrPublished("o", "r", 1, PrNumber: 28), CancellationToken.None);
         var runsAfterReviewChained = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
         await _log.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 2,
@@ -236,26 +240,33 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     {
         var workflow = await RunCommandAsync(Command());
 
+        // no implement run completed yet — the publication completes nothing, it only pins
         await _orchestrator.HandlePrPublishedAsync(
             new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
 
         workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(28, workflow.HeadPrNumber);
+        Assert.Single((await AppendedAsync()).OfType<RunScheduled>()); // no review chained
     }
 
     [Fact]
-    public async Task Review_run_targets_the_recorded_head_pr_number()
+    public async Task Pr_published_completes_the_implement_task_and_chains_the_review()
     {
         var workflow = await RunCommandAsync(Command());
-        await _orchestrator.HandlePrPublishedAsync(
-            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
-
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
 
+        await _orchestrator.HandlePrPublishedAsync(
+            new PrPublished("o", "r", ItemNumber: 1, PrNumber: 28), CancellationToken.None);
+
+        // the run's git facts pin the review head, the publication supplies the real PR
+        // number — the review input carries both (the TODO's entry:56 failure had neither)
         var reviewRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
         Assert.Equal(TaskTypes.Review, (await TaskAsync(reviewRun.TaskId)).Type);
         Assert.Equal(28, reviewRun.Input.PrNumber);
+        Assert.Equal("c0ffee", reviewRun.Input.ReviewHeadSha);
+        Assert.Equal(TaskStatuses.Succeeded, (await TaskAsync(1)).Status);
 
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(2, reviewRun.TaskId, "o", "r", 1), CancellationToken.None);
@@ -329,15 +340,39 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Implement_completion_publishes_pr_and_chains_review()
+    public async Task Implement_completion_publishes_the_pr_and_holds_the_slot_until_publication()
     {
         var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(
             new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
 
         Assert.Contains(await AppendedAsync(), e => e is PublishPr { Kind: PublishPrKind.Create });
+        // the PR is the implement Task's result: no review run until PrPublished, and the
+        // implement Task keeps occupying the slot through the publication
+        Assert.Single((await AppendedAsync()).OfType<RunScheduled>());
         var active = await ActiveTaskAsync(workflow.Id);
-        Assert.Equal(TaskTypes.Review, Assert.IsType<TaskRow>(active).Type);
+        var implement = Assert.IsType<TaskRow>(active);
+        Assert.Equal(TaskTypes.Implement, implement.Type);
+        Assert.Equal(TaskStatuses.Processing, implement.Status);
+    }
+
+    [Fact]
+    public async Task A_permanent_pr_publication_failure_parks_the_implement_task()
+    {
+        var workflow = await RunCommandAsync(Command());
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
+        await _orchestrator.HandleRunCompletedAsync(
+            new RunCompleted(1, 1, "o", "r", 1, Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
+
+        await _orchestrator.HandlePublishFailedAsync(
+            new PublishFailed("o", "r", 1, IdempotencyKey: "pr:1:coder:1", Cause: "gone"), CancellationToken.None);
+
+        // processing is never a terminal state: the stranded Task parks for a human
+        var active = await ActiveTaskAsync(workflow.Id);
+        Assert.Equal(TaskStatuses.WaitingForHuman, Assert.IsType<TaskRow>(active).Status);
+        Assert.Contains(await AppendedAsync(), e =>
+            e is PublishComment { Kind: PublishCommentKind.Notification, Body: var b } && b.Contains("publication failed"));
     }
 
     [Fact]
@@ -429,11 +464,16 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
 
             if (round < 4)
             {
-                // the fixing round's Implement run completes and chains the next review run
+                // the fixing round's Implement run completes; its PR publication completes
+                // the task and chains the next review run
                 var fixRun = (await AppendedAsync()).OfType<RunScheduled>().Last();
+                await _orchestrator.HandleRunProcessingAsync(
+                    new RunProcessing(fixRun.RunId, fixRun.TaskId, "o", "r", 1), CancellationToken.None);
                 await _orchestrator.HandleRunCompletedAsync(
                     new RunCompleted(fixRun.RunId, fixRun.TaskId, "o", "r", 1,
                         Branch: "agent/1-fix", CommitSha: "c0ffee"), CancellationToken.None);
+                await _orchestrator.HandlePrPublishedAsync(
+                    new PrPublished("o", "r", 1, PrNumber: 28), CancellationToken.None);
                 reviewRunId = (await AppendedAsync()).OfType<RunScheduled>().Last().RunId;
             }
         }
@@ -454,14 +494,26 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     {
         var workflow = await RunCommandAsync(Command());
         var evt = new RunCompleted(1, 1, "o", "r", 1, Branch: "ai/task-1", CommitSha: "c0ffee");
+        await _orchestrator.HandleRunProcessingAsync(new RunProcessing(1, 1, "o", "r", 1), CancellationToken.None);
         await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
         var runsAfterFirst = (await AppendedAsync()).OfType<RunScheduled>().Count();
 
-        // a replayed (or racing) completion must not start a parallel chain: the Review
-        // task it chained occupies the slot
+        // a replayed (or racing) completion re-announces nothing new: the implement Task
+        // is still processing on its PR publication
         await _orchestrator.HandleRunCompletedAsync(evt, CancellationToken.None);
 
         Assert.Equal(runsAfterFirst, (await AppendedAsync()).OfType<RunScheduled>().Count());
+        var active = await ActiveTaskAsync(workflow.Id);
+        var implement = Assert.IsType<TaskRow>(active);
+        Assert.Equal(TaskTypes.Implement, implement.Type);
+        Assert.Equal(TaskStatuses.Processing, implement.Status);
+
+        // the publication completes the Task exactly once: a replayed PrPublished chains nothing
+        await _orchestrator.HandlePrPublishedAsync(new PrPublished("o", "r", 1, PrNumber: 28), CancellationToken.None);
+        var runsAfterPublish = (await AppendedAsync()).OfType<RunScheduled>().Count();
+        await _orchestrator.HandlePrPublishedAsync(new PrPublished("o", "r", 1, PrNumber: 28), CancellationToken.None);
+
+        Assert.Equal(runsAfterPublish, (await AppendedAsync()).OfType<RunScheduled>().Count());
         Assert.Equal(TaskTypes.Review, Assert.IsType<TaskRow>(await ActiveTaskAsync(workflow.Id)).Type);
     }
 

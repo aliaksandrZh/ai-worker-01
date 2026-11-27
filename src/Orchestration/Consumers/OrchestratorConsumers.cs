@@ -52,7 +52,7 @@ public sealed class OrchestratorAgent(Orchestrator core) : IEventConsumer
         typeof(PlanSaved), typeof(ClarificationRequested), typeof(BlockerReported),
         typeof(ReviewDecisionRequested), typeof(EnvIssueReported), typeof(CriteriaClarificationRequested),
         typeof(ReviewCommentsSubmitted), typeof(BugReported), typeof(TestsPassed),
-        typeof(ProjectItemChanged), typeof(PrUpdated), typeof(PrPublished),
+        typeof(ProjectItemChanged), typeof(PrUpdated), typeof(PrPublished), typeof(PublishFailed),
     ];
 
     public string Name => "OrchestratorAgent";
@@ -76,6 +76,7 @@ public sealed class OrchestratorAgent(Orchestrator core) : IEventConsumer
             $"acceptance criteria need clarification: {c.Question}", ct),
         PrUpdated updated => core.HandlePrUpdatedAsync(updated, ct),
         PrPublished published => core.HandlePrPublishedAsync(published, ct),
+        PublishFailed failed => core.HandlePublishFailedAsync(failed, ct),
         _ => Task.CompletedTask,
     };
 }
