@@ -9,10 +9,10 @@ namespace PiAgent.RunWorker;
 /// <summary>
 /// The run watchdog (docs/run-worker.md invariant 3): liveness via docker inspect — a Run
 /// exceeding the timeout, or exiting without a terminal callback after a grace period,
-/// is settled as failed. Recovery after worker restarts is the registry + container labels.
+/// is settled as failed. The in-flight set is the durable registry (`run_container`).
 /// </summary>
 public sealed class RunWatchdog(
-    RunRegistry registry,
+    RunRegistryStore registryStore,
     IContainerProvisioner docker,
     RunWorkerConsumer consumer,
     IOptions<RunWorkerOptions> options,
@@ -52,7 +52,7 @@ public sealed class RunWatchdog(
         var timeout = TimeSpan.FromSeconds(options.Value.RunTimeoutSeconds);
         var grace = TimeSpan.FromSeconds(options.Value.StopGraceSeconds);
 
-        foreach (var entry in registry.All())
+        foreach (var entry in await registryStore.LoadUnfinishedAsync(ct))
         {
             var snapshot = await docker.GetContainerStateAsync(entry.ContainerName, ct);
 

@@ -71,39 +71,3 @@ public sealed record RunEntry(
     public string Image => $"agent-{Input.Profile}";
 }
 
-/// <summary>Thread-safe registry of in-flight Runs (the worker's own state).</summary>
-public sealed class RunRegistry
-{
-    private readonly object _lock = new();
-    private readonly Dictionary<long, RunEntry> _runs = [];
-
-    public void Add(RunEntry entry)
-    {
-        lock (_lock) _runs[entry.RunId] = entry;
-    }
-
-    public RunEntry? Get(long runId)
-    {
-        lock (_lock) return _runs.TryGetValue(runId, out var entry) ? entry : null;
-    }
-
-    public RunEntry? ByToken(string token)
-    {
-        lock (_lock) return _runs.Values.FirstOrDefault(e => e.Token == token);
-    }
-
-    public RunEntry Remove(long runId)
-    {
-        lock (_lock)
-        {
-            var entry = _runs[runId];
-            _runs.Remove(runId);
-            return entry;
-        }
-    }
-
-    public IReadOnlyList<RunEntry> All()
-    {
-        lock (_lock) return _runs.Values.ToList();
-    }
-}

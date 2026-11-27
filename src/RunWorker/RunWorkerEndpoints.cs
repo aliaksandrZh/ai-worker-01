@@ -12,14 +12,14 @@ namespace PiAgent.RunWorker;
 /// </summary>
 public static class RunWorkerEndpoints
 {
-    public static WebApplication MapAgentEventsEndpoint(this WebApplication app, RunRegistry registry, IEventLog log)
+    public static WebApplication MapAgentEventsEndpoint(this WebApplication app, RunRegistryStore store, IEventLog log)
     {
         app.MapPost("/events", async (HttpContext http, CancellationToken ct) =>
         {
             if (!http.Request.Headers.TryGetValue("X-Run-Token", out var token))
                 return Results.Unauthorized();
 
-            var entry = registry.ByToken(token!);
+            var entry = await store.GetByTokenAsync(token!, ct);
             if (entry is null)
                 return Results.Unauthorized();
 
