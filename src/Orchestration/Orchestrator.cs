@@ -36,6 +36,21 @@ public sealed class Orchestrator(
             await RejectAsync(cmd.Owner, cmd.Repo, cmd.ItemNumber,
                 $"@{cmd.Author} lacks the required permission ({Options.MinCommandPermission})", uow, ct);
         }
+        else if (CommandRegistry.IsResume(cmd.Command))
+        {
+            if (await state.GetActiveTaskAsync(workflow.Id, uow, ct)
+                is { Status: TaskStatuses.WaitingForHuman } parked)
+            {
+                logger.LogInformation("command admitted: /resume on {item} by {author} → task {type}",
+                    workflow.Item.Key, cmd.Author, parked.Type);
+                await ResumeTaskAsync(parked, uow, ct);
+            }
+            else
+            {
+                await RejectAsync(cmd.Owner, cmd.Repo, cmd.ItemNumber,
+                    "nothing to resume — no task is waiting_for_human", uow, ct);
+            }
+        }
         else if (await state.GetActiveTaskAsync(workflow.Id, uow, ct) is { } active)
         {
             await RejectAsync(cmd.Owner, cmd.Repo, cmd.ItemNumber,
@@ -56,36 +71,6 @@ public sealed class Orchestrator(
             logger.LogInformation("command admitted: {command} on {item} by {author} → task {type}",
                 cmd.Command, workflow.Item.Key, cmd.Author, taskType);
             await StartTaskAsync(workflow, taskType, cmd.Text, agentBranch: null, uow, ct);
-        }
-
-        await uow.Events.CommitAsync(ct);
-    }
-
-    /// <summary>
-    /// A non-command comment on an item whose Task is parked is the User's reply
-    /// (commands were derived by the Poller) — resumes the parked Task with a fresh Run.
-    /// </summary>
-    public Task HandleCommentChangedAsync(CommentChanged comment, CancellationToken ct)
-    {
-        var reply = new UserReply(comment.Owner, comment.Repo, comment.ItemNumber,
-            comment.CommentId, comment.Author, comment.Body);
-        return HandleUserReplyAsync(reply, ct);
-    }
-
-    /// <summary>A reply resumes the parked Task with a fresh Run.</summary>
-    public async Task HandleUserReplyAsync(UserReply reply, CancellationToken ct)
-    {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var workflow = await state.FindWorkflowAsync(new ItemRef(reply.Owner, reply.Repo, reply.ItemNumber), uow, ct);
-        if (workflow is null)
-        {
-            await uow.Events.CommitAsync(ct);
-            return;
-        }
-
-        if (await state.GetActiveTaskAsync(workflow.Id, uow, ct) is { Status: TaskStatuses.WaitingForHuman } task)
-        {
-            await ResumeTaskAsync(task, uow, ct);
         }
 
         await uow.Events.CommitAsync(ct);

@@ -19,8 +19,7 @@
 
 | Event | Produced by | Effect |
 |---|---|---|
-| `user_command` | the Poller parses a slash command on an issue or PR (grammar, author permission and resolved target travel in the payload — the trigger set is defined separately) | starts the mapped flow (→ `run_scheduled`) |
-| `user_reply` | the User answers a clarification, blocker, or env-issue request | resumes the paused flow: new Run of the waiting agent with the response |
+| `user_command` | the Poller parses a slash command on an issue or PR (grammar, author permission and resolved target travel in the payload — the trigger set is defined separately) | starts the mapped flow (→ `run_scheduled`); `@bot /resume` is the only exit from a parked (`waiting_for_human`) Task |
 | `user_decision` | plan approved / changes requested; review escalation resolved (fixes / change scope / accept risk); test results accepted / bug found / does not meet requirements | routes the decision to the flow stage that asked for it |
 | `user_cancel` | the User cancels the workflow | all related events, tasks, and runs stop: the running container is stopped immediately, the Run is marked failed-by-cancel (no retry), the Workflow → cancelled |
 
@@ -43,8 +42,8 @@ comments. Stream key: the root item, else the repo.
 
 Every communication tool call inside a Run produces exactly one event — the tool call is
 the mechanism, the event is what the Orchestrator consumes. Escalation events park the
-flow in `waiting_for_human`; the matching user event (`user_reply` / `user_decision`)
-releases it.
+flow in `waiting_for_human`; the matching user event (`@bot /resume` command /
+`user_decision`) releases it.
 
 | Event | Produced by tool | Effect |
 |---|---|---|
@@ -76,7 +75,7 @@ Labels are never written — AI-scope labels are read-only triggers.
 ## Run lifecycle events
 
 Every accepted event that needs agent work — a `user_command`, a resuming
-`user_reply` / `user_decision`, `pr_updated`, a converging board/label trigger, a chaining
+`@bot /resume` command or `user_decision`, `pr_updated`, a converging board/label trigger, a chaining
 agent-tool event (`review_comments_submitted`, `bug_reported`), or a settled predecessor
 Run — is validated by the Orchestrator and turned into `run_scheduled`. The run worker
 owns the rest of the lifecycle: it claims a scheduled Run when capacity allows; if the Run

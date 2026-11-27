@@ -21,7 +21,7 @@ Orchestrator through ONE communication-tool call, and the Orchestrator publishes
 1. `save_plan` — save the plan: goals, scope, acceptance criteria, steps. The Orchestrator
    publishes the plan as a comment on the task's issue and runs plan approval.
 2. Gaps you cannot resolve yourself: `request_clarification(question, context)` — the flow parks
-   until a user_reply event resumes it as a NEW Run (the escalation consequences are in the tool
+   until an `@bot /resume` command resumes it as a NEW Run (the escalation consequences are in the tool
    descriptions — trust them). Ask when the plan genuinely cannot be written; resolve everything
    else conservatively and note the choices in the plan.
 3. `report_completion` — the mandatory final call of every Run. It carries no payload; the

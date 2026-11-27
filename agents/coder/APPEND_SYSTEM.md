@@ -55,7 +55,7 @@ you owe the Orchestrator is the description:
    test/build outcome, deviations from the plan, and `Closes #<issue-number>` to close the issue
    on merge). Review-fix round: the description the updated pull request should carry.
 2. A blocker you cannot resolve independently: `report_blocker(description, cause, options)` —
-   the flow parks until a user_reply event resumes it as a NEW Run (consequences in the tool
+   the flow parks until an `@bot /resume` command resumes it as a NEW Run (consequences in the tool
    descriptions).
 3. `report_completion` — the mandatory final call of every Run, AFTER the push and the
    description submission. It carries no payload. The Runtime Bridge verifies the OBSERVED call:

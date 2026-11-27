@@ -42,11 +42,11 @@ processes events, never drawn as diagram nodes:
 
 | Action | Where | Event |
 |---|---|---|
-| Provide clarification | plan, development, testing | `user_reply` |
+| Provide clarification | plan, development, testing | `user_command` (`@bot /resume`) |
 | Approve / request changes (plan) | plan | `user_decision` |
-| Respond to a blocker | development | `user_reply` |
+| Respond to a blocker | development | `user_command` (`@bot /resume`) |
 | Decide a review escalation (fixes / change scope / accept risk) | review | `user_decision` |
-| Restore environment / access | testing | `user_reply` |
-| Clarify expected behavior | testing → planner | `user_reply` |
+| Restore environment / access | testing | `user_command` (`@bot /resume`) |
+| Clarify expected behavior | testing → planner | `user_command` (`@bot /resume`) |
 | Accept / reject test results | testing | `user_decision` |
 | Cancel the workflow | any waiting state | `user_cancel` |
