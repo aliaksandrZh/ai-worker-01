@@ -9,7 +9,8 @@ each successful call and turns it into exactly one `tool` callback
 
 ## Layout
 
-- `src/spec.mjs` — the tool vocabulary (names, kinds, field specs) + zod schemas + JSON Schemas,
+- `src/spec.mjs` — the adapter over the tool catalog (agents/_runtime/tools.json: names,
+  carriers, kinds, field specs) + zod schemas + JSON Schemas,
   both derived from one spec so they cannot drift. Signatures are hand-synced with the payload
   records of the .NET adapter; only schema (types/required) is validated — business rules live
   on the Orchestrator side.
@@ -42,12 +43,14 @@ npm test
 }
 ```
 
-`tools[]` is the full catalog (communication + context). The **communication part** is the
-intersection with the fixed 11-name vocabulary — only those tools are registered by this server;
-unlisted vocabulary names are not registered, and names outside the vocabulary (context tools,
-stale names) are ignored. The **context part** is everything else — it becomes the GitHub MCP
-server's `GITHUB_TOOLS` allow-list (concrete github-mcp-server tool names — the server refuses
-unknown names at startup, fail-closed).
+`tools[]` is the agent's availability list — it may only contain names declared in the
+[tool catalog](../../tools.json) (the ONE declaration: names, carriers — communication /
+github-mcp / none — and field specs). The **communication part** is the intersection with the
+catalog's `carrier: "communication"` names — only those tools are registered by this server;
+unlisted communication names are not registered, and names outside the catalog (stale names)
+are ignored. The **context part** is everything else — it becomes the GitHub MCP server's
+`GITHUB_TOOLS` allow-list (concrete github-mcp-server tool names — the server refuses unknown
+names at startup, fail-closed).
 
 > **Name mapping.** The availability rows of [docs/flows/tools.md](../../../docs/flows/tools.md)
 > use flow-level names; the manifest encodes them concretely: `github_issue_read` and

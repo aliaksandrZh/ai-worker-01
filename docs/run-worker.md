@@ -30,12 +30,14 @@ produce the flow-driving events, and they are consumed.
 
 ## Communication tool callbacks (route `tool`)
 
-The vocabulary: the eleven communication tool names of
-[flows/tools.md](flows/tools.md) — `save_plan`, `request_clarification`, `report_blocker`,
+The vocabulary: the eleven `carrier: "communication"` names of the tool catalog
+[../agents/_runtime/tools.json](../agents/_runtime/tools.json) (the machine contract of
+[flows/tools.md](flows/tools.md)) — `save_plan`, `request_clarification`, `report_blocker`,
 `submit_review_comments`, `request_decision`, `report_bug`, `report_env_issue`,
 `request_criteria_clarification`, `report_tests_passed`, `report_completion`,
-`submit_pr_description`. A change to the set or a signature is a bridge contract bump
-(`bridge.json` stamp).
+`submit_pr_description`. The agent's agent.json `tools` array gates availability; the route
+carries only the listed names whose catalog carrier is `communication` — a listed context tool
+(`issue_read`, `pull_request_read`) or an unknown name never routes.
 
 The Bridge observes each **completed, error-free** communication tool call in the agent's
 stream and turns it into exactly one callback:

@@ -1,0 +1,123 @@
+{
+  "_doc": "The ONE tool catalog (docs/flows/tools.md is the human contract, this file the machine one). Each entry declares WHAT a tool is — its carrier (communication / github-mcp / none) and, for communication tools, the payload field spec. WHO may call it is agent.json's job: the agents/<profile>/agent.json 'tools' array lists availability and may only contain names declared here. Consumers: communication-channel/src/spec.mjs (registers the communication part), src/mcpjson.mjs (the github-mcp part becomes GITHUB_TOOLS), bridge/bridge.mjs (route-tool = manifest ∩ communication).",
+  "tools": {
+    "save_plan": {
+      "carrier": "communication",
+      "kind": "ack",
+      "description": "Save or update the plan: goals, scope, acceptance criteria and steps. The Orchestrator publishes the plan as a comment in the issue and runs plan approval. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "goals", "type": "string", "required": true },
+        { "name": "scope", "type": "string", "required": true },
+        { "name": "acceptanceCriteria", "type": "string", "required": true },
+        { "name": "steps", "type": "string[]", "required": true }
+      ]
+    },
+    "request_clarification": {
+      "carrier": "communication",
+      "kind": "escalation",
+      "description": "Request missing information from the User via the Orchestrator. The flow PARKS until a @bot /resume command resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "question", "type": "string", "required": true },
+        { "name": "context", "type": "string", "required": false }
+      ]
+    },
+    "report_blocker": {
+      "carrier": "communication",
+      "kind": "escalation",
+      "description": "Report a blocker you cannot resolve independently: cause, context and possible solutions. The flow PARKS until an @bot /resume command resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "description", "type": "string", "required": true },
+        { "name": "cause", "type": "string", "required": true },
+        { "name": "options", "type": "string[]", "required": true }
+      ]
+    },
+    "submit_review_comments": {
+      "carrier": "communication",
+      "kind": "ack",
+      "description": "Submit review findings. The Orchestrator publishes them to the PR and assigns the fixes to the Coder (a fixing Run). This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        {
+          "name": "comments",
+          "type": "object[]",
+          "required": true,
+          "fields": [
+            { "name": "file", "type": "string", "required": true },
+            { "name": "line", "type": "number", "required": true },
+            { "name": "severity", "type": "string", "required": true },
+            { "name": "message", "type": "string", "required": true }
+          ]
+        }
+      ]
+    },
+    "request_decision": {
+      "carrier": "communication",
+      "kind": "escalation",
+      "description": "Escalate a review issue that cannot be resolved without user input: issue, context and possible solutions. The flow PARKS until a user_decision event resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "issue", "type": "string", "required": true },
+        { "name": "context", "type": "string", "required": true },
+        { "name": "options", "type": "string[]", "required": true }
+      ]
+    },
+    "report_bug": {
+      "carrier": "communication",
+      "kind": "ack",
+      "description": "Report a product bug, test-code issue or missing tests: summary, reproduction steps and test results. The Orchestrator publishes the report as a comment in the issue and returns control to Development. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "summary", "type": "string", "required": true },
+        { "name": "reproSteps", "type": "string[]", "required": true },
+        { "name": "testResults", "type": "string", "required": true }
+      ]
+    },
+    "report_env_issue": {
+      "carrier": "communication",
+      "kind": "escalation",
+      "description": "Report an environment or access problem blocking test execution: what happened and what is needed. The flow PARKS until an @bot /resume command (after the User restores the environment) resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "description", "type": "string", "required": true },
+        { "name": "whatIsNeeded", "type": "string", "required": true }
+      ]
+    },
+    "request_criteria_clarification": {
+      "carrier": "communication",
+      "kind": "escalation",
+      "description": "Request clarification of acceptance criteria / expected behavior; the Orchestrator routes the answer to the Planner. The flow PARKS until a user event resumes it as a NEW Run. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "question", "type": "string", "required": true },
+        { "name": "context", "type": "string", "required": false }
+      ]
+    },
+    "report_tests_passed": {
+      "carrier": "communication",
+      "kind": "ack",
+      "description": "Report that all tests passed, with a summary; the Orchestrator then checks the manual acceptance policy. This call publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "summary", "type": "string", "required": true }
+      ]
+    },
+    "report_completion": {
+      "carrier": "communication",
+      "kind": "completion",
+      "description": "Explicit, parameterless signal that your work is done — the MANDATORY final call of every Run; a Run that ends without it has failed. Payloads travel through the specific tools; this call only marks the end. It publishes nothing to GitHub — publication is the Orchestrator's act.",
+      "fields": []
+    },
+    "submit_pr_description": {
+      "carrier": "communication",
+      "kind": "ack",
+      "description": "Carry your result to the Orchestrator: the title and body of the Pull Request the Orchestrator creates after report_completion. You never write to GitHub. This call publishes nothing — publication is the Orchestrator's act.",
+      "fields": [
+        { "name": "title", "type": "string", "required": true },
+        { "name": "body", "type": "string", "required": true }
+      ]
+    },
+    "issue_read": {
+      "carrier": "github-mcp"
+    },
+    "pull_request_read": {
+      "carrier": "github-mcp"
+    },
+    "web_search": {
+      "carrier": "none"
+    }
+  }
+}

@@ -877,6 +877,29 @@ test("bridge end-to-end tool route: the manifest `tools` array gates the callbac
   e2eCleanup(dirs);
 });
 
+test("bridge end-to-end tool route: a manifest-LISTED context tool's call stays off route `tool` — the catalog classifies, the manifest only gates availability", async () => {
+  const runId = "context-tool-listed-tool-route-run";
+  const dirs = e2eDirs();
+  const fake = fakeRuntimeApi();
+  const port = await listen(fake.server);
+
+  const exitCode = await bridgeExit(spawnE2eBridge({
+    runId, dirs, port, behavior: "succeed",
+    // get_file_contents is the stub's ordinary context call (mcp__github__...) — listed here,
+    // yet it is NOT a communication tool of agents/_runtime/tools.json: the pre-registry bug
+    // routed it and failed the Run downstream as 'unknown communication tool'
+    tools: ["get_file_contents", "save_plan", "submit_pr_description", "report_completion"],
+  }));
+  fake.server.close();
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(fake.failedBodies, []);
+  assert.equal(fake.completedBodies.length, 1); // the run still settles completed
+  // only the communication calls routed; the listed context call stayed on route `events`
+  assert.deepEqual(fake.toolBodies.map((b) => b.toolName), ["save_plan", "submit_pr_description"]);
+  e2eCleanup(dirs);
+});
+
 test("bridge restart mid-run: the spool redelivers `tool` callbacks verbatim and the re-run repeats the same deterministic eventIds", async () => {
   const runId = "restart-tool-route-run";
   const dirs = e2eDirs();

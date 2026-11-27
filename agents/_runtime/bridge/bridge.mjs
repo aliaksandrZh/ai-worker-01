@@ -5,8 +5,8 @@
  * the stub image keeps its pi-RPC-shaped protocol agent), reads the stdout JSONL
  * event stream (the realtime source; the session .jsonl is history), maps pi → RunEvent, spools every
  * callback to the durable per-Run spool BEFORE sending, turns each observed completed, error-free
- * communication tool call into a `tool` route callback (the manifest-listed tools, deterministic
- * eventId — docs/run-worker.md 'Communication tool callbacks'), retries network/5xx/429 with the same
+ * communication tool call into a `tool` route callback (the manifest-listed COMMUNICATION tools,
+ * deterministic eventId — docs/run-worker.md 'Communication tool callbacks'), retries network/5xx/429 with the same
  * eventId, coalesces heartbeats to the latest value, never drops lifecycle/terminal callbacks,
  * enforces the ONE completion mandate after every `agent_settled` (the hardcoded `report_completion`
  * must have an OBSERVED error-free completed execution; a settle without it is nudged back into the
@@ -115,23 +115,30 @@ process.stdout.write(bootLine);                        // and the container stdo
 //   the Runtime API. A consumer-facing knob only: the EventMapper and the in-bridge derived state
 //   run unfiltered regardless. Routes `tool`/`completed`/`failed`/`cancelled` are separate paths
 //   and are always delivered.
-// - `tools` — the MCP tool set, and the single source of the route-`tool` wire: each observed
-//   completed, error-free call of a listed tool becomes exactly one `tool` route callback
-//   (docs/run-worker.md 'Communication tool callbacks'). Missing/invalid → empty: no route-`tool`
-//   callbacks. report_completion is terminal-only, never a `tool` callback.
-const { forwardEvents, manifestTools } = (() => {
+// - `tools` — the agent's tool availability (agent.json). The route-`tool` wire is its
+//   intersection with the communication vocabulary of agents/_runtime/tools.json (the carrier
+//   classification: what the tool IS): each observed completed, error-free call of a listed
+//   COMMUNICATION tool becomes exactly one `tool` route callback (docs/run-worker.md
+//   'Communication tool callbacks'). A listed context tool (github-mcp carrier) or an unknown
+//   name never routes. Missing/invalid manifest or registry → empty: no route-`tool` callbacks.
+//   report_completion is terminal-only, never a `tool` callback.
+const { forwardEvents, routeTools } = (() => {
   try {
     const manifest = JSON.parse(
       readFileSync(join(env.PI_CODING_AGENT_DIR || "/opt/pi-agent/profile", "agent.json"), "utf8"));
+    const registry = JSON.parse(readFileSync(new URL("../tools.json", import.meta.url), "utf8"));
     const stringSet = (value) =>
       new Set(Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : []);
+    const communication = new Set(Object.entries(registry?.tools ?? {})
+      .filter(([, spec]) => spec?.carrier === "communication")
+      .map(([name]) => name));
     return {
       forwardEvents: stringSet(manifest.forward_progress_events),
-      manifestTools: stringSet(manifest.tools),
+      routeTools: new Set([...stringSet(manifest.tools)].filter((name) => communication.has(name))),
     };
   } catch {
-    // a missing/invalid manifest forwards nothing on route `events` and produces no `tool` callbacks
-    return { forwardEvents: new Set(), manifestTools: new Set() };
+    // a missing/invalid manifest or registry forwards nothing on route `events` and produces no `tool` callbacks
+    return { forwardEvents: new Set(), routeTools: new Set() };
   }
 })();
 log(`route-events forward allow-list: ${[...forwardEvents].join(", ") || "none"}\n`);
@@ -323,7 +330,7 @@ async function main() {
     if (type === "tool_completed" && isSuccessfulToolEnd(payload)
         && !mapper.deniedToolCallIds.has(payload.toolCallId)) {
       const normalized = normalizeToolName(payload.toolName ?? toolNameByCallId.get(payload.toolCallId));
-      if (manifestTools.has(normalized) && normalized !== COMPLETION_TOOL) {
+      if (routeTools.has(normalized) && normalized !== COMPLETION_TOOL) {
         const eventId = `${runId}-tool-${payload.toolCallId}`;
         spool.append({
           id: eventId,

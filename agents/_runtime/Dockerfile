@@ -18,6 +18,7 @@ FROM ghcr.io/github/github-mcp-server:${GH_MCP_VERSION} AS gh-mcp
 # bundled too so profile builds never need node_modules in the final image).
 FROM node:24-bookworm-slim AS channel-build
 COPY communication-channel/package.json communication-channel/package-lock.json /build/channel/
+COPY tools.json /build/tools.json
 WORKDIR /build/channel
 RUN npm ci
 COPY communication-channel/src /build/channel/src
@@ -25,7 +26,6 @@ RUN npm run build
 
 FROM node:24-bookworm-slim
 ARG PI_VERSION
-ARG BRIDGE_CONTRACT=1.6.0
 # bash/ca-certificates/git/ripgrep + the distro Python (bookworm's python3, pip and venv —
 # pinned by the distro; a new Python major = a base image bump, same policy as the Node pin).
 RUN apt-get update \
@@ -36,14 +36,11 @@ RUN apt-get update \
 
 COPY --from=gh-mcp /server/github-mcp-server /usr/local/bin/github-mcp-server
 COPY --from=channel-build /build/channel/dist /opt/agent-runtime/communication-channel/dist
+COPY tools.json /opt/agent-runtime/tools.json
 COPY bridge/ /opt/agent-runtime/bridge/
 COPY entry /usr/local/bin/agent-entry
 
-# The bridge contract stamp (agents/_runtime/bridge/bridge.json) must agree with the label
-# argument — a contract bump without the label fails the build honestly.
-COPY bridge/bridge.json /tmp/bridge.json
-RUN node -e "const v=require('/tmp/bridge.json').version; if(v!=='${BRIDGE_CONTRACT}'){console.error('bridge.json version '+v+' disagrees with BRIDGE_CONTRACT '+process.env.BRIDGE_CONTRACT);process.exit(1)}" && rm /tmp/bridge.json
-LABEL pi.version="${PI_VERSION}" bridge.contract="${BRIDGE_CONTRACT}"
+LABEL pi.version="${PI_VERSION}"
 
 WORKDIR /workspace
 # Profile configuration lands at /opt/pi-agent/profile (each profile layer bakes it there);

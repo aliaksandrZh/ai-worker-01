@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -12,7 +11,7 @@ namespace PiAgent.RunWorker.Tests;
 
 /// <summary>
 /// The route tool adapter (docs/run-worker.md "Communication tool callbacks"): the static
-/// tool→event map against the docs/flows/tools.md dictionary, typed events on the root
+/// tool→event map against the agents/_runtime/tools.json communication dictionary, typed events on the root
 /// item's stream (never Global), and the deterministic-garbage seatbelt.
 /// </summary>
 [Collection("PostgresLog")]
@@ -120,16 +119,16 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Map_covers_the_communication_dictionary_of_tools_md()
+    public void Map_covers_the_communication_carrier_of_the_tool_catalog()
     {
-        // the contract: docs/flows/tools.md "## 2. Communication tools" — eleven names;
+        // the contract: agents/_runtime/tools.json carrier "communication" — eleven names;
         // ten ride the map, report_completion is the Bridge's settle mandate (terminal route)
         var docPath = Path.Combine(AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..", "..", "docs", "flows", "tools.md");
-        var markdown = File.ReadAllText(docPath);
-        var section = markdown.Split("## 2. Communication tools")[1].Split("## Escalation pattern")[0];
-        var documented = Regex.Matches(section, @"^### `(\w+)`", RegexOptions.Multiline)
-            .Select(m => m.Groups[1].Value)
+            "..", "..", "..", "..", "..", "..", "agents", "_runtime", "tools.json");
+        using var doc = JsonDocument.Parse(File.ReadAllText(docPath));
+        var documented = doc.RootElement.GetProperty("tools").EnumerateObject()
+            .Where(t => t.Value.GetProperty("carrier").GetString() == "communication")
+            .Select(t => t.Name)
             .ToHashSet();
 
         Assert.Equal(11, documented.Count);
