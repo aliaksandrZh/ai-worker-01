@@ -23,7 +23,7 @@ public sealed class DerivationTests
         var (changed, closed) = Derivation.ItemEvents("o", "r", Item(labels: ["AI:Code"]));
 
         Assert.Null(closed);
-        var evt = Assert.IsType<ItemChanged>(changed!);
+        var evt = Assert.IsType<RepositoryChanged>(changed!);
         Assert.Equal("o", evt.Owner);
         Assert.Equal(25, evt.Number);
         Assert.Equal(["AI:Code"], evt.Labels);
@@ -38,7 +38,7 @@ public sealed class DerivationTests
         var (changed, closed) = Derivation.ItemEvents("o", "r", Item(state: "closed"));
 
         Assert.Null(changed);
-        var evt = Assert.IsType<ItemClosed>(closed!);
+        var evt = Assert.IsType<RepositoryClosed>(closed!);
         Assert.Equal("item:25:closed", evt.EventId); // identity, not timestamp: re-touching the closed item must dedup to the same beat
     }
 

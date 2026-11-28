@@ -69,10 +69,12 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             }),
             NullLogger<RunWorkerConsumer>.Instance);
 
-    private static RunInput PlannerInput() => new(
-        Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: null,
-        Command: "/plan", PlanCommentId: 0, Profile: "planner",
-        AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
+    private static RunInput PlannerInput() => new RunInput
+    {
+        Owner = "o", Repo = "r", ItemNumber = 1, PrNumber = null,
+        Command = "/plan", PlanCommentId = 0, Profile = "planner",
+        AgentBranch = null, DefaultBranch = "main", ReviewHeadSha = null,
+    };
 
     private async Task StartRunAsync(RunInput input, long runId = 7,
         IReadOnlyList<string>? secrets = null)
@@ -81,7 +83,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         // same input the Orchestrator would have written at run_scheduled
         await RunContainerSchema.SeedRunAsync(_fx, runId, taskId: 3,
             input: JsonSerializer.Serialize(input, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-        await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input, secrets),
+        await _consumer.HandleAsync(new RunScheduled { RunId = runId, TaskId = 3, WorkflowId = 2, Input = input, Secrets = secrets },
             attempt: 1, CancellationToken.None);
     }
 
@@ -121,8 +123,14 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             workspaceHostRoot: "/host/runs");
 
         await consumer.HandleAsync(
-            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput(),
-                Secrets: ["github-write-pat.txt"]),
+            new RunScheduled
+            {
+                RunId = 7,
+                TaskId = 3,
+                WorkflowId = 2,
+                Input = PlannerInput(),
+                Secrets = ["github-write-pat.txt"],
+            },
             attempt: 1, CancellationToken.None);
 
         var binds = _docker.LastPlan!.Binds;
@@ -143,8 +151,14 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         var consumer = ConsumerWith(secretsDir: secretsDir, secretsHostDir: "/host/secrets");
 
         await consumer.HandleAsync(
-            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput(),
-                Secrets: ["github-write-pat.txt"]),
+            new RunScheduled
+            {
+                RunId = 7,
+                TaskId = 3,
+                WorkflowId = 2,
+                Input = PlannerInput(),
+                Secrets = ["github-write-pat.txt"],
+            },
             attempt: 1, CancellationToken.None);
 
         var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
@@ -176,7 +190,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         var consumer = ConsumerWith(stubBehavior: "no_completion");
 
         await consumer.HandleAsync(
-            new RunScheduled(7, TaskId: 3, WorkflowId: 2, PlannerInput() with { Profile = "stub" }),
+            new RunScheduled { RunId = 7, TaskId = 3, WorkflowId = 2, Input = PlannerInput() with { Profile = "stub" } },
             attempt: 1, CancellationToken.None);
 
         Assert.Contains("STUB_BEHAVIOR=no_completion", _docker.LastPlan!.Env);
@@ -234,8 +248,12 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         // previous DB lifetime's terminal must not settle the fresh run
         await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
 
-        await _consumer.HandleAsync(new AgentCallback(7, "completed",
-            """{"sessionId":"stale","result":{"branch":"old","commitSha":"dead"}}"""),
+        await _consumer.HandleAsync(new AgentCallback
+        {
+            RunId = 7,
+            Route = "completed",
+            Body = """{"sessionId":"stale","result":{"branch":"old","commitSha":"dead"}}""",
+        },
             attempt: 1, CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(),
@@ -249,8 +267,12 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     {
         await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
 
-        await _consumer.HandleAsync(new AgentCallback(7, "completed",
-            """{"sessionId":"fresh","result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
+        await _consumer.HandleAsync(new AgentCallback
+        {
+            RunId = 7,
+            Route = "completed",
+            Body = """{"sessionId":"fresh","result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
+        },
             attempt: 1, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
@@ -264,8 +286,12 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         // sender (docs/run-session-id.md) — pre-fix spool entries included
         await StartRunAsync(PlannerInput() with { SessionId = "fresh" });
 
-        await _consumer.HandleAsync(new AgentCallback(7, "completed",
-            """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
+        await _consumer.HandleAsync(new AgentCallback
+        {
+            RunId = 7,
+            Route = "completed",
+            Body = """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
+        },
             attempt: 1, CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunCompleted);
@@ -278,8 +304,12 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         await StartRunAsync(PlannerInput());
 
         await _consumer.HandleAsync(
-            new AgentCallback(7, "completed",
-                """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}"""),
+            new AgentCallback
+            {
+                RunId = 7,
+                Route = "completed",
+                Body = """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
+            },
             attempt: 1, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
@@ -292,7 +322,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
     {
         await StartRunAsync(PlannerInput());
 
-        await _consumer.HandleAsync(new AgentCallback(7, "completed", Body: null),
+        await _consumer.HandleAsync(new AgentCallback { RunId = 7, Route = "completed", Body = null },
             attempt: 1, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());

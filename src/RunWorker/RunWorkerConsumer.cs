@@ -147,28 +147,43 @@ public sealed class RunWorkerConsumer(
             if (!await docker.StartAndWaitRunningAsync(created, TimeSpan.FromSeconds(30), ct))
                 throw new DockerProvisioningException($"container {containerName} did not reach running");
 
-            await log.AppendAsync(new RunProcessing(
-                scheduled.RunId, scheduled.TaskId,
-                scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber), ct);
+            await log.AppendAsync(new RunProcessing
+            {
+                RunId = scheduled.RunId,
+                TaskId = scheduled.TaskId,
+                Owner = scheduled.Input.Owner,
+                Repo = scheduled.Input.Repo,
+                ItemNumber = scheduled.Input.ItemNumber,
+            }, ct);
           
             await registryStore.InsertAsync(entry, created, ct);
             logger.LogInformation("run {run} started in {container}", scheduled.RunId, containerName);        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await log.AppendAsync(new RunFailed(
-                scheduled.RunId, scheduled.TaskId,
-                scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
-                Cause: $"provisioning failed: {ex.Message}"), ct);
+            await log.AppendAsync(new RunFailed
+            {
+                RunId = scheduled.RunId,
+                TaskId = scheduled.TaskId,
+                Owner = scheduled.Input.Owner,
+                Repo = scheduled.Input.Repo,
+                ItemNumber = scheduled.Input.ItemNumber,
+                Cause = $"provisioning failed: {ex.Message}",
+            }, ct);
         }
     }
 
     /// <summary>Fail-closed provisioning: the Run fails before the container exists, with the cause.</summary>
     private async Task FailProvisioningAsync(RunScheduled scheduled, string cause, CancellationToken ct)
     {
-        await log.AppendAsync(new RunFailed(
-            scheduled.RunId, scheduled.TaskId,
-            scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
-            Cause: cause), ct);
+        await log.AppendAsync(new RunFailed
+        {
+            RunId = scheduled.RunId,
+            TaskId = scheduled.TaskId,
+            Owner = scheduled.Input.Owner,
+            Repo = scheduled.Input.Repo,
+            ItemNumber = scheduled.Input.ItemNumber,
+            Cause = cause,
+        }, ct);
         logger.LogInformation("run {run} not provisioned: {cause}", scheduled.RunId, cause);
     }
 
@@ -183,8 +198,14 @@ public sealed class RunWorkerConsumer(
         // logs stay on the host for diagnosability (docker logs pi-session-<runId>)
         // await docker.RemoveAsync(entry.ContainerName, ct);
         await registryStore.MarkFinishedAsync(stop.RunId, ct);
-        await log.AppendAsync(new RunCancelled(
-            stop.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber), ct);
+        await log.AppendAsync(new RunCancelled
+        {
+            RunId = stop.RunId,
+            TaskId = entry.TaskId,
+            Owner = entry.Input.Owner,
+            Repo = entry.Input.Repo,
+            ItemNumber = entry.Input.ItemNumber,
+        }, ct);
         logger.LogInformation("run {run} stopped on request", stop.RunId);
     }
 
@@ -308,14 +329,33 @@ public sealed class RunWorkerConsumer(
 
         IEvent terminal = status switch
         {
-            "succeeded" => new RunCompleted(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber,
-                Branch: branch, CommitSha: commitSha),
-            "cancelled" => new RunCancelled(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber),
-            _ => new RunFailed(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber,
-                Cause: cause ?? "unknown"),
+            "succeeded" => new RunCompleted
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+                Branch = branch,
+                CommitSha = commitSha,
+            },
+            "cancelled" => new RunCancelled
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+            },
+            _ => new RunFailed
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+                Cause = cause ?? "unknown",
+            },
         };
         await log.AppendAsync(terminal, ct);
         logger.LogInformation("run {run} settled as {status}", entry.RunId, status);

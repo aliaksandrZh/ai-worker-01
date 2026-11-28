@@ -195,12 +195,20 @@ public sealed class Orchestrator(
                 // the head is the branch the run actually pushed (the run_completed git facts —
                 // the same pointers SetWorkflowPointersAsync recorded above); the base comes
                 // from the same config the run input's DefaultBranch came from
-                await log.AppendAsync(new PublishPr(
-                    PublishPrKind.Create, workflow.Owner, workflow.Repo, workflow.Id, workflow.ItemNumber,
-                    IdempotencyKey: $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
-                    HeadBranch: evt.Branch, BaseBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
-                    Title: $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
-                    Body: $"Workflow {workflow.Id}, task {task.Id}", PrNumber: null), uow.Events, ct);
+                await log.AppendAsync(new PublishPr
+                {
+                    Kind = PublishPrKind.Create,
+                    Owner = workflow.Owner,
+                    Repo = workflow.Repo,
+                    WorkflowId = workflow.Id,
+                    ItemNumber = workflow.ItemNumber,
+                    IdempotencyKey = $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
+                    HeadBranch = evt.Branch,
+                    BaseBranch = DefaultBranchFor(workflow.Owner, workflow.Repo),
+                    Title = $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
+                    Body = $"Workflow {workflow.Id}, task {task.Id}",
+                    PrNumber = null,
+                }, uow.Events, ct);
                 await MoveBoardAsync(workflow, "review", evt.RunId, uow, ct);
                 break;
 
@@ -208,20 +216,33 @@ public sealed class Orchestrator(
                 var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(evt.RunId, ct);
                 if (submitted.SelectMany(e => e.Comments).ToList() is { Count: > 0 } comments)
                 {
-                    await log.AppendAsync(new PublishReview(
-                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
-                        Verdict: "REQUEST_CHANGES",
-                        Body: string.Join("\n\n", comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
-                        evt.RunId, IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await log.AppendAsync(new PublishReview
+                    {
+                        Owner = workflow.Owner,
+                        Repo = workflow.Repo,
+                        PrNumber = run.Input.PrNumber ?? 0,
+                        Verdict = "REQUEST_CHANGES",
+                        Body = string.Join("\n\n", comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
+                        RunId = evt.RunId,
+                        IdempotencyKey = $"review:{evt.RunId}",
+                        HeadBranch = workflow.AgentBranch,
+                    }, uow.Events, ct);
                     await StartFixingRoundAsync(workflow, null, uow, ct);
                 }
                 else
                 {
                     // review passed — the outcome (approve) is published, testing follows
-                    await log.AppendAsync(new PublishReview(
-                        workflow.Owner, workflow.Repo, run.Input.PrNumber ?? 0,
-                        Verdict: "APPROVE", Body: "Review passed", evt.RunId,
-                        IdempotencyKey: $"review:{evt.RunId}", HeadBranch: workflow.AgentBranch), uow.Events, ct);
+                    await log.AppendAsync(new PublishReview
+                    {
+                        Owner = workflow.Owner,
+                        Repo = workflow.Repo,
+                        PrNumber = run.Input.PrNumber ?? 0,
+                        Verdict = "APPROVE",
+                        Body = "Review passed",
+                        RunId = evt.RunId,
+                        IdempotencyKey = $"review:{evt.RunId}",
+                        HeadBranch = workflow.AgentBranch,
+                    }, uow.Events, ct);
                     await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
                     await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
                 }
@@ -261,8 +282,14 @@ public sealed class Orchestrator(
             // tree, resume) the failed run's pi session — one id for the row AND the event
             var retryInput = run.Input with { SessionId = Guid.NewGuid().ToString("N") };
             var newRunId = await state.CreateRunAsync(task.Id, retryInput, uow, ct);
-            await log.AppendAsync(new RunScheduled(newRunId, task.Id, workflow.Id, retryInput,
-                SecretsFor(run.Input.Profile)), uow.Events, ct);
+            await log.AppendAsync(new RunScheduled
+            {
+                RunId = newRunId,
+                TaskId = task.Id,
+                WorkflowId = workflow.Id,
+                Input = retryInput,
+                Secrets = SecretsFor(run.Input.Profile),
+            }, uow.Events, ct);
             logger.LogWarning("run {run} failed ({cause}); retrying as run {new} (attempt {n})",
                 evt.RunId, evt.Cause, newRunId, attempts + 1);
         }
@@ -305,10 +332,15 @@ public sealed class Orchestrator(
         if (workflow is not null)
         {
             await state.SetWorkflowPlanAsync(workflow.Id, approved: !Options.PlanApprovalRequired, 0, uow, ct);
-            await log.AppendAsync(new PublishComment(
-                PublishCommentKind.Plan, evt.Owner, evt.Repo, evt.ItemNumber,
-                IdempotencyKey: $"plan:{evt.WorkflowId}",
-                Body: $"## Plan\n\n{evt.Goals}\n\n## Scope\n\n{evt.Scope}\n\n## Acceptance criteria\n\n{evt.AcceptanceCriteria}"),
+            await log.AppendAsync(new PublishComment
+            {
+                Kind = PublishCommentKind.Plan,
+                Owner = evt.Owner,
+                Repo = evt.Repo,
+                EntityNumber = evt.ItemNumber,
+                IdempotencyKey = $"plan:{evt.WorkflowId}",
+                Body = $"## Plan\n\n{evt.Goals}\n\n## Scope\n\n{evt.Scope}\n\n## Acceptance criteria\n\n{evt.AcceptanceCriteria}",
+            },
                 uow.Events, ct);
         }
 
@@ -333,10 +365,15 @@ public sealed class Orchestrator(
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null)
         {
-            await log.AppendAsync(new PublishComment(
-                PublishCommentKind.Bug, evt.Owner, evt.Repo, evt.ItemNumber,
-                IdempotencyKey: $"bug:{evt.TaskId}",
-                Body: $"## Bug\n\n{evt.Summary}\n\n{string.Join("\n", evt.ReproSteps.Select(s => $"1. {s}"))}\n\n{evt.TestResults}"),
+            await log.AppendAsync(new PublishComment
+            {
+                Kind = PublishCommentKind.Bug,
+                Owner = evt.Owner,
+                Repo = evt.Repo,
+                EntityNumber = evt.ItemNumber,
+                IdempotencyKey = $"bug:{evt.TaskId}",
+                Body = $"## Bug\n\n{evt.Summary}\n\n{string.Join("\n", evt.ReproSteps.Select(s => $"1. {s}"))}\n\n{evt.TestResults}",
+            },
                 uow.Events, ct);
             await StartFixingRoundAsync(workflow, null, uow, ct);
         }
@@ -390,7 +427,7 @@ public sealed class Orchestrator(
 
     // ---- lifecycle beats -------------------------------------------------------
 
-    public async Task HandleItemClosedAsync(ItemClosed evt, CancellationToken ct)
+    public async Task HandleItemClosedAsync(RepositoryClosed evt, CancellationToken ct)
     {
         await using var uow = await state.Factory.BeginAsync(ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.Number), uow, ct);
@@ -519,19 +556,31 @@ public sealed class Orchestrator(
     private async Task CreateRunAndScheduleAsync(WorkflowRow workflow, long taskId, string? commandText, string? agentBranch, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
         var task = await state.GetTaskAsync(taskId, uow, ct);
-        var input = new RunInput(workflow.Owner, workflow.Repo, workflow.ItemNumber,
-            PrNumber: task.Type is TaskTypes.Review ? workflow.HeadPrNumber ?? workflow.ItemNumber : null,
-            Command: commandText ?? task.Type, PlanCommentId: 0,
-            Profile: CommandRegistry.ProfileFor(task.Type),
-            AgentBranch: task.Type is TaskTypes.Implement ? agentBranch : null,
-            DefaultBranch: DefaultBranchFor(workflow.Owner, workflow.Repo),
-            ReviewHeadSha: task.Type is TaskTypes.Review ? workflow.HeadSha : null);
+        var input = new RunInput
+        {
+            Owner = workflow.Owner,
+            Repo = workflow.Repo,
+            ItemNumber = workflow.ItemNumber,
+            PrNumber = task.Type is TaskTypes.Review ? workflow.HeadPrNumber ?? workflow.ItemNumber : null,
+            Command = commandText ?? task.Type,
+            PlanCommentId = 0,
+            Profile = CommandRegistry.ProfileFor(task.Type),
+            AgentBranch = task.Type is TaskTypes.Implement ? agentBranch : null,
+            DefaultBranch = DefaultBranchFor(workflow.Owner, workflow.Repo),
+            ReviewHeadSha = task.Type is TaskTypes.Review ? workflow.HeadSha : null,
+        };
         // the globally unique pi session id (docs/run-session-id.md): generated here, persisted on
         // the run row and the run_scheduled event — they must agree
         input = input with { SessionId = Guid.NewGuid().ToString("N") };
         var runId = await state.CreateRunAsync(taskId, input, uow, ct);
-        await log.AppendAsync(new RunScheduled(runId, taskId, workflow.Id, input,
-            SecretsFor(input.Profile)), uow.Events, ct);
+        await log.AppendAsync(new RunScheduled
+        {
+            RunId = runId,
+            TaskId = taskId,
+            WorkflowId = workflow.Id,
+            Input = input,
+            Secrets = SecretsFor(input.Profile),
+        }, uow.Events, ct);
     }
 
     /// <summary>The profile's secret NAMES (config plane profile_secrets) for run_scheduled.</summary>
@@ -630,7 +679,7 @@ public sealed class Orchestrator(
         var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
-        await log.AppendAsync(new RunStopRequested(runId, workflow.Owner, workflow.Repo, workflow.ItemNumber, "cancelled"), uow.Events, ct);
+        await log.AppendAsync(new RunStopRequested { RunId = runId, Owner = workflow.Owner, Repo = workflow.Repo, ItemNumber = workflow.ItemNumber, Reason = "cancelled" }, uow.Events, ct);
     }
 
     private async Task MoveBoardAsync(WorkflowRow workflow, string column, long runId, IOrchestrationUnitOfWork uow, CancellationToken ct)
@@ -638,9 +687,15 @@ public sealed class Orchestrator(
         if (workflow.NodeId is null)
             return; // best effort: no synced card node id — the AI labels remain the lifecycle signal
 
-        await log.AppendAsync(new PublishBoardMove(
-            workflow.Owner, 0, workflow.NodeId, column, runId,
-            IdempotencyKey: $"board:{runId}:{column}"), uow.Events, ct);
+        await log.AppendAsync(new PublishBoardMove
+        {
+            Owner = workflow.Owner,
+            ProjectNumber = 0,
+            ItemNodeId = workflow.NodeId,
+            Status = column,
+            RunId = runId,
+            IdempotencyKey = $"board:{runId}:{column}",
+        }, uow.Events, ct);
     }
 
     /// <summary>
@@ -652,17 +707,27 @@ public sealed class Orchestrator(
         cause is not null && cause.StartsWith("image missing", StringComparison.Ordinal);
 
     private Task NotifyAsync(WorkflowRow workflow, string body, IOrchestrationUnitOfWork uow, CancellationToken ct) =>
-        log.AppendAsync(new PublishComment(
-            PublishCommentKind.Notification, workflow.Owner, workflow.Repo, workflow.ItemNumber,
-            IdempotencyKey: $"notification:{workflow.Id}:{body}",
-            Body: body), uow.Events, ct);
+        log.AppendAsync(new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = workflow.Owner,
+            Repo = workflow.Repo,
+            EntityNumber = workflow.ItemNumber,
+            IdempotencyKey = $"notification:{workflow.Id}:{body}",
+            Body = body,
+        }, uow.Events, ct);
 
     private async Task RejectAsync(string owner, string repo, long itemNumber, string reason, IOrchestrationUnitOfWork uow, CancellationToken ct)
     {
         logger.LogInformation("command rejected on {owner}/{repo}#{number}: {reason}", owner, repo, itemNumber, reason);
-        await log.AppendAsync(new PublishComment(
-            PublishCommentKind.Notification, owner, repo, itemNumber,
-            IdempotencyKey: $"rejected:{owner}/{repo}#{itemNumber}:{reason}",
-            Body: $"command rejected: {reason}"), uow.Events, ct);
+        await log.AppendAsync(new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = owner,
+            Repo = repo,
+            EntityNumber = itemNumber,
+            IdempotencyKey = $"rejected:{owner}/{repo}#{itemNumber}:{reason}",
+            Body = $"command rejected: {reason}",
+        }, uow.Events, ct);
     }
 }

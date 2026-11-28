@@ -42,7 +42,7 @@ public sealed class PublisherConsumer(
                         // (idempotent) publish and the announcement; a crash after the
                         // marker would drop PrPublished forever (docs/eventlog.md invariant 2)
                         await log.AppendAsync(
-                            new PrPublished(pr.Owner, pr.Repo, pr.ItemNumber, prNumber), ct);
+                            new PrPublished { Owner = pr.Owner, Repo = pr.Repo, ItemNumber = pr.ItemNumber, PrNumber = prNumber }, ct);
                         return prNumber;
                     }, ct);
                 break;
@@ -90,7 +90,7 @@ public sealed class PublisherConsumer(
             // the dead-letter store alone carries no identity to react on)
             if (evt is PublishPr pr)
                 await log.AppendAsync(
-                    new PublishFailed(pr.Owner, pr.Repo, pr.ItemNumber, pr.IdempotencyKey, ex.Message), ct);
+                    new PublishFailed { Owner = pr.Owner, Repo = pr.Repo, ItemNumber = pr.ItemNumber, IdempotencyKey = pr.IdempotencyKey, Cause = ex.Message }, ct);
             throw new PermanentDeliveryException($"{ex.Message} (artifact state unknown — verify on GitHub before replay)");
         }
     }

@@ -58,14 +58,24 @@ public sealed class RunWatchdogTests : IAsyncLifetime
 
     private async Task StartRunAsync(long runId = 7)
     {
-        var input = new RunInput(Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: null,
-            Command: "plan", PlanCommentId: 0, Profile: "planner",
-            AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
+        var input = new RunInput
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = null,
+            Command = "plan",
+            PlanCommentId = 0,
+            Profile = "planner",
+            AgentBranch = null,
+            DefaultBranch = "main",
+            ReviewHeadSha = null,
+        };
         // the registry reads run facts back from orch_run — seed it with the same input
         await RunContainerSchema.SeedRunAsync(_fx, runId, taskId: 3,
             input: System.Text.Json.JsonSerializer.Serialize(input,
                 new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
-        await _consumer.HandleAsync(new RunScheduled(runId, TaskId: 3, WorkflowId: 2, input, null),
+        await _consumer.HandleAsync(new RunScheduled { RunId = runId, TaskId = 3, WorkflowId = 2, Input = input, Secrets = null },
             attempt: 1, CancellationToken.None);
     }
 
@@ -99,7 +109,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
     {
         await StartRunAsync();
         await _log.AppendAsync(
-            new AgentCallback(7, "completed", """{"sessionId":"7"}""", "evt-7-terminal"),
+            new AgentCallback { RunId = 7, Route = "completed", Body = """{"sessionId":"7"}""", EventId = "evt-7-terminal" },
             CancellationToken.None);
         _docker.NextSnapshot = new ContainerSnapshot("exited", 0, false, DateTime.UtcNow.AddMinutes(-5));
 
@@ -113,7 +123,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
     public async Task A_terminal_callback_on_an_already_settled_run_is_skipped_without_events()
     {
         await _consumer.HandleAsync(
-            new AgentCallback(7, "completed", null, "evt-7-terminal"),
+            new AgentCallback { RunId = 7, Route = "completed", Body = null, EventId = "evt-7-terminal" },
             attempt: 1, CancellationToken.None);
 
         Assert.Empty(await _fx.AppendedAsync());

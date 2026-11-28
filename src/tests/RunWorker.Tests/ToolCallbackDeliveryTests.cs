@@ -41,10 +41,12 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
         await RunContainerSchema.SeedRunAsync(_fx, runId: 7, taskId: 3);
     }
 
-    private static AgentCallback ToolCallback(string eventId) => new(
-        RunId: 7, Route: "tool",
-        Body: "{\"eventId\":\"" + eventId + "\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"toolName\":\"save_plan\",\"args\":{\"goals\":\"g\",\"scope\":\"s\",\"acceptanceCriteria\":\"a\",\"steps\":[]}}",
-        EventId: eventId);
+    private static AgentCallback ToolCallback(string eventId) => new AgentCallback
+    {
+        RunId = 7, Route = "tool",
+        Body = "{\"eventId\":\"" + eventId + "\",\"occurredAt\":\"2026-01-01T00:00:00Z\",\"toolName\":\"save_plan\",\"args\":{\"goals\":\"g\",\"scope\":\"s\",\"acceptanceCriteria\":\"a\",\"steps\":[]}}",
+        EventId = eventId,
+    };
 
     [Fact]
     public async Task Redelivery_of_the_same_eventId_yields_one_row()
@@ -63,8 +65,8 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
     [Fact]
     public async Task Callbacks_without_an_eventId_do_not_collide()
     {
-        await _store.AppendAsync(new AgentCallback(7, "progress", Body: null), CancellationToken.None);
-        await _store.AppendAsync(new AgentCallback(7, "progress", Body: null), CancellationToken.None);
+        await _store.AppendAsync(new AgentCallback { RunId = 7, Route = "progress", Body = null }, CancellationToken.None);
+        await _store.AppendAsync(new AgentCallback { RunId = 7, Route = "progress", Body = null }, CancellationToken.None);
 
         Assert.Equal(2, await CountRowsAsync(null));
     }
@@ -75,8 +77,19 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
         var id = await _store.AppendAsync(ToolCallback("7-tool-1"), CancellationToken.None);
 
         var store = RunContainerSchema.Store(_fx);
-        var input = new RunInput("o", "r", 1, PrNumber: 1, Command: "plan", PlanCommentId: 0,
-            Profile: "planner", AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: null);
+        var input = new RunInput
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            Command = "plan",
+            PlanCommentId = 0,
+            Profile = "planner",
+            AgentBranch = null,
+            DefaultBranch = "main",
+            ReviewHeadSha = null,
+        };
         // the registry reads run facts back from orch_run — seed it with the same input
         await RunContainerSchema.SeedRunAsync(_fx, runId: 7, taskId: 3,
             input: System.Text.Json.JsonSerializer.Serialize(input,

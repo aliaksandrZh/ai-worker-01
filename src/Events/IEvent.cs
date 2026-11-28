@@ -11,6 +11,26 @@ public interface IEvent
     string StreamKey { get; }
 }
 
+/// <summary>
+/// Common root of every event payload. Fields shared by all events live here once — a new
+/// common field is added to this record and exists on every event. Property names match the
+/// historical positional payloads, so stored JSON stays compatible.
+/// </summary>
+public abstract record RootEvent : IEvent
+{
+    public abstract string StreamKey { get; }
+
+    /// <summary>Deterministic dedup key for the event log's unique (type, eventId) index.</summary>
+    public string? EventId { get; init; }
+}
+
+/// <summary>An event scoped to one GitHub item: the item's owner/repo live here instead of in every record.</summary>
+public abstract record RepositoryEvent : RootEvent
+{
+    public required string Owner { get; init; }
+    public required string Repo { get; init; }
+}
+
 /// <summary>A GitHub item (issue or pull request) — the root of most streams.</summary>
 public readonly record struct ItemRef(string Owner, string Repo, long Number)
 {

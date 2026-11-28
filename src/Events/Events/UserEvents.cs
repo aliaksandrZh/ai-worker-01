@@ -6,34 +6,30 @@ namespace PiAgent.Events;
 /// The Poller parsed a slash command (grammar, author permission and resolved target
 /// travel in the payload); starts the mapped flow.
 /// </summary>
-public sealed record UserCommand(
-    string Command,
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long CommentId,
-    string Author,
-    string AuthorPermission,
-    string? Text,
-    string? EventId = null) : IEvent
+public sealed record UserCommand : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Command { get; init; }
+    public required long CommentId { get; init; }
+    public required string Author { get; init; }
+    public required string AuthorPermission { get; init; }
+    public required string? Text { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>
 /// A decision: plan approved / changes requested; review escalation resolved; test
 /// results accepted / bug found / does not meet requirements.
 /// </summary>
-public sealed record UserDecision(
-    DecisionKind Kind,
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    string Author,
-    string? Text,
-    string? EventId = null) : IEvent
+public sealed record UserDecision : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required DecisionKind Kind { get; init; }
+    public required string Author { get; init; }
+    public required string? Text { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>What the User decided (docs/flows events table).</summary>
@@ -50,12 +46,11 @@ public enum DecisionKind
 }
 
 /// <summary>The User cancels the workflow: runs stop, Task → cancelled, Workflow → cancelled.</summary>
-public sealed record UserCancel(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    string Author,
-    string? Reason) : IEvent
+public sealed record UserCancel : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Author { get; init; }
+    public required string? Reason { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }

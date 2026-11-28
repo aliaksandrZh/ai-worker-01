@@ -133,10 +133,10 @@ public sealed class GithubSyncWorkerTests : IAsyncLifetime
 
         var appended = await _fx.AppendedAsync();
         Assert.Contains(appended, e =>
-            e is ItemChanged { IsPullRequest: true, State: "open", Labels: ["AI:Code"] });
+            e is RepositoryChanged { IsPullRequest: true, State: "open", Labels: ["AI:Code"] });
         Assert.Contains(appended, e => e is PrUpdated { HeadSha: "abc" });
         Assert.Contains(appended, e => e is ReviewAdded { Verdict: "CHANGES_REQUESTED" });
-        Assert.DoesNotContain(appended, e => e is ItemClosed);
+        Assert.DoesNotContain(appended, e => e is RepositoryClosed);
     }
 
     [Fact]
@@ -151,8 +151,8 @@ public sealed class GithubSyncWorkerTests : IAsyncLifetime
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
         var appended = await _fx.AppendedAsync();
-        Assert.Contains(appended, e => e is ItemClosed);
-        Assert.DoesNotContain(appended, e => e is ItemChanged);
+        Assert.Contains(appended, e => e is RepositoryClosed);
+        Assert.DoesNotContain(appended, e => e is RepositoryChanged);
         Assert.DoesNotContain(appended, e => e is PrUpdated);
         Assert.DoesNotContain(appended, e => e is ReviewAdded);
         Assert.DoesNotContain(appended, e => e is CommentChanged);
@@ -174,7 +174,7 @@ public sealed class GithubSyncWorkerTests : IAsyncLifetime
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
 
-        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is RepositoryChanged));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public sealed class GithubSyncWorkerTests : IAsyncLifetime
         _api.Items.Add(new GithubItem(1, IsPullRequest: false, "t", "b", "open", ["AI:Code", "AI:Plan"], now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
-        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is RepositoryChanged));
 
         // and a title edit does not re-emit the item for its unchanged labels — the
         // fingerprint covers everything at once
@@ -197,7 +197,7 @@ public sealed class GithubSyncWorkerTests : IAsyncLifetime
         _api.Items.Add(new GithubItem(1, IsPullRequest: false, "t", "b", "open", ["AI:Code", "AI:Plan"], now));
 
         await _worker.SyncRepoAsync(new SyncConfig.RepoConfig("o", "r"), CancellationToken.None);
-        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is ItemChanged));
+        Assert.Equal(2, (await _fx.AppendedAsync()).Count(e => e is RepositoryChanged));
     }
 
     [Fact]

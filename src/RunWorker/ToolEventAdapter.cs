@@ -110,67 +110,114 @@ public static class ToolEventAdapter
             {
                 var p = Payload<PlanPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new PlanSaved(owner, repo, item, entry.WorkflowId,
-                    p.Goals, p.Scope, p.AcceptanceCriteria, p.Steps);
+                return new PlanSaved
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    WorkflowId = entry.WorkflowId,
+                    Goals = p.Goals,
+                    Scope = p.Scope,
+                    AcceptanceCriteria = p.AcceptanceCriteria,
+                    Steps = p.Steps,
+                };
             },
             ["request_clarification"] = (args, entry) =>
             {
                 var p = Payload<ClarificationPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new ClarificationRequested(owner, repo, item, entry.RunId, p.Question, p.Context);
+                return new ClarificationRequested { Owner = owner, Repo = repo, ItemNumber = item, RunId = entry.RunId, Question = p.Question, Context = p.Context };
             },
             ["report_blocker"] = (args, entry) =>
             {
                 var p = Payload<BlockerPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new BlockerReported(owner, repo, item, entry.RunId, p.Description, p.Cause, p.Options);
+                return new BlockerReported { Owner = owner, Repo = repo, ItemNumber = item, RunId = entry.RunId, Description = p.Description, Cause = p.Cause, Options = p.Options };
             },
             ["submit_review_comments"] = (args, entry) =>
             {
                 var p = Payload<ReviewComments>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new ReviewCommentsSubmitted(owner, repo, item,
-                    entry.Input.PrNumber ?? 0, entry.RunId, p.Comments);
+                return new ReviewCommentsSubmitted
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    PrNumber = entry.Input.PrNumber ?? 0,
+                    RunId = entry.RunId,
+                    Comments = p.Comments,
+                };
             },
             ["request_decision"] = (args, entry) =>
             {
                 var p = Payload<DecisionPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new ReviewDecisionRequested(owner, repo, item,
-                    entry.RunId, p.Issue, p.Context, p.Options);
+                return new ReviewDecisionRequested
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    RunId = entry.RunId,
+                    Issue = p.Issue,
+                    Context = p.Context,
+                    Options = p.Options,
+                };
             },
             ["report_bug"] = (args, entry) =>
             {
                 var p = Payload<BugPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new BugReported(owner, repo, item, entry.TaskId,
-                    p.Summary, p.ReproSteps, p.TestResults);
+                return new BugReported
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    TaskId = entry.TaskId,
+                    Summary = p.Summary,
+                    ReproSteps = p.ReproSteps,
+                    TestResults = p.TestResults,
+                };
             },
             ["report_env_issue"] = (args, entry) =>
             {
                 var p = Payload<EnvIssuePayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new EnvIssueReported(owner, repo, item, entry.TaskId, p.Description, p.WhatIsNeeded);
+                return new EnvIssueReported { Owner = owner, Repo = repo, ItemNumber = item, TaskId = entry.TaskId, Description = p.Description, WhatIsNeeded = p.WhatIsNeeded };
             },
             ["request_criteria_clarification"] = (args, entry) =>
             {
                 var p = Payload<ClarificationPayload>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new CriteriaClarificationRequested(owner, repo, item,
-                    entry.TaskId, p.Question, p.Context);
+                return new CriteriaClarificationRequested
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    TaskId = entry.TaskId,
+                    Question = p.Question,
+                    Context = p.Context,
+                };
             },
             ["report_tests_passed"] = (args, entry) =>
             {
                 var p = Payload<TestsSummary>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new TestsPassed(owner, repo, item, entry.TaskId, p.Summary);
+                return new TestsPassed { Owner = owner, Repo = repo, ItemNumber = item, TaskId = entry.TaskId, Summary = p.Summary };
             },
             ["submit_pr_description"] = (args, entry) =>
             {
                 var p = Payload<PrDescription>(args);
                 var (owner, repo, item) = Envelope(entry);
-                return new PrDescriptionSubmitted(owner, repo, item,
-                    entry.Input.PrNumber, entry.RunId, p.Title, p.Body);
+                return new PrDescriptionSubmitted
+                {
+                    Owner = owner,
+                    Repo = repo,
+                    ItemNumber = item,
+                    PrNumber = entry.Input.PrNumber,
+                    RunId = entry.RunId,
+                    Title = p.Title,
+                    Body = p.Body,
+                };
             },
         };
 }

@@ -32,7 +32,7 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Appended_event_is_claimed_and_acked()
     {
         var id = await _store.AppendAsync(
-            new CommentChanged("o", "r", 1, 10, "a", "b", Deleted: false), CancellationToken.None);
+            new CommentChanged { Owner = "o", Repo = "r", ItemNumber = 1, CommentId = 10, Author = "a", Body = "b", Deleted = false }, CancellationToken.None);
 
         var claimed = await _store.ClaimAsync(CommentType, 10, TimeSpan.FromMinutes(5), CancellationToken.None);
         Assert.Single(claimed);
@@ -52,13 +52,34 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Read_by_run_id_returns_only_that_runs_events_oldest_first()
     {
         // the read side (IEventReader, Block 3.3b): the aggregation source for one reviewer run
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
-            Comments: [new ReviewFinding("a.cs", 1, "major", "first")]), CancellationToken.None);
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 8,
-            Comments: [new ReviewFinding("z.cs", 9, "minor", "other run")]), CancellationToken.None);
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
-            Comments: [new ReviewFinding("b.cs", 2, "minor", "second")]), CancellationToken.None);
-        await _store.AppendAsync(new BugReported("o", "r", 1, TaskId: 1, "s", [], "t"), CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 7,
+            Comments = [new ReviewFinding("a.cs", 1, "major", "first")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 8,
+            Comments = [new ReviewFinding("z.cs", 9, "minor", "other run")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 7,
+            Comments = [new ReviewFinding("b.cs", 2, "minor", "second")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new BugReported { Owner = "o", Repo = "r", ItemNumber = 1, TaskId = 1, Summary = "s", ReproSteps = [], TestResults = "t" }, CancellationToken.None);
 
         var read = await _store.ReadByRunIdAsync<ReviewCommentsSubmitted>(7, CancellationToken.None);
 
@@ -71,7 +92,7 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Failed_event_redelivers_then_dead_letters_after_max_attempts()
     {
         var id = await _store.AppendAsync(
-            new CommentChanged("o", "r", 1, 10, "a", "b", Deleted: false), CancellationToken.None);
+            new CommentChanged { Owner = "o", Repo = "r", ItemNumber = 1, CommentId = 10, Author = "a", Body = "b", Deleted = false }, CancellationToken.None);
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {

@@ -30,8 +30,13 @@ public static class RunWorkerEndpoints
             // the Bridge sends the callback body as a JSON object (the route's body of
             // docs/run-worker.md); the callback row carries its raw JSON text
             await log.AppendAsync(
-                new AgentCallback(entry.RunId, payload.Route,
-                    payload.Body?.GetRawText(), ParseEventId(payload.Body?.GetRawText())), ct);
+                new AgentCallback
+                {
+                    RunId = entry.RunId,
+                    Route = payload.Route,
+                    Body = payload.Body?.GetRawText(),
+                    EventId = ParseEventId(payload.Body?.GetRawText()),
+                }, ct);
             return Results.Accepted();
         });
 

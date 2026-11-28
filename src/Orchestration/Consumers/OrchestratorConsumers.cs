@@ -9,7 +9,7 @@ public sealed class OrchestratorInbound(Orchestrator core) : IEventConsumer
 {
     public Type[] Consumes { get; } =
     [
-        typeof(UserCommand), typeof(UserDecision), typeof(UserCancel), typeof(ItemClosed),
+        typeof(UserCommand), typeof(UserDecision), typeof(UserCancel), typeof(RepositoryClosed),
     ];
 
     public string Name => "OrchestratorInbound";
@@ -19,7 +19,7 @@ public sealed class OrchestratorInbound(Orchestrator core) : IEventConsumer
         UserCommand command => core.HandleUserCommandAsync(command, ct),
         UserDecision decision => core.HandleUserDecisionAsync(decision, ct),
         UserCancel cancel => core.HandleUserCancelAsync(cancel, ct),
-        ItemClosed closed => core.HandleItemClosedAsync(closed, ct),
+        RepositoryClosed closed => core.HandleItemClosedAsync(closed, ct),
         _ => Task.CompletedTask,
     };
 }
