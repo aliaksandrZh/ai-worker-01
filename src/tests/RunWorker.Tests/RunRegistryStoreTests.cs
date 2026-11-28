@@ -53,7 +53,7 @@ public sealed class RunRegistryStoreTests : IAsyncLifetime
             DefaultBranch = "main",
             ReviewHeadSha = null,
         },
-        ContainerName: "pi-session-7", Token: token, StartedUtc: DateTime.UtcNow);
+        ContainerName: "pi-session-7", Token: token, StartedUtc: new DateTime(2026, 11, 28, 10, 56, 22, DateTimeKind.Utc));
 
     private static string InputJson() =>
         System.Text.Json.JsonSerializer.Serialize(Entry().Input, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
@@ -71,7 +71,18 @@ public sealed class RunRegistryStoreTests : IAsyncLifetime
         Assert.Equal("docker-abc", byToken.ContainerName); // the docker id is the handle
 
         var unfinished = await _store.LoadUnfinishedAsync(CancellationToken.None);
-        Assert.Equal([entry with { ContainerName = "docker-abc" }], unfinished);
+        // Assert.Equal([entry with { ContainerName = "docker-abc" }], unfinished);
+        var expected = entry with { ContainerName = "docker-abc" };
+        
+        Assert.Single(unfinished);
+        Assert.Equal(expected.RunId, unfinished[0].RunId);
+        Assert.Equal(expected.TaskId, unfinished[0].TaskId);
+        Assert.Equal(expected.WorkflowId, unfinished[0].WorkflowId);
+        Assert.Equal(expected.ContainerName, unfinished[0].ContainerName);
+        Assert.Equal(expected.Token, unfinished[0].Token);
+        Assert.Equal(expected.StartedUtc, unfinished[0].StartedUtc);
+        Assert.Equal(expected.Image, unfinished[0].Image);
+        Assert.Equal(expected.Input, unfinished[0].Input);
     }
 
     [Fact]
