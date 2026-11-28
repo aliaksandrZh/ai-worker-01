@@ -28,7 +28,7 @@ public sealed class EventLogFingerprintTests : IAsyncLifetime
     public Task InitializeAsync() => _fx.ResetCoreAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private static RepositoryChanged ItemChanged(string eventId) => new RepositoryChanged
+    private static ItemChanged ItemChanged(string eventId) => new ItemChanged
     {
         Owner = "o", Repo = "r", Number = 25, IsPullRequest = false,
         Title = "t", Body = "b", State = "open", Labels = [], EventId = eventId,

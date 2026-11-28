@@ -8,7 +8,7 @@ namespace PiAgent.Events;
 
 /// <summary>Issue/PR: title, body, state, labels — the item's whole visible state in one
 /// record; the eventId fingerprints all of it, so a label change is an item change.</summary>
-public sealed record RepositoryChanged : RepositoryEvent
+public sealed record ItemChanged : RepositoryEvent
 {
     public required long Number { get; init; }
     public required bool IsPullRequest { get; init; }
@@ -21,7 +21,7 @@ public sealed record RepositoryChanged : RepositoryEvent
 }
 
 /// <summary>Explicit terminal beat when the root item closes — closes the Workflow.</summary>
-public sealed record RepositoryClosed : RepositoryEvent
+public sealed record ItemClosed : RepositoryEvent
 {
     public required long Number { get; init; }
 

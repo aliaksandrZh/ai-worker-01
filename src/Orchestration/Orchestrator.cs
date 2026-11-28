@@ -435,7 +435,7 @@ public sealed class Orchestrator(
 
     // ---- lifecycle beats -------------------------------------------------------
 
-    public async Task HandleItemClosedAsync(RepositoryClosed evt, long causationId, CancellationToken ct)
+    public async Task HandleItemClosedAsync(ItemClosed evt, long causationId, CancellationToken ct)
     {
         await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.Number), uow, ct);

@@ -639,7 +639,7 @@ public sealed class OrchestratorReactorTests : IAsyncLifetime
     public async Task Item_closes_the_workflow_and_stops_runs()
     {
         var workflow = await RunCommandAsync(Command());
-        await _orchestrator.HandleItemClosedAsync(new RepositoryClosed { Owner = "o", Repo = "r", Number = 1 }, 0, CancellationToken.None);
+        await _orchestrator.HandleItemClosedAsync(new ItemClosed { Owner = "o", Repo = "r", Number = 1 }, 0, CancellationToken.None);
 
         workflow = await WorkflowAsync(workflow.Id);
         Assert.Equal(WorkflowStatuses.Closed, workflow.Status);

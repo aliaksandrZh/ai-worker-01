@@ -15,7 +15,7 @@ internal static class Derivation
 {
     /// <summary>The events one item's observation stands for: ItemChanged while open, the
     /// ItemClosed terminal beat once it isn't.</summary>
-    public static (RepositoryChanged? Changed, RepositoryClosed? Closed) ItemEvents(string owner, string repo, GithubItem item)
+    public static (ItemChanged? Changed, ItemClosed? Closed) ItemEvents(string owner, string repo, GithubItem item)
     {
         var at = Unix(item.UpdatedAtUtc);
         var itemId = $"item:{item.Number}:{at}:{Sha8($"{item.Title}\n{item.Body}\n{item.State}\n{string.Join(',', item.Labels)}")}";
@@ -26,7 +26,7 @@ internal static class Derivation
             // (comments on a closed issue bump updated_at and float it back onto page 1), and
             // every one of those cycles must dedup to the same beat, not re-close an already
             // closed Workflow.
-            return (null, new RepositoryClosed
+            return (null, new ItemClosed
             {
                 Owner = owner,
                 Repo = repo,
@@ -38,7 +38,7 @@ internal static class Derivation
         // one record per item: title, body, state and labels in the payload and in the
         // fingerprint — a label change is an item change, and an edit of anything else no
         // longer re-emits a labels event with unchanged labels
-        return (new RepositoryChanged
+        return (new ItemChanged
         {
             Owner = owner,
             Repo = repo,
