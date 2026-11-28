@@ -71,11 +71,7 @@ public sealed class RunRegistryStoreTests : IAsyncLifetime
         Assert.Equal("docker-abc", byToken.ContainerName); // the docker id is the handle
 
         var unfinished = await _store.LoadUnfinishedAsync(CancellationToken.None);
-        var expected = entry with { ContainerName = "docker-abc" };
-        var actual = Assert.Single(unfinished);
-
-        Assert.Equal(expected, actual);
-        Assert.Equal(expected.Input, actual.Input);
+        Assert.Equal([entry with { ContainerName = "docker-abc" }], unfinished);
     }
 
     [Fact]
