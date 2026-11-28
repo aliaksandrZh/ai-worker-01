@@ -21,9 +21,9 @@ public sealed class Orchestrator(
 
     // ---- commands --------------------------------------------------------------
 
-    public async Task HandleUserCommandAsync(UserCommand cmd, CancellationToken ct)
+    public async Task HandleUserCommandAsync(UserCommand cmd, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.GetOrCreateWorkflowAsync(new ItemRef(cmd.Owner, cmd.Repo, cmd.ItemNumber), uow, ct);
 
         if (workflow.Status is not WorkflowStatuses.Active)
@@ -76,9 +76,9 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleUserDecisionAsync(UserDecision decision, CancellationToken ct)
+    public async Task HandleUserDecisionAsync(UserDecision decision, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(
             new ItemRef(decision.Owner, decision.Repo, decision.ItemNumber), uow, ct);
         if (workflow is null)
@@ -121,9 +121,9 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleUserCancelAsync(UserCancel cancel, CancellationToken ct)
+    public async Task HandleUserCancelAsync(UserCancel cancel, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(
             new ItemRef(cancel.Owner, cancel.Repo, cancel.ItemNumber), uow, ct);
         if (workflow is not null)
@@ -136,28 +136,30 @@ public sealed class Orchestrator(
 
     // ---- run lifecycle ---------------------------------------------------------
 
-    public async Task HandleRunProcessingAsync(RunProcessing evt, CancellationToken ct)
+    public async Task HandleRunProcessingAsync(RunProcessing evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var run = await state.GetRunAsync(evt.RunId, uow, ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
+        var runId = evt.RunId ?? throw new PermanentDeliveryException("run event without runId");
+        var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
 
-        await state.SetRunStatusAsync(evt.RunId, RunStatuses.Processing, uow, ct);
+        await state.SetRunStatusAsync(runId, RunStatuses.Processing, uow, ct);
         await state.SetTaskStatusAsync(task.Id, TaskStatuses.Processing, uow, ct);
-        await MoveBoardAsync(workflow, "processing", evt.RunId, uow, ct);
+        await MoveBoardAsync(workflow, "processing", runId, uow, ct);
 
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleRunCompletedAsync(RunCompleted evt, CancellationToken ct)
+    public async Task HandleRunCompletedAsync(RunCompleted evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var run = await state.GetRunAsync(evt.RunId, uow, ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
+        var runId = evt.RunId ?? throw new PermanentDeliveryException("run event without runId");
+        var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
 
-        await state.SetRunStatusAsync(evt.RunId, RunStatuses.Succeeded, uow, ct);
+        await state.SetRunStatusAsync(runId, RunStatuses.Succeeded, uow, ct);
         if (task.Status is TaskStatuses.WaitingForHuman)
         {
             // parked by an escalation — a late completion does not advance the chain
@@ -188,7 +190,7 @@ public sealed class Orchestrator(
                     // run_completed "settles without pointers" when the facts are absent)
                     await state.SetTaskStatusAsync(task.Id, TaskStatuses.WaitingForHuman, uow, ct);
                     await NotifyAsync(workflow,
-                        $"implement run {evt.RunId} completed without git facts (branch) — cannot publish PR",
+                        $"implement run {runId} completed without git facts (branch) — cannot publish PR",
                         uow, ct);
                     break;
                 }
@@ -202,18 +204,18 @@ public sealed class Orchestrator(
                     Repo = workflow.Repo,
                     WorkflowId = workflow.Id,
                     ItemNumber = workflow.ItemNumber,
-                    IdempotencyKey = $"pr:{workflow.Id}:{run.Input.Profile}:{evt.RunId}",
+                    IdempotencyKey = $"pr:{workflow.Id}:{run.Input.Profile}:{runId}",
                     HeadBranch = evt.Branch,
                     BaseBranch = DefaultBranchFor(workflow.Owner, workflow.Repo),
                     Title = $"AI: {run.Input.Command} on #{workflow.ItemNumber}",
                     Body = $"Workflow {workflow.Id}, task {task.Id}",
                     PrNumber = null,
                 }, uow.Events, ct);
-                await MoveBoardAsync(workflow, "review", evt.RunId, uow, ct);
+                await MoveBoardAsync(workflow, "review", runId, uow, ct);
                 break;
 
             case TaskTypes.Review:
-                var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(evt.RunId, ct);
+                var submitted = await eventReader.ReadByRunIdAsync<ReviewCommentsSubmitted>(runId, ct);
                 if (submitted.SelectMany(e => e.Comments).ToList() is { Count: > 0 } comments)
                 {
                     await log.AppendAsync(new PublishReview
@@ -223,8 +225,9 @@ public sealed class Orchestrator(
                         PrNumber = run.Input.PrNumber ?? 0,
                         Verdict = "REQUEST_CHANGES",
                         Body = string.Join("\n\n", comments.Select(c => $"`{c.File}:{c.Line}` ({c.Severity}): {c.Message}")),
-                        RunId = evt.RunId,
-                        IdempotencyKey = $"review:{evt.RunId}",
+                        RunId = runId,
+                        WorkflowId = workflow.Id,
+                        IdempotencyKey = $"review:{runId}",
                         HeadBranch = workflow.AgentBranch,
                     }, uow.Events, ct);
                     await StartFixingRoundAsync(workflow, null, uow, ct);
@@ -239,11 +242,12 @@ public sealed class Orchestrator(
                         PrNumber = run.Input.PrNumber ?? 0,
                         Verdict = "APPROVE",
                         Body = "Review passed",
-                        RunId = evt.RunId,
-                        IdempotencyKey = $"review:{evt.RunId}",
+                        RunId = runId,
+                        WorkflowId = workflow.Id,
+                        IdempotencyKey = $"review:{runId}",
                         HeadBranch = workflow.AgentBranch,
                     }, uow.Events, ct);
-                    await MoveBoardAsync(workflow, "testing", evt.RunId, uow, ct);
+                    await MoveBoardAsync(workflow, "testing", runId, uow, ct);
                     await CreateNextTaskAsync(workflow, task, TaskTypes.TestDesign, uow, ct);
                 }
                 break;
@@ -256,14 +260,15 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleRunFailedAsync(RunFailed evt, CancellationToken ct)
+    public async Task HandleRunFailedAsync(RunFailed evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var run = await state.GetRunAsync(evt.RunId, uow, ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
+        var runId = evt.RunId ?? throw new PermanentDeliveryException("run event without runId");
+        var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
 
-        await state.SetRunStatusAsync(evt.RunId, RunStatuses.Failed, uow, ct);
+        await state.SetRunStatusAsync(runId, RunStatuses.Failed, uow, ct);
         if (task.Status is TaskStatuses.WaitingForHuman)
         {
             // parked by an escalation — its Run settled late; the parked state stands
@@ -291,7 +296,7 @@ public sealed class Orchestrator(
                 Secrets = SecretsFor(run.Input.Profile),
             }, uow.Events, ct);
             logger.LogWarning("run {run} failed ({cause}); retrying as run {new} (attempt {n})",
-                evt.RunId, evt.Cause, newRunId, attempts + 1);
+                runId, evt.Cause, newRunId, attempts + 1);
         }
         else
         {
@@ -311,13 +316,14 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleRunCancelledAsync(RunCancelled evt, CancellationToken ct)
+    public async Task HandleRunCancelledAsync(RunCancelled evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
-        var run = await state.GetRunAsync(evt.RunId, uow, ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
+        var runId = evt.RunId ?? throw new PermanentDeliveryException("run event without runId");
+        var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
 
-        await state.SetRunStatusAsync(evt.RunId, RunStatuses.Cancelled, uow, ct);
+        await state.SetRunStatusAsync(runId, RunStatuses.Cancelled, uow, ct);
         if (task.Status is not TaskStatuses.WaitingForHuman) // a parked Task survives its stopped Run
             await state.SetTaskStatusAsync(task.Id, TaskStatuses.Cancelled, uow, ct);
         await uow.Events.CommitAsync(ct);
@@ -325,9 +331,9 @@ public sealed class Orchestrator(
 
     // ---- flow tool events ------------------------------------------------------
 
-    public async Task HandlePlanSavedAsync(PlanSaved evt, CancellationToken ct)
+    public async Task HandlePlanSavedAsync(PlanSaved evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null)
         {
@@ -338,6 +344,7 @@ public sealed class Orchestrator(
                 Owner = evt.Owner,
                 Repo = evt.Repo,
                 EntityNumber = evt.ItemNumber,
+                WorkflowId = workflow.Id,
                 IdempotencyKey = $"plan:{evt.WorkflowId}",
                 Body = $"## Plan\n\n{evt.Goals}\n\n## Scope\n\n{evt.Scope}\n\n## Acceptance criteria\n\n{evt.AcceptanceCriteria}",
             },
@@ -356,12 +363,12 @@ public sealed class Orchestrator(
     /// REQUEST_CHANGES vs the run's verdict) and spawn parallel implement chains. The type
     /// stays in OrchestratorAgent's Consumes list so the event is delivered and acked.
     /// </summary>
-    public Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, CancellationToken ct) =>
+    public Task HandleReviewCommentsSubmittedAsync(ReviewCommentsSubmitted evt, long causationId, CancellationToken ct) =>
         Task.CompletedTask;
 
-    public async Task HandleBugReportedAsync(BugReported evt, CancellationToken ct)
+    public async Task HandleBugReportedAsync(BugReported evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null)
         {
@@ -371,6 +378,7 @@ public sealed class Orchestrator(
                 Owner = evt.Owner,
                 Repo = evt.Repo,
                 EntityNumber = evt.ItemNumber,
+                WorkflowId = workflow.Id,
                 IdempotencyKey = $"bug:{evt.TaskId}",
                 Body = $"## Bug\n\n{evt.Summary}\n\n{string.Join("\n", evt.ReproSteps.Select(s => $"1. {s}"))}\n\n{evt.TestResults}",
             },
@@ -381,9 +389,9 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleTestsPassedAsync(TestsPassed evt, CancellationToken ct)
+    public async Task HandleTestsPassedAsync(TestsPassed evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null && Options.ManualAcceptanceRequired)
         {
@@ -395,16 +403,16 @@ public sealed class Orchestrator(
     }
 
     /// <summary>Escalations park the Task and stop the waiting Run (docs/flows tools.md).</summary>
-    public async Task HandleEscalationAsync(IEvent evt, string body, CancellationToken ct)
+    public async Task HandleEscalationAsync(IEvent evt, string body, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var (item, runId, taskId) = evt switch
         {
-            BlockerReported b => (new ItemRef(b.Owner, b.Repo, b.ItemNumber), b.RunId, 0L),
-            ClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), c.RunId, 0L),
-            ReviewDecisionRequested r => (new ItemRef(r.Owner, r.Repo, r.ItemNumber), r.RunId, 0L),
-            EnvIssueReported e => (new ItemRef(e.Owner, e.Repo, e.ItemNumber), 0L, e.TaskId),
-            CriteriaClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), 0L, c.TaskId),
+            BlockerReported b => (new ItemRef(b.Owner, b.Repo, b.ItemNumber), (long?)b.RunId, (long?)0),
+            ClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), (long?)c.RunId, (long?)0),
+            ReviewDecisionRequested r => (new ItemRef(r.Owner, r.Repo, r.ItemNumber), (long?)r.RunId, (long?)0),
+            EnvIssueReported e => (new ItemRef(e.Owner, e.Repo, e.ItemNumber), (long?)0, (long?)e.TaskId),
+            CriteriaClarificationRequested c => (new ItemRef(c.Owner, c.Repo, c.ItemNumber), (long?)0, (long?)c.TaskId),
             _ => throw new InvalidOperationException($"not an escalation: {evt.GetType().Name}"),
         };
 
@@ -412,12 +420,12 @@ public sealed class Orchestrator(
         if (workflow is not null)
         {
             if (taskId > 0)
-                await state.SetTaskStatusAsync(taskId, TaskStatuses.WaitingForHuman, uow, ct);
+                await state.SetTaskStatusAsync(taskId.Value, TaskStatuses.WaitingForHuman, uow, ct);
             else
                 await ParkActiveTaskAsync(workflow, uow, ct);
 
             if (runId > 0)
-                await RequestStopAsync(runId, uow, ct);
+                await RequestStopAsync(runId.Value, uow, ct);
 
             await NotifyAsync(workflow, body, uow, ct);
         }
@@ -427,9 +435,9 @@ public sealed class Orchestrator(
 
     // ---- lifecycle beats -------------------------------------------------------
 
-    public async Task HandleItemClosedAsync(RepositoryClosed evt, CancellationToken ct)
+    public async Task HandleItemClosedAsync(RepositoryClosed evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.Number), uow, ct);
         if (workflow is not null)
         {
@@ -440,12 +448,12 @@ public sealed class Orchestrator(
         await uow.Events.CommitAsync(ct);
     }
 
-    public async Task HandleProjectItemChangedAsync(ProjectItemChanged evt, CancellationToken ct)
+    public async Task HandleProjectItemChangedAsync(ProjectItemChanged evt, long causationId, CancellationToken ct)
     {
         if (evt.LinkedOwner is null || evt.LinkedRepo is null || evt.LinkedItemNumber is null)
             return;
 
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(
             new ItemRef(evt.LinkedOwner, evt.LinkedRepo, evt.LinkedItemNumber.Value), uow, ct);
         if (workflow is not null)
@@ -463,9 +471,9 @@ public sealed class Orchestrator(
     /// (PR published for an unknown item) or no implement Task in flight — a replayed or
     /// foreign PrPublished: a no-op.
     /// </summary>
-    public async Task HandlePrPublishedAsync(PrPublished evt, CancellationToken ct)
+    public async Task HandlePrPublishedAsync(PrPublished evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null)
         {
@@ -493,9 +501,9 @@ public sealed class Orchestrator(
     /// before dead-lettering): the implement Task waiting on that PR parks for a human —
     /// processing must never be a terminal state. A fresh command (or /resume) restarts.
     /// </summary>
-    public async Task HandlePublishFailedAsync(PublishFailed evt, CancellationToken ct)
+    public async Task HandlePublishFailedAsync(PublishFailed evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.ItemNumber), uow, ct);
         if (workflow is not null
             && await state.GetActiveTaskAsync(workflow.Id, uow, ct)
@@ -513,9 +521,9 @@ public sealed class Orchestrator(
     /// New commits on the PR pin the revision the next review round reviews
     /// (docs/flows events.md pr_updated): the head sha becomes the Workflow's review pin.
     /// </summary>
-    public async Task HandlePrUpdatedAsync(PrUpdated evt, CancellationToken ct)
+    public async Task HandlePrUpdatedAsync(PrUpdated evt, long causationId, CancellationToken ct)
     {
-        await using var uow = await state.Factory.BeginAsync(ct);
+        await using var uow = await state.Factory.BeginAsync(causationId, ct);
         var workflow = await state.FindWorkflowAsync(new ItemRef(evt.Owner, evt.Repo, evt.PrNumber), uow, ct);
         if (workflow is not null)
             await state.SetWorkflowPointersAsync(workflow.Id, agentBranch: null, headSha: evt.HeadSha, uow, ct);
@@ -679,7 +687,7 @@ public sealed class Orchestrator(
         var run = await state.GetRunAsync(runId, uow, ct);
         var task = await state.GetTaskAsync(run.TaskId, uow, ct);
         var workflow = await state.GetWorkflowAsync(task.WorkflowId, uow, ct);
-        await log.AppendAsync(new RunStopRequested { RunId = runId, Owner = workflow.Owner, Repo = workflow.Repo, ItemNumber = workflow.ItemNumber, Reason = "cancelled" }, uow.Events, ct);
+        await log.AppendAsync(new RunStopRequested { RunId = runId, Owner = workflow.Owner, Repo = workflow.Repo, ItemNumber = workflow.ItemNumber, WorkflowId = workflow.Id, TaskId = task.Id, Reason = "cancelled" }, uow.Events, ct);
     }
 
     private async Task MoveBoardAsync(WorkflowRow workflow, string column, long runId, IOrchestrationUnitOfWork uow, CancellationToken ct)
@@ -694,6 +702,7 @@ public sealed class Orchestrator(
             ItemNodeId = workflow.NodeId,
             Status = column,
             RunId = runId,
+            WorkflowId = workflow.Id,
             IdempotencyKey = $"board:{runId}:{column}",
         }, uow.Events, ct);
     }
@@ -713,6 +722,7 @@ public sealed class Orchestrator(
             Owner = workflow.Owner,
             Repo = workflow.Repo,
             EntityNumber = workflow.ItemNumber,
+            WorkflowId = workflow.Id,
             IdempotencyKey = $"notification:{workflow.Id}:{body}",
             Body = body,
         }, uow.Events, ct);

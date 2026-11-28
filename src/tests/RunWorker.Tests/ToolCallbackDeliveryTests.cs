@@ -114,7 +114,7 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
 
             // the handler throws (transient outage appending the typed event) → no ack
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => consumer.HandleAsync(evt.Event, evt.Attempt, CancellationToken.None));
+                () => consumer.HandleAsync(evt.Event, evt.Attempt, evt.Id, CancellationToken.None));
             await _store.FailAsync(evt.Id, "transient log outage", maxAttempts: 3, CancellationToken.None);
         }
 
@@ -157,7 +157,7 @@ public sealed class ToolCallbackDeliveryTests : IAsyncLifetime
             where TEvent : IEvent =>
             throw new InvalidOperationException("transient log outage");
 
-        public Task<IEventTransaction> BeginTransactionAsync(CancellationToken ct) =>
-            inner.BeginTransactionAsync(ct);
+        public Task<IEventTransaction> BeginTransactionAsync(long? causationEventId, CancellationToken ct) =>
+            inner.BeginTransactionAsync(causationEventId, ct);
     }
 }

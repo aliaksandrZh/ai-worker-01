@@ -112,4 +112,47 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
         Assert.Single(claimed);
         Assert.Equal(1, claimed[0].Attempt); // replay resets the counter
     }
+
+    [Fact]
+    public async Task Correlation_columns_follow_the_event_and_the_transaction()
+    {
+        // the event carries what it knows at creation (like StreamKey) — the columns follow
+        var rootId = await _store.AppendAsync(new RunScheduled
+        {
+            RunId = 7, TaskId = 3, WorkflowId = 2,
+            Input = new RunInput
+            {
+                Owner = "o", Repo = "r", ItemNumber = 1, PrNumber = null, Command = "/plan",
+                PlanCommentId = 0, Profile = "planner", AgentBranch = null,
+                DefaultBranch = "main", ReviewHeadSha = null,
+            },
+        }, CancellationToken.None);
+
+        // an event without its own cause inherits the transaction's processed event id
+        var tx = await _store.BeginTransactionAsync(99, CancellationToken.None);
+        var childId = await _store.AppendAsync(new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = "o", Repo = "r", EntityNumber = 1,
+            IdempotencyKey = "correlation-test", Body = "b", WorkflowId = 2,
+        }, tx, CancellationToken.None);
+        await tx.CommitAsync(CancellationToken.None);
+
+        await using var cmd = _fx.DataSource.CreateCommand(
+            "SELECT workflow_id, task_id, run_id, causation_id FROM events WHERE id = ANY(@ids) ORDER BY id");
+        cmd.Parameters.AddWithValue("ids", new[] { rootId, childId });
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync()); // run_scheduled: ids from the payload itself
+        Assert.Equal(2, reader.GetInt64(0));
+        Assert.Equal(3, reader.GetInt64(1));
+        Assert.Equal(7, reader.GetInt64(2));
+        Assert.True(reader.IsDBNull(3)); // a root appended outside a transaction has no cause
+
+        Assert.True(await reader.ReadAsync()); // publish_comment: workflow from the event
+        Assert.Equal(2, reader.GetInt64(0));
+        Assert.True(reader.IsDBNull(1));
+        Assert.True(reader.IsDBNull(2));
+        Assert.Equal(99, reader.GetInt64(3)); // causation from the transaction
+    }
 }

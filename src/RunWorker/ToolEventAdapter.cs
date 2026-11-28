@@ -68,8 +68,10 @@ public static class ToolEventAdapter
         }
     }
 
-    /// <summary>Translates one observed call into the typed event of docs/flows/events.md.</summary>
-    public static IEvent Translate(ToolCallback callback, RunEntry entry)
+    /// <summary>Translates one observed call into the typed event of docs/flows/events.md.
+    /// causationId stamps the translated event with the callback log row that produced it
+    /// (docs/event-correlation.md).</summary>
+    public static IEvent Translate(ToolCallback callback, RunEntry entry, long? causationId = null)
     {
         if (!Map.TryGetValue(callback.ToolName, out var build))
             throw new ToolCallbackException(
@@ -77,7 +79,10 @@ public static class ToolEventAdapter
 
         try
         {
-            return build(callback.Args, entry);
+            var evt = build(callback.Args, entry);
+            return evt is RootEvent rooted && causationId is { } cause
+                ? rooted with { CausationId = cause }
+                : evt;
         }
         catch (ToolCallbackException)
         {

@@ -30,7 +30,7 @@ public sealed class DeliverySemanticsTests : IAsyncLifetime
     {
         public List<(CommentChanged Evt, int Attempt)> Seen { get; } = [];
 
-        protected override Task HandleAsync(CommentChanged evt, int attempt, CancellationToken ct)
+        protected override Task HandleAsync(CommentChanged evt, int attempt, long causationId, CancellationToken ct)
         {
             Seen.Add((evt, attempt));
             if (attempt < failUntilAttempt.Length + 1 && failUntilAttempt[attempt - 1] == "fail")
@@ -47,7 +47,7 @@ public sealed class DeliverySemanticsTests : IAsyncLifetime
         {
             try
             {
-                await consumer.HandleAsync(c.Event, c.Attempt, CancellationToken.None);
+                await consumer.HandleAsync(c.Event, c.Attempt, c.Id, CancellationToken.None);
                 await store.AckAsync(c.Id, CancellationToken.None);
             }
             catch (Exception ex)
@@ -138,7 +138,7 @@ public sealed class DeliverySemanticsTests : IAsyncLifetime
     [Fact]
     public async Task Transactional_append_commits_atomically()
     {
-        var tx = await _store.BeginTransactionAsync(CancellationToken.None);
+        var tx = await _store.BeginTransactionAsync(null, CancellationToken.None);
         await _store.AppendAsync(new CommentChanged { Owner = "o", Repo = "r", ItemNumber = 1, CommentId = 10, Author = "a", Body = "b", Deleted = false }, tx, CancellationToken.None);
         Assert.Equal(0, await _fx.PendingCountAsync()); // nothing visible before commit
 

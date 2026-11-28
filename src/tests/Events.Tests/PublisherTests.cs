@@ -101,8 +101,8 @@ public sealed class PublisherTests : IAsyncLifetime
             IdempotencyKey = "plan:1",
             Body = "plan",
         };
-        await _publisher.HandleAsync(comment, 1, CancellationToken.None);
-        await _publisher.HandleAsync(comment, 2, CancellationToken.None); // redelivery
+        await _publisher.HandleAsync(comment, 1, 0, CancellationToken.None);
+        await _publisher.HandleAsync(comment, 2, 0, CancellationToken.None); // redelivery
 
         Assert.Single(_github.Comments);
         Assert.Equal(["plan:1"], await MarkerKeysAsync());
@@ -122,7 +122,7 @@ public sealed class PublisherTests : IAsyncLifetime
             Body = "n",
         };
 
-        await Assert.ThrowsAsync<GithubTransientException>(() => _publisher.HandleAsync(comment, 1, CancellationToken.None));
+        await Assert.ThrowsAsync<GithubTransientException>(() => _publisher.HandleAsync(comment, 1, 0, CancellationToken.None));
         Assert.Empty(await MarkerKeysAsync()); // not marked → redelivery retries
     }
 
@@ -138,7 +138,7 @@ public sealed class PublisherTests : IAsyncLifetime
         var claimed = await queue.ClaimAsync(["PublishReview"], 10, TimeSpan.FromSeconds(1), CancellationToken.None);
         try
         {
-            await _publisher.HandleAsync(claimed[0].Event, 1, CancellationToken.None);
+            await _publisher.HandleAsync(claimed[0].Event, 1, 0, CancellationToken.None);
             Assert.Fail("expected permanent failure");
         }
         catch (PermanentDeliveryException)
@@ -155,7 +155,7 @@ public sealed class PublisherTests : IAsyncLifetime
     public async Task Board_move_without_a_synced_card_is_skipped()
     {
         await _publisher.HandleAsync(
-            new PublishBoardMove { Owner = "o", ProjectNumber = 0, ItemNodeId = "", Status = "review", RunId = 1, IdempotencyKey = "board:1" }, 1, CancellationToken.None);
+            new PublishBoardMove { Owner = "o", ProjectNumber = 0, ItemNodeId = "", Status = "review", RunId = 1, IdempotencyKey = "board:1" }, 1, 0, CancellationToken.None);
 
         Assert.Empty(_github.BoardMoves);
         Assert.Empty(await MarkerKeysAsync());
@@ -180,7 +180,7 @@ public sealed class PublisherTests : IAsyncLifetime
             PrNumber = null,
         };
 
-        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+        await _publisher.HandleAsync(pr, 1, 0, CancellationToken.None);
 
         Assert.Contains(await _fx.AppendedAsync(),
             e => e is PrPublished { Owner: "o", Repo: "r", ItemNumber: 27, PrNumber: 42 });
@@ -203,9 +203,9 @@ public sealed class PublisherTests : IAsyncLifetime
             Body = "b",
             PrNumber = null,
         };
-        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+        await _publisher.HandleAsync(pr, 1, 0, CancellationToken.None);
 
-        await _publisher.HandleAsync(pr, 2, CancellationToken.None); // redelivery
+        await _publisher.HandleAsync(pr, 2, 0, CancellationToken.None); // redelivery
 
         Assert.Single((await _fx.AppendedAsync()).OfType<PrPublished>());
     }
@@ -230,7 +230,7 @@ public sealed class PublisherTests : IAsyncLifetime
         _github.FailWith = GithubExceptionKind.Permanent;
 
         await Assert.ThrowsAsync<PermanentDeliveryException>(
-            () => _publisher.HandleAsync(pr, 1, CancellationToken.None));
+            () => _publisher.HandleAsync(pr, 1, 0, CancellationToken.None));
 
         // the death announcement carries the identity the Orchestrator parks the Task on
         Assert.Contains(await _fx.AppendedAsync(),
@@ -252,7 +252,7 @@ public sealed class PublisherTests : IAsyncLifetime
         };
 
         await Assert.ThrowsAsync<PermanentDeliveryException>(
-            () => _publisher.HandleAsync(comment, 1, CancellationToken.None));
+            () => _publisher.HandleAsync(comment, 1, 0, CancellationToken.None));
 
         // comments are best-effort: no Task waits on them, so no death announcement
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is PublishFailed);

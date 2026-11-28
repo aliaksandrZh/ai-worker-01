@@ -76,7 +76,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
             input: System.Text.Json.JsonSerializer.Serialize(input,
                 new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
         await _consumer.HandleAsync(new RunScheduled { RunId = runId, TaskId = 3, WorkflowId = 2, Input = input, Secrets = null },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class RunWatchdogTests : IAsyncLifetime
     {
         await _consumer.HandleAsync(
             new AgentCallback { RunId = 7, Route = "completed", Body = null, EventId = "evt-7-terminal" },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         Assert.Empty(await _fx.AppendedAsync());
     }

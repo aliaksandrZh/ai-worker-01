@@ -84,7 +84,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         await RunContainerSchema.SeedRunAsync(_fx, runId, taskId: 3,
             input: JsonSerializer.Serialize(input, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         await _consumer.HandleAsync(new RunScheduled { RunId = runId, TaskId = 3, WorkflowId = 2, Input = input, Secrets = secrets },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
                 Input = PlannerInput(),
                 Secrets = ["github-write-pat.txt"],
             },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         var binds = _docker.LastPlan!.Binds;
         // the per-Run tree and the secret files mount by their HOST paths, the secret read-only
@@ -159,7 +159,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
                 Input = PlannerInput(),
                 Secrets = ["github-write-pat.txt"],
             },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         var failed = Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
         Assert.Contains("secret_missing", failed.Cause);
@@ -191,7 +191,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
 
         await consumer.HandleAsync(
             new RunScheduled { RunId = 7, TaskId = 3, WorkflowId = 2, Input = PlannerInput() with { Profile = "stub" } },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         Assert.Contains("STUB_BEHAVIOR=no_completion", _docker.LastPlan!.Env);
     }
@@ -254,7 +254,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             Route = "completed",
             Body = """{"sessionId":"stale","result":{"branch":"old","commitSha":"dead"}}""",
         },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(),
             e => e is RunCompleted or RunCancelled or RunFailed); // nothing settled
@@ -273,7 +273,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             Route = "completed",
             Body = """{"sessionId":"fresh","result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
         },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
         Assert.Equal("ai/task-1", completed.Branch);
@@ -292,7 +292,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
             Route = "completed",
             Body = """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
         },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is RunCompleted);
         Assert.Contains(await _store.LoadUnfinishedAsync(), e => e.RunId == 7);
@@ -310,7 +310,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
                 Route = "completed",
                 Body = """{"result":{"branch":"ai/task-1","commitSha":"c0ffee"}}""",
             },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
         Assert.Equal("ai/task-1", completed.Branch);
@@ -323,7 +323,7 @@ public sealed class RunWorkerConsumerTests : IAsyncLifetime
         await StartRunAsync(PlannerInput());
 
         await _consumer.HandleAsync(new AgentCallback { RunId = 7, Route = "completed", Body = null },
-            attempt: 1, CancellationToken.None);
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         var completed = Assert.Single((await _fx.AppendedAsync()).OfType<RunCompleted>());
         Assert.Null(completed.Branch);

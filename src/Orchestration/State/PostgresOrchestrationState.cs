@@ -34,11 +34,11 @@ public sealed class PostgresOrchestrationState : IOrchestrationState
 
     private sealed class PgFactory(PostgresOrchestrationState owner) : IOrchestrationUnitOfWorkFactory
     {
-        public async Task<IOrchestrationUnitOfWork> BeginAsync(CancellationToken ct)
+        public async Task<IOrchestrationUnitOfWork> BeginAsync(long? causationEventId, CancellationToken ct)
         {
             var conn = await owner._dataSource.OpenConnectionAsync(ct);
             var tx = await conn.BeginTransactionAsync(ct);
-            return new PgUnitOfWork(owner._eventStore.WrapTransaction(conn, tx), conn, tx);
+            return new PgUnitOfWork(owner._eventStore.WrapTransaction(conn, tx, causationEventId), conn, tx);
         }
     }
 

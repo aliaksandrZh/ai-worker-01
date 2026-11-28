@@ -24,7 +24,6 @@ public enum PublishCommentKind
 public sealed record PublishPr : RepositoryEvent
 {
     public required PublishPrKind Kind { get; init; }
-    public required long WorkflowId { get; init; }
     public required long ItemNumber { get; init; }
     public required string IdempotencyKey { get; init; }
     public required string HeadBranch { get; init; }
@@ -77,7 +76,6 @@ public sealed record PublishReview : RepositoryEvent
     public required long PrNumber { get; init; }
     public required string Verdict { get; init; }
     public required string Body { get; init; }
-    public required long RunId { get; init; }
     public required string IdempotencyKey { get; init; }
     public string? HeadBranch { get; init; }
 
@@ -91,7 +89,6 @@ public sealed record PublishBoardMove : RootEvent
     public required int ProjectNumber { get; init; }
     public required string ItemNodeId { get; init; }
     public required string Status { get; init; }
-    public required long RunId { get; init; }
     public required string IdempotencyKey { get; init; }
 
     public override string StreamKey => Streams.Repo(Owner, $"project{ProjectNumber}");

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -44,6 +43,14 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
             -- deterministic eventId participate; other types keep NULL keys (never equal).
             CREATE UNIQUE INDEX IF NOT EXISTS ux_events_type_event_id
                 ON events (type, (payload->>'eventId'));
+            -- correlation columns (docs/event-correlation.md): the event carries what it
+            -- knows at creation; delivery supplies causation via the transaction
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS workflow_id  bigint;
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS task_id      bigint;
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS run_id       bigint;
+            ALTER TABLE events ADD COLUMN IF NOT EXISTS causation_id bigint;
+            CREATE INDEX IF NOT EXISTS ix_events_workflow ON events (workflow_id);
+            CREATE INDEX IF NOT EXISTS ix_events_run      ON events (run_id);
             CREATE TABLE IF NOT EXISTS dead_letter (
                 id          bigserial PRIMARY KEY,
                 stream      text   NOT NULL,
@@ -65,7 +72,7 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
     {
         await using var conn = await _dataSource.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        var id = await AppendCoreAsync(conn, tx, evt, ct);
+        var id = await AppendCoreAsync(conn, tx, evt, txCausationId: null, ct);
         await tx.CommitAsync(ct);
         return id;
     }
@@ -74,14 +81,14 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
         where TEvent : IEvent
     {
         var txImpl = (EventTransaction)tx;
-        return await AppendCoreAsync(txImpl.Connection, txImpl.Transaction, evt, ct);
+        return await AppendCoreAsync(txImpl.Connection, txImpl.Transaction, evt, txImpl.CausationId, ct);
     }
 
-    public async Task<IEventTransaction> BeginTransactionAsync(CancellationToken ct)
+    public async Task<IEventTransaction> BeginTransactionAsync(long? causationEventId, CancellationToken ct)
     {
         var conn = await _dataSource.OpenConnectionAsync(ct);
         var tx = await conn.BeginTransactionAsync(ct);
-        return new EventTransaction(conn, tx);
+        return new EventTransaction(conn, tx, causationEventId);
     }
 
     /// <summary>
@@ -89,34 +96,30 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
     /// the caller's state change (docs/eventlog.md invariant 6) — the Orchestrator's
     /// unit-of-work uses this to share one transaction across stores.
     /// </summary>
-    public IEventTransaction WrapTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction) =>
-        new EventTransaction(connection, transaction);
+    public IEventTransaction WrapTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, long? causationEventId = null) =>
+        new EventTransaction(connection, transaction, causationEventId);
 
     /// <summary>Underlying Npgsql transaction of a store-created IEventTransaction (or null for foreign ones).</summary>
     public static (NpgsqlConnection? Connection, NpgsqlTransaction? Transaction) Unwrap(IEventTransaction tx) =>
         tx is EventTransaction own ? (own.Connection, own.Transaction) : (null, null);
 
     private static async Task<long> AppendCoreAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, IEvent evt, long? txCausationId, CancellationToken ct)
     {
         // Deterministic-eventId dedup: the Runtime Bridge's spool redelivery repeats the
         // callback's eventId verbatim, and the sync's overlap window repeats the
         // content-fingerprinted eventIds of its records (docs/github-sync.md). ON CONFLICT DO
         // NOTHING keeps the row unique and the existing row's id is returned, so no consumer
-        // sees a duplicate. The eventId is read from the serialized payload — the same key the
-        // unique index uses — so every event type that carries one participates.
+        // sees a duplicate. The eventId is read from the typed payload — the same value the
+        // unique index reads from the serialized JSON.
         var payload = EventRegistry.Serialize(evt);
-        string? eventId;
-        using (var doc = JsonDocument.Parse(payload))
-            eventId = doc.RootElement.ValueKind is JsonValueKind.Object
-                      && doc.RootElement.TryGetProperty("eventId", out var property)
-                      && property.ValueKind is JsonValueKind.String
-                ? property.GetString()
-                : null;
+        var root = evt as RootEvent;
+        // correlation (docs/event-correlation.md): the event carries what it knows at
+        // creation; the transaction's processed event is the default causation
         const string sql = """
             WITH inserted AS (
-                INSERT INTO events (stream, type, payload)
-                VALUES (@stream, @type, @payload::jsonb)
+                INSERT INTO events (stream, type, payload, workflow_id, task_id, run_id, causation_id)
+                VALUES (@stream, @type, @payload::jsonb, @workflow_id, @task_id, @run_id, @causation_id)
                 ON CONFLICT (type, (payload->>'eventId')) DO NOTHING
                 RETURNING id
             ), redelivered AS (
@@ -133,17 +136,22 @@ public sealed class EventQueueStore : IEventLog, IEventQueue, IEventReader
         cmd.Parameters.AddWithValue("stream", evt.StreamKey);
         cmd.Parameters.AddWithValue("type", EventRegistry.TypeName(evt.GetType()));
         cmd.Parameters.AddWithValue("payload", payload);
-        cmd.Parameters.AddWithValue("event_id", (object?)eventId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("event_id", (object?)root?.EventId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("workflow_id", (object?)root?.WorkflowId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("task_id", (object?)root?.TaskId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("run_id", (object?)root?.RunId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("causation_id", (object?)root?.CausationId ?? (object?)txCausationId ?? DBNull.Value);
         var id = await cmd.ExecuteScalarAsync(ct);
         return id is long value ? value : throw new InvalidOperationException(
             $"event append produced no row (dedup conflict with a different payload): {evt.GetType().Name}");
     }
 
-    private sealed class EventTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction)
+    private sealed class EventTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, long? causationEventId)
         : IEventTransaction
     {
         public NpgsqlConnection Connection { get; } = connection;
         public NpgsqlTransaction Transaction { get; } = transaction;
+        public long? CausationId { get; } = causationEventId;
 
         public async Task CommitAsync(CancellationToken ct)
         {

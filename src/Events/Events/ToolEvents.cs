@@ -8,7 +8,6 @@ using System.Text.Json;
 public sealed record PlanSaved : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long WorkflowId { get; init; }
     public required string Goals { get; init; }
     public required string Scope { get; init; }
     public required string AcceptanceCriteria { get; init; }
@@ -21,7 +20,6 @@ public sealed record PlanSaved : RepositoryEvent
 public sealed record ClarificationRequested : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
     public required string Question { get; init; }
     public required string? Context { get; init; }
 
@@ -32,7 +30,6 @@ public sealed record ClarificationRequested : RepositoryEvent
 public sealed record BlockerReported : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
     public required string Description { get; init; }
     public required string Cause { get; init; }
     public required IReadOnlyList<string> Options { get; init; }
@@ -45,7 +42,6 @@ public sealed record ReviewCommentsSubmitted : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
     public required long PrNumber { get; init; }
-    public required long RunId { get; init; }
     public required IReadOnlyList<ReviewFinding> Comments { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
@@ -58,7 +54,6 @@ public sealed record ReviewFinding(string File, int Line, string Severity, strin
 public sealed record ReviewDecisionRequested : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
     public required string Issue { get; init; }
     public required string Context { get; init; }
     public required IReadOnlyList<string> Options { get; init; }
@@ -70,7 +65,6 @@ public sealed record ReviewDecisionRequested : RepositoryEvent
 public sealed record BugReported : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long TaskId { get; init; }
     public required string Summary { get; init; }
     public required IReadOnlyList<string> ReproSteps { get; init; }
     public required string TestResults { get; init; }
@@ -82,7 +76,6 @@ public sealed record BugReported : RepositoryEvent
 public sealed record EnvIssueReported : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long TaskId { get; init; }
     public required string Description { get; init; }
     public required string WhatIsNeeded { get; init; }
 
@@ -93,7 +86,6 @@ public sealed record EnvIssueReported : RepositoryEvent
 public sealed record CriteriaClarificationRequested : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long TaskId { get; init; }
     public required string Question { get; init; }
     public required string? Context { get; init; }
 
@@ -104,7 +96,6 @@ public sealed record CriteriaClarificationRequested : RepositoryEvent
 public sealed record TestsPassed : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long TaskId { get; init; }
     public required string Summary { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
@@ -119,7 +110,6 @@ public sealed record PrDescriptionSubmitted : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
     public required long? PrNumber { get; init; }
-    public required long RunId { get; init; }
     public required string Title { get; init; }
     public required string Body { get; init; }
 

@@ -34,9 +34,6 @@ public sealed record RunInput : RepositoryEvent
 /// </summary>
 public sealed record RunScheduled : RootEvent
 {
-    public required long RunId { get; init; }
-    public required long TaskId { get; init; }
-    public required long WorkflowId { get; init; }
     public required RunInput Input { get; init; }
     public IReadOnlyList<string>? Secrets { get; init; }
 
@@ -47,8 +44,6 @@ public sealed record RunScheduled : RootEvent
 public sealed record RunProcessing : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
-    public required long TaskId { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -57,7 +52,6 @@ public sealed record RunProcessing : RepositoryEvent
 public sealed record RunStopRequested : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
     public required string Reason { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
@@ -72,8 +66,6 @@ public sealed record RunStopRequested : RepositoryEvent
 public sealed record RunCompleted : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
-    public required long TaskId { get; init; }
     public string? Branch { get; init; }
     public string? CommitSha { get; init; }
 
@@ -87,8 +79,6 @@ public sealed record RunCompleted : RepositoryEvent
 public sealed record RunFailed : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
-    public required long TaskId { get; init; }
     public required string Cause { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
@@ -98,8 +88,6 @@ public sealed record RunFailed : RepositoryEvent
 public sealed record RunCancelled : RepositoryEvent
 {
     public required long ItemNumber { get; init; }
-    public required long RunId { get; init; }
-    public required long TaskId { get; init; }
 
     public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
@@ -112,7 +100,6 @@ public sealed record RunCancelled : RepositoryEvent
 /// </summary>
 public sealed record AgentCallback : RootEvent
 {
-    public required long RunId { get; init; }
     public required string Route { get; init; }
     public required string? Body { get; init; }
 
