@@ -92,10 +92,17 @@ public sealed class PublisherTests : IAsyncLifetime
     [Fact]
     public async Task Same_key_publishes_once()
     {
-        var comment = new PublishComment(PublishCommentKind.Plan, "o", "r", 1,
-            IdempotencyKey: "plan:1", Body: "plan");
-        await _publisher.HandleAsync(comment, 1, CancellationToken.None);
-        await _publisher.HandleAsync(comment, 2, CancellationToken.None); // redelivery
+        var comment = new PublishComment
+        {
+            Kind = PublishCommentKind.Plan,
+            Owner = "o",
+            Repo = "r",
+            EntityNumber = 1,
+            IdempotencyKey = "plan:1",
+            Body = "plan",
+        };
+        await _publisher.HandleAsync(comment, 1, 0, CancellationToken.None);
+        await _publisher.HandleAsync(comment, 2, 0, CancellationToken.None); // redelivery
 
         Assert.Single(_github.Comments);
         Assert.Equal(["plan:1"], await MarkerKeysAsync());
@@ -105,10 +112,17 @@ public sealed class PublisherTests : IAsyncLifetime
     public async Task Transient_failure_throws_for_redelivery()
     {
         _github.FailWith = GithubExceptionKind.Transient;
-        var comment = new PublishComment(PublishCommentKind.Notification, "o", "r", 1,
-            IdempotencyKey: "notification:1", Body: "n");
+        var comment = new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = "o",
+            Repo = "r",
+            EntityNumber = 1,
+            IdempotencyKey = "notification:1",
+            Body = "n",
+        };
 
-        await Assert.ThrowsAsync<GithubTransientException>(() => _publisher.HandleAsync(comment, 1, CancellationToken.None));
+        await Assert.ThrowsAsync<GithubTransientException>(() => _publisher.HandleAsync(comment, 1, 0, CancellationToken.None));
         Assert.Empty(await MarkerKeysAsync()); // not marked → redelivery retries
     }
 
@@ -117,14 +131,14 @@ public sealed class PublisherTests : IAsyncLifetime
     {
         var queue = _fx.Log;
         var id = await queue.AppendAsync(
-            new PublishReview("o", "r", 1, "APPROVE", "ok", RunId: 1, IdempotencyKey: "review:1"),
+            new PublishReview { Owner = "o", Repo = "r", PrNumber = 1, Verdict = "APPROVE", Body = "ok", RunId = 1, IdempotencyKey = "review:1" },
             CancellationToken.None);
         _github.FailWith = GithubExceptionKind.Permanent;
 
         var claimed = await queue.ClaimAsync(["PublishReview"], 10, TimeSpan.FromSeconds(1), CancellationToken.None);
         try
         {
-            await _publisher.HandleAsync(claimed[0].Event, 1, CancellationToken.None);
+            await _publisher.HandleAsync(claimed[0].Event, 1, 0, CancellationToken.None);
             Assert.Fail("expected permanent failure");
         }
         catch (PermanentDeliveryException)
@@ -141,7 +155,7 @@ public sealed class PublisherTests : IAsyncLifetime
     public async Task Board_move_without_a_synced_card_is_skipped()
     {
         await _publisher.HandleAsync(
-            new PublishBoardMove("o", 0, "", "review", RunId: 1, IdempotencyKey: "board:1"), 1, CancellationToken.None);
+            new PublishBoardMove { Owner = "o", ProjectNumber = 0, ItemNodeId = "", Status = "review", RunId = 1, IdempotencyKey = "board:1" }, 1, 0, CancellationToken.None);
 
         Assert.Empty(_github.BoardMoves);
         Assert.Empty(await MarkerKeysAsync());
@@ -151,11 +165,22 @@ public sealed class PublisherTests : IAsyncLifetime
     public async Task Pr_publish_announces_the_real_pr_number()
     {
         // Case B: the review runs need the number GitHub assigned, not the item number
-        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
-            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
-            Title: "t", Body: "b", PrNumber: null);
+        var pr = new PublishPr
+        {
+            Kind = PublishPrKind.Create,
+            Owner = "o",
+            Repo = "r",
+            WorkflowId = 1,
+            ItemNumber = 27,
+            IdempotencyKey = "pr:1:coder:1",
+            HeadBranch = "agent/1-fix",
+            BaseBranch = "main",
+            Title = "t",
+            Body = "b",
+            PrNumber = null,
+        };
 
-        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+        await _publisher.HandleAsync(pr, 1, 0, CancellationToken.None);
 
         Assert.Contains(await _fx.AppendedAsync(),
             e => e is PrPublished { Owner: "o", Repo: "r", ItemNumber: 27, PrNumber: 42 });
@@ -164,12 +189,23 @@ public sealed class PublisherTests : IAsyncLifetime
     [Fact]
     public async Task Pr_publish_redelivery_does_not_re_announce_the_pr_number()
     {
-        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
-            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
-            Title: "t", Body: "b", PrNumber: null);
-        await _publisher.HandleAsync(pr, 1, CancellationToken.None);
+        var pr = new PublishPr
+        {
+            Kind = PublishPrKind.Create,
+            Owner = "o",
+            Repo = "r",
+            WorkflowId = 1,
+            ItemNumber = 27,
+            IdempotencyKey = "pr:1:coder:1",
+            HeadBranch = "agent/1-fix",
+            BaseBranch = "main",
+            Title = "t",
+            Body = "b",
+            PrNumber = null,
+        };
+        await _publisher.HandleAsync(pr, 1, 0, CancellationToken.None);
 
-        await _publisher.HandleAsync(pr, 2, CancellationToken.None); // redelivery
+        await _publisher.HandleAsync(pr, 2, 0, CancellationToken.None); // redelivery
 
         Assert.Single((await _fx.AppendedAsync()).OfType<PrPublished>());
     }
@@ -177,13 +213,24 @@ public sealed class PublisherTests : IAsyncLifetime
     [Fact]
     public async Task A_permanent_pr_failure_announces_publish_failed_before_poisoning()
     {
-        var pr = new PublishPr(PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 27,
-            IdempotencyKey: "pr:1:coder:1", HeadBranch: "agent/1-fix", BaseBranch: "main",
-            Title: "t", Body: "b", PrNumber: null);
+        var pr = new PublishPr
+        {
+            Kind = PublishPrKind.Create,
+            Owner = "o",
+            Repo = "r",
+            WorkflowId = 1,
+            ItemNumber = 27,
+            IdempotencyKey = "pr:1:coder:1",
+            HeadBranch = "agent/1-fix",
+            BaseBranch = "main",
+            Title = "t",
+            Body = "b",
+            PrNumber = null,
+        };
         _github.FailWith = GithubExceptionKind.Permanent;
 
         await Assert.ThrowsAsync<PermanentDeliveryException>(
-            () => _publisher.HandleAsync(pr, 1, CancellationToken.None));
+            () => _publisher.HandleAsync(pr, 1, 0, CancellationToken.None));
 
         // the death announcement carries the identity the Orchestrator parks the Task on
         Assert.Contains(await _fx.AppendedAsync(),
@@ -194,11 +241,18 @@ public sealed class PublisherTests : IAsyncLifetime
     public async Task A_permanent_comment_failure_announces_nothing()
     {
         _github.FailWith = GithubExceptionKind.Permanent;
-        var comment = new PublishComment(PublishCommentKind.Notification, "o", "r", 1,
-            IdempotencyKey: "notification:1", Body: "n");
+        var comment = new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = "o",
+            Repo = "r",
+            EntityNumber = 1,
+            IdempotencyKey = "notification:1",
+            Body = "n",
+        };
 
         await Assert.ThrowsAsync<PermanentDeliveryException>(
-            () => _publisher.HandleAsync(comment, 1, CancellationToken.None));
+            () => _publisher.HandleAsync(comment, 1, 0, CancellationToken.None));
 
         // comments are best-effort: no Task waits on them, so no death announcement
         Assert.DoesNotContain(await _fx.AppendedAsync(), e => e is PublishFailed);

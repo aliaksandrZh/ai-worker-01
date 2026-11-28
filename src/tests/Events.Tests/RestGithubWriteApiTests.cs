@@ -30,9 +30,12 @@ public sealed class RestGithubWriteApiTests
         return response;
     }
 
-    private static readonly PublishPr Pr = new(
-        PublishPrKind.Create, "o", "r", WorkflowId: 1, ItemNumber: 1, IdempotencyKey: "pr:1:coder:1",
-        HeadBranch: "agent/1-fix", BaseBranch: "main", Title: "t", Body: "b", PrNumber: null);
+    private static readonly PublishPr Pr = new PublishPr
+    {
+        Kind = PublishPrKind.Create, Owner = "o", Repo = "r", WorkflowId = 1, ItemNumber = 1,
+        IdempotencyKey = "pr:1:coder:1", HeadBranch = "agent/1-fix", BaseBranch = "main",
+        Title = "t", Body = "b", PrNumber = null,
+    };
 
     [Fact]
     public async Task Already_exists_422_resolves_the_open_pr_by_head()
@@ -102,8 +105,17 @@ public sealed class RestGithubWriteApiTests
         });
         var api = new RestGithubWriteApi(new HttpClient(handler), "pat");
 
-        var review = new PublishReview("o", "r", PrNumber: 27, "APPROVE", "ok", RunId: 1,
-            IdempotencyKey: "review:1", HeadBranch: "agent/1-fix");
+        var review = new PublishReview
+        {
+            Owner = "o",
+            Repo = "r",
+            PrNumber = 27,
+            Verdict = "APPROVE",
+            Body = "ok",
+            RunId = 1,
+            IdempotencyKey = "review:1",
+            HeadBranch = "agent/1-fix",
+        };
         Assert.Equal(9001, await api.SubmitReviewAsync(review, CancellationToken.None));
 
         Assert.Equal(2, posts);
@@ -129,8 +141,17 @@ public sealed class RestGithubWriteApiTests
         });
         var api = new RestGithubWriteApi(new HttpClient(handler), "pat");
 
-        var review = new PublishReview("o", "r", PrNumber: 27, "APPROVE", "ok", RunId: 1,
-            IdempotencyKey: "review:1", HeadBranch: "agent/1-fix");
+        var review = new PublishReview
+        {
+            Owner = "o",
+            Repo = "r",
+            PrNumber = 27,
+            Verdict = "APPROVE",
+            Body = "ok",
+            RunId = 1,
+            IdempotencyKey = "review:1",
+            HeadBranch = "agent/1-fix",
+        };
         await Assert.ThrowsAsync<GithubPermanentException>(
             () => api.SubmitReviewAsync(review, CancellationToken.None));
 
@@ -144,8 +165,17 @@ public sealed class RestGithubWriteApiTests
             Json(HttpStatusCode.NotFound, """{"message":"Not Found"}"""));
         var api = new RestGithubWriteApi(new HttpClient(handler), "pat");
 
-        var review = new PublishReview("o", "r", PrNumber: 27, "APPROVE", "ok", RunId: 1,
-            IdempotencyKey: "review:1", HeadBranch: null);
+        var review = new PublishReview
+        {
+            Owner = "o",
+            Repo = "r",
+            PrNumber = 27,
+            Verdict = "APPROVE",
+            Body = "ok",
+            RunId = 1,
+            IdempotencyKey = "review:1",
+            HeadBranch = null,
+        };
         await Assert.ThrowsAsync<GithubPermanentException>(
             () => api.SubmitReviewAsync(review, CancellationToken.None));
 

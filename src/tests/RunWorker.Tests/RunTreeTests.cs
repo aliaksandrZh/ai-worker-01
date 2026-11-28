@@ -54,8 +54,10 @@ public sealed class RunTreeTests : IDisposable
         Assert.True(File.Exists(keep)); // only the spool is wiped — the workspace is retry-reuse
     }
 
-    private static RunInput MinimalInput() => new(
-        Owner: "o", Repo: "r", ItemNumber: 27, PrNumber: null, Command: "plan",
-        PlanCommentId: 0, Profile: "planner", AgentBranch: null, DefaultBranch: "main",
-        ReviewHeadSha: null, SessionId: "abc123");
+    private static RunInput MinimalInput() => new RunInput
+    {
+        Owner = "o", Repo = "r", ItemNumber = 27, PrNumber = null, Command = "plan",
+        PlanCommentId = 0, Profile = "planner", AgentBranch = null, DefaultBranch = "main",
+        ReviewHeadSha = null, SessionId = "abc123",
+    };
 }

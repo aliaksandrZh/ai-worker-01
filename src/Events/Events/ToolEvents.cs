@@ -5,118 +5,100 @@ using System.Text.Json;
 /// <summary>events.md "Agent tool events" — every communication tool call produces exactly one event.</summary>
 
 /// <summary>save_plan → the plan is published as an issue comment, approval step runs.</summary>
-public sealed record PlanSaved(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long WorkflowId,
-    string Goals,
-    string Scope,
-    string AcceptanceCriteria,
-    JsonElement? Steps) : IEvent
+public sealed record PlanSaved : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Goals { get; init; }
+    public required string Scope { get; init; }
+    public required string AcceptanceCriteria { get; init; }
+    public required JsonElement? Steps { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>request_clarification → waiting_for_human; the answer routes back to the Planner.</summary>
-public sealed record ClarificationRequested(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long RunId,
-    string Question,
-    string? Context) : IEvent
+public sealed record ClarificationRequested : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Question { get; init; }
+    public required string? Context { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>report_blocker → waiting_for_human.</summary>
-public sealed record BlockerReported(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long RunId,
-    string Description,
-    string Cause,
-    IReadOnlyList<string> Options) : IEvent
+public sealed record BlockerReported : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Description { get; init; }
+    public required string Cause { get; init; }
+    public required IReadOnlyList<string> Options { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>submit_review_comments → published to the PR, fixing Coder Run starts.</summary>
-public sealed record ReviewCommentsSubmitted(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long PrNumber,
-    long RunId,
-    IReadOnlyList<ReviewFinding> Comments) : IEvent
+public sealed record ReviewCommentsSubmitted : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required long PrNumber { get; init; }
+    public required IReadOnlyList<ReviewFinding> Comments { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>One review finding (docs/flows tools.md submit_review_comments signature).</summary>
 public sealed record ReviewFinding(string File, int Line, string Severity, string Message);
 
 /// <summary>request_decision → waiting_for_human.</summary>
-public sealed record ReviewDecisionRequested(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long RunId,
-    string Issue,
-    string Context,
-    IReadOnlyList<string> Options) : IEvent
+public sealed record ReviewDecisionRequested : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Issue { get; init; }
+    public required string Context { get; init; }
+    public required IReadOnlyList<string> Options { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>report_bug → published to the issue, fix assigned to the Coder.</summary>
-public sealed record BugReported(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long TaskId,
-    string Summary,
-    IReadOnlyList<string> ReproSteps,
-    string TestResults) : IEvent
+public sealed record BugReported : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Summary { get; init; }
+    public required IReadOnlyList<string> ReproSteps { get; init; }
+    public required string TestResults { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>report_env_issue → waiting_for_human until the environment is restored.</summary>
-public sealed record EnvIssueReported(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long TaskId,
-    string Description,
-    string WhatIsNeeded) : IEvent
+public sealed record EnvIssueReported : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Description { get; init; }
+    public required string WhatIsNeeded { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>request_criteria_clarification → waiting_for_human; answer routed to the Planner.</summary>
-public sealed record CriteriaClarificationRequested(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long TaskId,
-    string Question,
-    string? Context) : IEvent
+public sealed record CriteriaClarificationRequested : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Question { get; init; }
+    public required string? Context { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>report_tests_passed → manual acceptance policy check.</summary>
-public sealed record TestsPassed(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long TaskId,
-    string Summary) : IEvent
+public sealed record TestsPassed : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required string Summary { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 /// <summary>
@@ -124,16 +106,14 @@ public sealed record TestsPassed(
 /// Orchestrator creates the PR after run_completed — a PR cannot exist before its head
 /// branch, so the number is known only for later updates).
 /// </summary>
-public sealed record PrDescriptionSubmitted(
-    string Owner,
-    string Repo,
-    long ItemNumber,
-    long? PrNumber,
-    long RunId,
-    string Title,
-    string Body) : IEvent
+public sealed record PrDescriptionSubmitted : RepositoryEvent
 {
-    public string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
+    public required long ItemNumber { get; init; }
+    public required long? PrNumber { get; init; }
+    public required string Title { get; init; }
+    public required string Body { get; init; }
+
+    public override string StreamKey => new ItemRef(Owner, Repo, ItemNumber).Key;
 }
 
 // ---- payload records (ticket 01 wire contract) ---------------------------------------------

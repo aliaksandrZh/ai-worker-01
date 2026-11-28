@@ -23,13 +23,13 @@ public sealed class PublisherConsumer(
 
     public string Name => "Publisher";
 
-    public async Task HandleAsync(IEvent evt, int attempt, CancellationToken ct)
+    public async Task HandleAsync(IEvent evt, int attempt, long causationId, CancellationToken ct)
     {
         switch (evt)
         {
             case PublishComment comment:
                 await PublishOnceAsync(comment, comment.IdempotencyKey,
-                    () => github.CreateCommentAsync(comment, ct), ct);
+                    () => github.CreateCommentAsync(comment, ct), causationId, ct);
                 break;
 
             case PublishPr pr:
@@ -42,14 +42,14 @@ public sealed class PublisherConsumer(
                         // (idempotent) publish and the announcement; a crash after the
                         // marker would drop PrPublished forever (docs/eventlog.md invariant 2)
                         await log.AppendAsync(
-                            new PrPublished(pr.Owner, pr.Repo, pr.ItemNumber, prNumber), ct);
+                            new PrPublished { Owner = pr.Owner, Repo = pr.Repo, ItemNumber = pr.ItemNumber, PrNumber = prNumber, CausationId = causationId }, ct);
                         return prNumber;
-                    }, ct);
+                    }, causationId, ct);
                 break;
 
             case PublishReview review:
                 await PublishOnceAsync(review, review.IdempotencyKey,
-                    () => github.SubmitReviewAsync(review, ct), ct);
+                    () => github.SubmitReviewAsync(review, ct), causationId, ct);
                 break;
 
             case PublishBoardMove board:
@@ -60,13 +60,13 @@ public sealed class PublisherConsumer(
                     {
                         await github.MoveBoardItemAsync(board, ct);
                         return 0L;
-                    }, ct);
+                    }, causationId, ct);
                 break;
         }
     }
 
     private async Task PublishOnceAsync<TEvent>(
-        TEvent evt, string idempotencyKey, Func<Task<long>> publish, CancellationToken ct)
+        TEvent evt, string idempotencyKey, Func<Task<long>> publish, long causationId, CancellationToken ct)
         where TEvent : IEvent
     {
         if (await markers.ExistsAsync(idempotencyKey, ct))
@@ -90,7 +90,7 @@ public sealed class PublisherConsumer(
             // the dead-letter store alone carries no identity to react on)
             if (evt is PublishPr pr)
                 await log.AppendAsync(
-                    new PublishFailed(pr.Owner, pr.Repo, pr.ItemNumber, pr.IdempotencyKey, ex.Message), ct);
+                    new PublishFailed { Owner = pr.Owner, Repo = pr.Repo, ItemNumber = pr.ItemNumber, IdempotencyKey = pr.IdempotencyKey, Cause = ex.Message, CausationId = causationId }, ct);
             throw new PermanentDeliveryException($"{ex.Message} (artifact state unknown — verify on GitHub before replay)");
         }
     }

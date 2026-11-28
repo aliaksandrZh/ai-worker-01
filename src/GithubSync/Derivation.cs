@@ -26,27 +26,56 @@ internal static class Derivation
             // (comments on a closed issue bump updated_at and float it back onto page 1), and
             // every one of those cycles must dedup to the same beat, not re-close an already
             // closed Workflow.
-            return (null, new ItemClosed(owner, repo, item.Number,
-                EventId: $"item:{item.Number}:closed"));
+            return (null, new ItemClosed
+            {
+                Owner = owner,
+                Repo = repo,
+                Number = item.Number,
+                EventId = $"item:{item.Number}:closed",
+            });
         }
 
         // one record per item: title, body, state and labels in the payload and in the
         // fingerprint — a label change is an item change, and an edit of anything else no
         // longer re-emits a labels event with unchanged labels
-        return (new ItemChanged(owner, repo, item.Number, item.IsPullRequest,
-            item.Title, item.Body, item.State, item.Labels, EventId: itemId), null);
+        return (new ItemChanged
+        {
+            Owner = owner,
+            Repo = repo,
+            Number = item.Number,
+            IsPullRequest = item.IsPullRequest,
+            Title = item.Title,
+            Body = item.Body,
+            State = item.State,
+            Labels = item.Labels,
+            EventId = itemId,
+        }, null);
     }
 
     public static PrUpdated? PrEvent(
         string owner, string repo, long prNumber, DateTime itemUpdatedAtUtc, string headSha) =>
-        new(owner, repo, prNumber, headSha,
-            EventId: $"pr:{prNumber}:{Unix(itemUpdatedAtUtc)}:{headSha[..Math.Min(12, headSha.Length)]}");
+        new PrUpdated
+        {
+            Owner = owner,
+            Repo = repo,
+            PrNumber = prNumber,
+            HeadSha = headSha,
+            EventId = $"pr:{prNumber}:{Unix(itemUpdatedAtUtc)}:{headSha[..Math.Min(12, headSha.Length)]}",
+        };
 
     public static ReviewAdded? ReviewEvent(
         string owner, string repo, long prNumber, GithubReview review) =>
-        new(owner, repo, prNumber, review.Id,
-            review.Author, review.Verdict, review.Body,
-            EventId: $"review:{review.Id}");
+        new ReviewAdded
+        {
+            Owner = owner,
+            Repo = repo,
+            PrNumber = prNumber,
+            ReviewId = review.Id,
+            Author = review.Author,
+            Verdict = review.Verdict,
+            Body = review.Body,
+            EventId = $"review:{review.Id}",
+        };
 
     /// <summary>The events one comment's observation stands for: the CommentChanged record
     /// always; the parsed directives — decisions at the edge (docs/flows events.md
@@ -55,10 +84,17 @@ internal static class Derivation
         string owner, string repo, long itemNumber, GithubComment comment, string botLogin)
     {
         var at = Unix(comment.UpdatedAtUtc);
-        var commentEvent = new CommentChanged(
-            owner, repo, itemNumber, comment.Id, comment.Author, comment.Body,
-            Deleted: false,
-            EventId: $"comment:{comment.Id}:{at}:{Sha8(comment.Body)}");
+        var commentEvent = new CommentChanged
+        {
+            Owner = owner,
+            Repo = repo,
+            ItemNumber = itemNumber,
+            CommentId = comment.Id,
+            Author = comment.Author,
+            Body = comment.Body,
+            Deleted = false,
+            EventId = $"comment:{comment.Id}:{at}:{Sha8(comment.Body)}",
+        };
 
         var decisions = new List<UserDecision>();
         var commands = new List<CommandDraft>();
@@ -71,14 +107,28 @@ internal static class Derivation
             switch (parsed.Command)
             {
                 case "approve":
-                    decisions.Add(new UserDecision(DecisionKind.PlanApproved,
-                        owner, repo, itemNumber, comment.Author, parsed.TrailingContext,
-                        EventId: $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}"));
+                    decisions.Add(new UserDecision
+                    {
+                        Kind = DecisionKind.PlanApproved,
+                        Owner = owner,
+                        Repo = repo,
+                        ItemNumber = itemNumber,
+                        Author = comment.Author,
+                        Text = parsed.TrailingContext,
+                        EventId = $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}",
+                    });
                     break;
                 case "changes":
-                    decisions.Add(new UserDecision(DecisionKind.PlanChangesRequested,
-                        owner, repo, itemNumber, comment.Author, parsed.TrailingContext,
-                        EventId: $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}"));
+                    decisions.Add(new UserDecision
+                    {
+                        Kind = DecisionKind.PlanChangesRequested,
+                        Owner = owner,
+                        Repo = repo,
+                        ItemNumber = itemNumber,
+                        Author = comment.Author,
+                        Text = parsed.TrailingContext,
+                        EventId = $"decision:{comment.Id}:{at}:{Sha8(comment.Body)}",
+                    });
                     break;
                 default:
                     commands.Add(new CommandDraft(parsed.Command, owner, repo, itemNumber,
@@ -110,9 +160,18 @@ internal sealed record CommandDraft(
     string TrailingContext,
     string EventId)
 {
-    public UserCommand Build(string permission) => new(
-        Command, Owner, Repo, ItemNumber, CommentId,
-        Author, permission, TrailingContext, EventId);
+    public UserCommand Build(string permission) => new UserCommand
+    {
+        Command = Command,
+        Owner = Owner,
+        Repo = Repo,
+        ItemNumber = ItemNumber,
+        CommentId = CommentId,
+        Author = Author,
+        AuthorPermission = permission,
+        Text = TrailingContext,
+        EventId = EventId,
+    };
 }
 
 internal sealed record CommentEvents(

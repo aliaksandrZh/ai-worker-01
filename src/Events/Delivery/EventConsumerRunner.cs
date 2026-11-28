@@ -36,7 +36,7 @@ public sealed class EventConsumerRunner<TConsumer>(
                 {
                     try
                     {
-                        await consumer.HandleAsync(claimed.Event, claimed.Attempt, stoppingToken);
+                        await consumer.HandleAsync(claimed.Event, claimed.Attempt, claimed.Id, stoppingToken);
                         await queue.AckAsync(claimed.Id, stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

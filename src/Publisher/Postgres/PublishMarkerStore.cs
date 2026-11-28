@@ -48,6 +48,8 @@ public sealed class PostgresPublishMarkerStore(NpgsqlDataSource dataSource, ILog
 
         public Task CommitAsync(CancellationToken ct) => Task.CompletedTask;
 
+        public long? CausationId => null;
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

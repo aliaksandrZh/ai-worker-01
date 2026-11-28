@@ -32,7 +32,7 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Appended_event_is_claimed_and_acked()
     {
         var id = await _store.AppendAsync(
-            new CommentChanged("o", "r", 1, 10, "a", "b", Deleted: false), CancellationToken.None);
+            new CommentChanged { Owner = "o", Repo = "r", ItemNumber = 1, CommentId = 10, Author = "a", Body = "b", Deleted = false }, CancellationToken.None);
 
         var claimed = await _store.ClaimAsync(CommentType, 10, TimeSpan.FromMinutes(5), CancellationToken.None);
         Assert.Single(claimed);
@@ -52,13 +52,34 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Read_by_run_id_returns_only_that_runs_events_oldest_first()
     {
         // the read side (IEventReader, Block 3.3b): the aggregation source for one reviewer run
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
-            Comments: [new ReviewFinding("a.cs", 1, "major", "first")]), CancellationToken.None);
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 8,
-            Comments: [new ReviewFinding("z.cs", 9, "minor", "other run")]), CancellationToken.None);
-        await _store.AppendAsync(new ReviewCommentsSubmitted("o", "r", 1, PrNumber: 1, RunId: 7,
-            Comments: [new ReviewFinding("b.cs", 2, "minor", "second")]), CancellationToken.None);
-        await _store.AppendAsync(new BugReported("o", "r", 1, TaskId: 1, "s", [], "t"), CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 7,
+            Comments = [new ReviewFinding("a.cs", 1, "major", "first")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 8,
+            Comments = [new ReviewFinding("z.cs", 9, "minor", "other run")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new ReviewCommentsSubmitted
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 1,
+            RunId = 7,
+            Comments = [new ReviewFinding("b.cs", 2, "minor", "second")],
+        }, CancellationToken.None);
+        await _store.AppendAsync(new BugReported { Owner = "o", Repo = "r", ItemNumber = 1, TaskId = 1, Summary = "s", ReproSteps = [], TestResults = "t" }, CancellationToken.None);
 
         var read = await _store.ReadByRunIdAsync<ReviewCommentsSubmitted>(7, CancellationToken.None);
 
@@ -71,7 +92,7 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
     public async Task Failed_event_redelivers_then_dead_letters_after_max_attempts()
     {
         var id = await _store.AppendAsync(
-            new CommentChanged("o", "r", 1, 10, "a", "b", Deleted: false), CancellationToken.None);
+            new CommentChanged { Owner = "o", Repo = "r", ItemNumber = 1, CommentId = 10, Author = "a", Body = "b", Deleted = false }, CancellationToken.None);
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {
@@ -90,5 +111,48 @@ public sealed class PostgresEventQueueTests : IAsyncLifetime
         var claimed = await _store.ClaimAsync(CommentType, 10, TimeSpan.FromMinutes(5), CancellationToken.None);
         Assert.Single(claimed);
         Assert.Equal(1, claimed[0].Attempt); // replay resets the counter
+    }
+
+    [Fact]
+    public async Task Correlation_columns_follow_the_event_and_the_transaction()
+    {
+        // the event carries what it knows at creation (like StreamKey) — the columns follow
+        var rootId = await _store.AppendAsync(new RunScheduled
+        {
+            RunId = 7, TaskId = 3, WorkflowId = 2,
+            Input = new RunInput
+            {
+                Owner = "o", Repo = "r", ItemNumber = 1, PrNumber = null, Command = "/plan",
+                PlanCommentId = 0, Profile = "planner", AgentBranch = null,
+                DefaultBranch = "main", ReviewHeadSha = null,
+            },
+        }, CancellationToken.None);
+
+        // an event without its own cause inherits the transaction's processed event id
+        var tx = await _store.BeginTransactionAsync(99, CancellationToken.None);
+        var childId = await _store.AppendAsync(new PublishComment
+        {
+            Kind = PublishCommentKind.Notification,
+            Owner = "o", Repo = "r", EntityNumber = 1,
+            IdempotencyKey = "correlation-test", Body = "b", WorkflowId = 2,
+        }, tx, CancellationToken.None);
+        await tx.CommitAsync(CancellationToken.None);
+
+        await using var cmd = _fx.DataSource.CreateCommand(
+            "SELECT workflow_id, task_id, run_id, causation_id FROM events WHERE id = ANY(@ids) ORDER BY id");
+        cmd.Parameters.AddWithValue("ids", new[] { rootId, childId });
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync()); // run_scheduled: ids from the payload itself
+        Assert.Equal(2, reader.GetInt64(0));
+        Assert.Equal(3, reader.GetInt64(1));
+        Assert.Equal(7, reader.GetInt64(2));
+        Assert.True(reader.IsDBNull(3)); // a root appended outside a transaction has no cause
+
+        Assert.True(await reader.ReadAsync()); // publish_comment: workflow from the event
+        Assert.Equal(2, reader.GetInt64(0));
+        Assert.True(reader.IsDBNull(1));
+        Assert.True(reader.IsDBNull(2));
+        Assert.Equal(99, reader.GetInt64(3)); // causation from the transaction
     }
 }

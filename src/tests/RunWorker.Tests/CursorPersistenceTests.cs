@@ -28,8 +28,11 @@ public sealed class EventLogFingerprintTests : IAsyncLifetime
     public Task InitializeAsync() => _fx.ResetCoreAsync();
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private static ItemChanged ItemChanged(string eventId) => new(
-        "o", "r", 25, IsPullRequest: false, "t", "b", "open", [], EventId: eventId);
+    private static ItemChanged ItemChanged(string eventId) => new ItemChanged
+    {
+        Owner = "o", Repo = "r", Number = 25, IsPullRequest = false,
+        Title = "t", Body = "b", State = "open", Labels = [], EventId = eventId,
+    };
 
     [Fact]
     public async Task A_refetched_fingerprint_yields_one_row()

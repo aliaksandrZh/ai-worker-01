@@ -24,28 +24,30 @@ public sealed class RunWorkerConsumer(
 
     public string Name => "RunWorker";
 
-    public async Task HandleAsync(IEvent evt, int attempt, CancellationToken ct)
+    public async Task HandleAsync(IEvent evt, int attempt, long causationId, CancellationToken ct)
     {
         switch (evt)
         {
             case RunScheduled scheduled:
-                await StartRunAsync(scheduled, ct);
+                await StartRunAsync(scheduled, causationId, ct);
                 break;
 
             case RunStopRequested stop:
-                await StopRunAsync(stop, ct);
+                await StopRunAsync(stop, causationId, ct);
                 break;
 
             case AgentCallback callback:
-                await HandleCallbackAsync(callback, ct);
+                await HandleCallbackAsync(callback, causationId, ct);
                 break;
         }
     }
 
-    private async Task StartRunAsync(RunScheduled scheduled, CancellationToken ct)
+    private async Task StartRunAsync(RunScheduled scheduled, long causationId, CancellationToken ct)
     {
+        var runId = scheduled.RunId ?? throw new PermanentDeliveryException("run_scheduled carries no runId");
+        var taskId = scheduled.TaskId ?? throw new PermanentDeliveryException("run_scheduled carries no taskId");
         var runOptions = options.Value;
-        var runDir = RunTree.Ensure(runOptions.WorkspaceRoot, scheduled.RunId, runOptions.ContainerUserId, scheduled.Input);
+        var runDir = RunTree.Ensure(runOptions.WorkspaceRoot, runId, runOptions.ContainerUserId, scheduled.Input);
 
         // profile secrets (docs/run-worker.md invariant 5 — provisioning is internal):
         // the host-managed files bind read-only at /run/secrets/<name>; a name that does not
@@ -57,19 +59,19 @@ public sealed class RunWorkerConsumer(
             var invalid = ProfileSecretName.Validate(name);
             if (invalid is not null)
             {
-                await FailProvisioningAsync(scheduled, $"invalid secret reference: {invalid}", ct);
+                await FailProvisioningAsync(scheduled, causationId, $"invalid secret reference: {invalid}", ct);
                 return;
             }
             var managed = Path.Combine(runOptions.SecretsDir, name);
             if (runOptions.SecretsDir.Length > 0 && !File.Exists(managed))
             {
-                await FailProvisioningAsync(scheduled,
+                await FailProvisioningAsync(scheduled, causationId,
                     $"secret_missing: profile secret '{name}' has no host-managed file under {runOptions.SecretsDir}", ct);
                 return;
             }
             if (runOptions.SecretsDir.Length > 0 && new FileInfo(managed).Length == 0)
             {
-                await FailProvisioningAsync(scheduled,
+                await FailProvisioningAsync(scheduled, causationId,
                     $"secret_missing: profile secret '{name}' exists but is empty; supply the host-managed secret value", ct);
                 return;
             }
@@ -77,15 +79,15 @@ public sealed class RunWorkerConsumer(
         }
 
         var token = Guid.NewGuid().ToString("N");
-        var containerName = $"pi-session-{scheduled.RunId}";
-        var entry = new RunEntry(scheduled.RunId, scheduled.TaskId, scheduled.WorkflowId, scheduled.Input,
+        var containerName = $"pi-session-{runId}";
+        var entry = new RunEntry(runId, taskId, scheduled.WorkflowId ?? throw new PermanentDeliveryException("run_scheduled carries no workflowId"), scheduled.Input,
             containerName, token, DateTime.UtcNow);
 
         // entry env from the run input pointers (docs/run-worker.md "Run input (pointers v2)"):
         // one input contract — the Bridge renders the prompt from the same input.json
         var env = new List<string>
         {
-            $"PI_RUN_ID={scheduled.RunId}",
+            $"PI_RUN_ID={runId}",
             // the globally unique pi session id (docs/run-session-id.md): the Bridge opens pi
             // with it and scopes terminal eventIds by it. Rows created before the field existed
             // carry null — the run id keeps them bootable on the legacy, run-id-scoped identity.
@@ -125,7 +127,7 @@ public sealed class RunWorkerConsumer(
                 $"{workspaceHostRoot}/run-{scheduled.RunId}/input.json:/run/input.json:ro",
                 .. secretBinds,
             ],
-            Labels: new Dictionary<string, string> { ["pi.run.id"] = scheduled.RunId.ToString() },
+            Labels: new Dictionary<string, string> { ["pi.run.id"] = runId.ToString() },
             Cpus: null,
             MemoryBytes: null,
             Network: runOptions.AgentNetwork);
@@ -135,7 +137,7 @@ public sealed class RunWorkerConsumer(
             logger.LogWarning(
                 "run {run} container {container}: profile image {image} missing — failing quietly (command {command}, input {@input})",
                 scheduled.RunId, containerName, plan.Image, scheduled.Input.Command, scheduled.Input);
-            await FailProvisioningAsync(scheduled,
+            await FailProvisioningAsync(scheduled, causationId,
                 $"image missing for profile {scheduled.Input.Profile}: {plan.Image}", ct);
             return;
         }
@@ -147,34 +149,53 @@ public sealed class RunWorkerConsumer(
             if (!await docker.StartAndWaitRunningAsync(created, TimeSpan.FromSeconds(30), ct))
                 throw new DockerProvisioningException($"container {containerName} did not reach running");
 
-            await log.AppendAsync(new RunProcessing(
-                scheduled.RunId, scheduled.TaskId,
-                scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber), ct);
+            await log.AppendAsync(new RunProcessing
+            {
+                RunId = scheduled.RunId,
+                TaskId = scheduled.TaskId,
+                Owner = scheduled.Input.Owner,
+                Repo = scheduled.Input.Repo,
+                ItemNumber = scheduled.Input.ItemNumber,
+                CausationId = causationId,
+            }, ct);
           
             await registryStore.InsertAsync(entry, created, ct);
             logger.LogInformation("run {run} started in {container}", scheduled.RunId, containerName);        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await log.AppendAsync(new RunFailed(
-                scheduled.RunId, scheduled.TaskId,
-                scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
-                Cause: $"provisioning failed: {ex.Message}"), ct);
+            await log.AppendAsync(new RunFailed
+            {
+                RunId = scheduled.RunId,
+                TaskId = scheduled.TaskId,
+                Owner = scheduled.Input.Owner,
+                Repo = scheduled.Input.Repo,
+                ItemNumber = scheduled.Input.ItemNumber,
+                Cause = $"provisioning failed: {ex.Message}",
+                CausationId = causationId,
+            }, ct);
         }
     }
 
     /// <summary>Fail-closed provisioning: the Run fails before the container exists, with the cause.</summary>
-    private async Task FailProvisioningAsync(RunScheduled scheduled, string cause, CancellationToken ct)
+    private async Task FailProvisioningAsync(RunScheduled scheduled, long causationId, string cause, CancellationToken ct)
     {
-        await log.AppendAsync(new RunFailed(
-            scheduled.RunId, scheduled.TaskId,
-            scheduled.Input.Owner, scheduled.Input.Repo, scheduled.Input.ItemNumber,
-            Cause: cause), ct);
+        await log.AppendAsync(new RunFailed
+        {
+            RunId = scheduled.RunId,
+            TaskId = scheduled.TaskId,
+            Owner = scheduled.Input.Owner,
+            Repo = scheduled.Input.Repo,
+            ItemNumber = scheduled.Input.ItemNumber,
+            Cause = cause,
+            CausationId = causationId,
+        }, ct);
         logger.LogInformation("run {run} not provisioned: {cause}", scheduled.RunId, cause);
     }
 
-    private async Task StopRunAsync(RunStopRequested stop, CancellationToken ct)
+    private async Task StopRunAsync(RunStopRequested stop, long causationId, CancellationToken ct)
     {
-        var entry = await registryStore.GetAsync(stop.RunId, ct);
+        var runId = stop.RunId ?? throw new PermanentDeliveryException("run event without runId");
+        var entry = await registryStore.GetAsync(runId, ct);
         if (entry is null)
             return; // nothing in flight
 
@@ -182,15 +203,23 @@ public sealed class RunWorkerConsumer(
         // container removal is disabled by owner decision: the pi-session container and its
         // logs stay on the host for diagnosability (docker logs pi-session-<runId>)
         // await docker.RemoveAsync(entry.ContainerName, ct);
-        await registryStore.MarkFinishedAsync(stop.RunId, ct);
-        await log.AppendAsync(new RunCancelled(
-            stop.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber), ct);
-        logger.LogInformation("run {run} stopped on request", stop.RunId);
+        await registryStore.MarkFinishedAsync(runId, ct);
+        await log.AppendAsync(new RunCancelled
+        {
+            RunId = runId,
+            TaskId = entry.TaskId,
+            Owner = entry.Input.Owner,
+            Repo = entry.Input.Repo,
+            ItemNumber = entry.Input.ItemNumber,
+            CausationId = causationId,
+        }, ct);
+        logger.LogInformation("run {run} stopped on request", runId);
     }
 
-    private async Task HandleCallbackAsync(AgentCallback callback, CancellationToken ct)
+    private async Task HandleCallbackAsync(AgentCallback callback, long causationId, CancellationToken ct)
     {
-        var entry = await registryStore.GetAsync(callback.RunId, ct);
+        var runId = callback.RunId ?? throw new PermanentDeliveryException("callback carries no runId");
+        var entry = await registryStore.GetAsync(runId, ct);
         if (entry is null)
         {
             // the watchdog already settled this run — expected for non-terminal callbacks, but a
@@ -222,17 +251,17 @@ public sealed class RunWorkerConsumer(
                 // the terminal payload's git facts (branch + head commit) are the Workflow's
                 // pointers: the agent branch a fix round continues, the revision a review pins
                 var facts = ParseGitFacts(callback.Body);
-                await SettleAsync(entry, "succeeded", null, facts.Branch, facts.CommitSha, ct);
+                await SettleAsync(entry, "succeeded", null, facts.Branch, facts.CommitSha, causationId, ct);
                 break;
             }
             case "failed":
-                await SettleAsync(entry, "failed", callback.Body ?? "bridge reported failure", null, null, ct);
+                await SettleAsync(entry, "failed", callback.Body ?? "bridge reported failure", null, null, causationId, ct);
                 break;
             case "cancelled":
-                await SettleAsync(entry, "cancelled", null, null, null, ct);
+                await SettleAsync(entry, "cancelled", null, null, null, causationId, ct);
                 break;
             case "tool":
-                await HandleToolCallbackAsync(callback, entry, ct);
+                await HandleToolCallbackAsync(callback, entry, causationId, ct);
                 break;
             default:
                 logger.LogDebug("run {run} callback {route} recorded (no state)", callback.RunId, callback.Route);
@@ -247,7 +276,7 @@ public sealed class RunWorkerConsumer(
     /// auto-retry policy schedules the fresh Run; transient failures throw so the EventLog
     /// retries and eventually dead-letters. Non-communication routes stay opaque callbacks.
     /// </summary>
-    private async Task HandleToolCallbackAsync(AgentCallback callback, RunEntry entry, CancellationToken ct)
+    private async Task HandleToolCallbackAsync(AgentCallback callback, RunEntry entry, long causationId, CancellationToken ct)
     {
         ToolCallback tool;
         try
@@ -256,7 +285,7 @@ public sealed class RunWorkerConsumer(
         }
         catch (ToolCallbackException ex)
         {
-            await SettleAsync(entry, "failed", ex.Message, null, null, ct);
+            await SettleAsync(entry, "failed", ex.Message, null, null, causationId, ct);
             return;
         }
 
@@ -269,14 +298,14 @@ public sealed class RunWorkerConsumer(
 
         try
         {
-            var evt = ToolEventAdapter.Translate(tool, entry);
+            var evt = ToolEventAdapter.Translate(tool, entry, causationId);
             await log.AppendAsync(evt, ct);
             logger.LogInformation("run {run} tool {tool} → {event} on {stream}",
                 callback.RunId, tool.ToolName, evt.GetType().Name, evt.StreamKey);
         }
         catch (ToolCallbackException ex)
         {
-            await SettleAsync(entry, "failed", ex.Message, null, null, ct);
+            await SettleAsync(entry, "failed", ex.Message, null, null, causationId, ct);
         }
         // anything else propagates: the EventLog's redelivery → dead-letter covers it
     }
@@ -295,10 +324,10 @@ public sealed class RunWorkerConsumer(
             return;
         }
 
-        await SettleAsync(entry, "failed", cause, null, null, ct);
+        await SettleAsync(entry, "failed", cause, null, null, null, ct);
     }
 
-    private async Task SettleAsync(RunEntry entry, string status, string? cause, string? branch, string? commitSha, CancellationToken ct)
+    private async Task SettleAsync(RunEntry entry, string status, string? cause, string? branch, string? commitSha, long? causationId, CancellationToken ct)
     {
         await registryStore.MarkFinishedAsync(entry.RunId, ct);
         await docker.StopAsync(entry.ContainerName, ct);
@@ -308,14 +337,36 @@ public sealed class RunWorkerConsumer(
 
         IEvent terminal = status switch
         {
-            "succeeded" => new RunCompleted(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber,
-                Branch: branch, CommitSha: commitSha),
-            "cancelled" => new RunCancelled(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber),
-            _ => new RunFailed(
-                entry.RunId, entry.TaskId, entry.Input.Owner, entry.Input.Repo, entry.Input.ItemNumber,
-                Cause: cause ?? "unknown"),
+            "succeeded" => new RunCompleted
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+                Branch = branch,
+                CommitSha = commitSha,
+                CausationId = causationId,
+            },
+            "cancelled" => new RunCancelled
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+                CausationId = causationId,
+            },
+            _ => new RunFailed
+            {
+                RunId = entry.RunId,
+                TaskId = entry.TaskId,
+                Owner = entry.Input.Owner,
+                Repo = entry.Input.Repo,
+                ItemNumber = entry.Input.ItemNumber,
+                Cause = cause ?? "unknown",
+                CausationId = causationId,
+            },
         };
         await log.AppendAsync(terminal, ct);
         logger.LogInformation("run {run} settled as {status}", entry.RunId, status);

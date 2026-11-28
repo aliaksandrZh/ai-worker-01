@@ -14,7 +14,12 @@ public interface IOrchestrationUnitOfWork : IAsyncDisposable
 
 public interface IOrchestrationUnitOfWorkFactory
 {
-    Task<IOrchestrationUnitOfWork> BeginAsync(CancellationToken ct);
+    /// <summary>
+    /// Begins one event reaction: state changes and appended events commit atomically.
+    /// The causation event id (the claimed log row being processed) stamps every event
+    /// appended in the unit of work that carries none of its own (docs/event-correlation.md).
+    /// </summary>
+    Task<IOrchestrationUnitOfWork> BeginAsync(long? causationEventId, CancellationToken ct);
 }
 
 /// <summary>

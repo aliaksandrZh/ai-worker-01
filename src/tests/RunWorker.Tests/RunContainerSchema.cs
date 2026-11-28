@@ -42,7 +42,7 @@ internal static class RunContainerSchema
 
     /// <summary>The FK parent every provisioned run needs. `input` is the RunInput JSON
     /// the Orchestrator would have written — the registry reads it back on recovery.</summary>
-    public static Task SeedRunAsync(PostgresFixture fx, long runId, long taskId, string input = "{}", CancellationToken ct = default)
+    public static Task SeedRunAsync(PostgresFixture fx, long runId, long taskId, string input = DefaultInput, CancellationToken ct = default)
     {
         using var cmd = fx.DataSource.CreateCommand(
             "INSERT INTO orch_run (id, task_id, status, input) VALUES (@id, @task, 'scheduled', @input::jsonb) ON CONFLICT DO NOTHING");
@@ -51,6 +51,12 @@ internal static class RunContainerSchema
         cmd.Parameters.AddWithValue("input", input);
         return cmd.ExecuteNonQueryAsync(ct);
     }
+
+    // a full-shape RunInput: the record's required members make "{}" deserialize as an error,
+    // and tests that do not care about the input still exercise the read-back path
+    private const string DefaultInput = """
+        {"owner":"o","repo":"r","itemNumber":1,"prNumber":null,"command":"/plan","planCommentId":0,"profile":"planner","agentBranch":null,"defaultBranch":"main","reviewHeadSha":null,"sessionId":null}
+        """;
 
     private static async Task Exec(PostgresFixture fx, string sql, CancellationToken ct)
     {

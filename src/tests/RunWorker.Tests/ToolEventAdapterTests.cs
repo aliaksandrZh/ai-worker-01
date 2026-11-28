@@ -51,10 +51,19 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
 
     private static RunEntry Entry() => new(
         RunId: 7, TaskId: 3, WorkflowId: 2,
-        Input: new RunInput(
-            Owner: "o", Repo: "r", ItemNumber: 1, PrNumber: 12,
-            Command: "review", PlanCommentId: 0, Profile: "reviewer",
-            AgentBranch: null, DefaultBranch: "main", ReviewHeadSha: "cafe01"),
+        Input: new RunInput
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = 12,
+            Command = "review",
+            PlanCommentId = 0,
+            Profile = "reviewer",
+            AgentBranch = null,
+            DefaultBranch = "main",
+            ReviewHeadSha = "cafe01",
+        },
         ContainerName: "pi-session-7", Token: "tok", StartedUtc: DateTime.UtcNow);
 
     private async Task RegisterRun()
@@ -69,8 +78,8 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     private async Task DeliverToolAsync(string toolName, string argsJson)
     {
         await _consumer.HandleAsync(
-            new AgentCallback(7, "tool", Body: Body(toolName, argsJson)),
-            attempt: 1, CancellationToken.None);
+            new AgentCallback { RunId = 7, Route = "tool", Body = Body(toolName, argsJson) },
+            attempt: 1, causationId: 0, CancellationToken.None);
     }
 
     private static string Body(string toolName, string argsJson) =>
@@ -198,8 +207,8 @@ public sealed class ToolEventAdapterTests : IAsyncLifetime
     public async Task Callback_without_a_body_is_deterministic_garbage()
     {
         await RegisterRun();
-        await _consumer.HandleAsync(new AgentCallback(7, "tool", Body: null),
-            attempt: 1, CancellationToken.None);
+        await _consumer.HandleAsync(new AgentCallback { RunId = 7, Route = "tool", Body = null },
+            attempt: 1, causationId: 0, CancellationToken.None);
 
         Assert.Single((await _fx.AppendedAsync()).OfType<RunFailed>());
     }

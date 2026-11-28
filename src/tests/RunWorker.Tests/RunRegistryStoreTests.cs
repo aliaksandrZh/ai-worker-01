@@ -40,10 +40,20 @@ public sealed class RunRegistryStoreTests : IAsyncLifetime
 
     private static RunEntry Entry(long runId = 7, string token = "tok-7") => new(
         RunId: runId, TaskId: 3, WorkflowId: 2,
-        Input: new RunInput("o", "r", 1, PrNumber: null, Command: "implement",
-            PlanCommentId: 0, Profile: "coder", AgentBranch: "issue-7",
-            DefaultBranch: "main", ReviewHeadSha: null),
-        ContainerName: "pi-session-7", Token: token, StartedUtc: DateTime.UtcNow);
+        Input: new RunInput
+        {
+            Owner = "o",
+            Repo = "r",
+            ItemNumber = 1,
+            PrNumber = null,
+            Command = "implement",
+            PlanCommentId = 0,
+            Profile = "coder",
+            AgentBranch = "issue-7",
+            DefaultBranch = "main",
+            ReviewHeadSha = null,
+        },
+        ContainerName: "pi-session-7", Token: token, StartedUtc: new DateTime(2026, 11, 28, 10, 56, 22, DateTimeKind.Utc));
 
     private static string InputJson() =>
         System.Text.Json.JsonSerializer.Serialize(Entry().Input, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
